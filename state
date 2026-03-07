@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+# Auto-bootstrap venv on first use
+[ -d "$DIR/.venv" ] || "$DIR/setup.sh" > /dev/null
+exec "$DIR/.venv/bin/python" "$DIR/scripts/$(basename "$0").py" "$@"

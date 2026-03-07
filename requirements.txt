@@ -1,0 +1,6 @@
+requests>=2.31
+beautifulsoup4>=4.12
+pymupdf4llm>=0.0.10
+curl-cffi>=0.7
+pyyaml>=6.0
+pypdf>=4.0
