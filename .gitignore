@@ -33,3 +33,5 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+.ruff_cache
+.claude/settings.json
