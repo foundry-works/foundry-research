@@ -11,6 +11,7 @@ _ENV_KEYS = {
     "unpaywall_email": "UNPAYWALL_EMAIL",
     "ncbi_api_key": "NCBI_API_KEY",
     "github_token": "GITHUB_TOKEN",
+    "annas_secret_key": "ANNAS_SECRET_KEY",
 }
 
 # All known config keys with None defaults
@@ -20,6 +21,7 @@ _DEFAULT_CONFIG: dict[str, str | None] = {
     "unpaywall_email": None,
     "ncbi_api_key": None,
     "github_token": None,
+    "annas_secret_key": None,
 }
 
 # Global config file path
