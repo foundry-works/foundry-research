@@ -65,6 +65,39 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _sync_to_state(session_dir: str, result: dict) -> None:
+    """Sync content_file and pdf_file paths to state.db after download."""
+    source_id = result.get("source_id")
+    if not source_id:
+        return
+
+    update = {}
+    if result.get("content_file"):
+        update["content_file"] = result["content_file"]
+    if result.get("pdf_file"):
+        update["pdf_file"] = result["pdf_file"]
+    if result.get("pdf_downloaded") or result.get("content_file"):
+        update["status"] = "downloaded"
+
+    if not update:
+        return
+
+    try:
+        import subprocess
+
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        state_script = os.path.join(scripts_dir, "state.py")
+        cmd = [
+            sys.executable, state_script, "update-source",
+            "--id", source_id,
+            "--from-json", json.dumps(update),
+            "--session-dir", session_dir,
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=5)
+    except Exception as e:
+        log(f"Failed to sync download to state: {e}", level="warn")
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -96,6 +129,14 @@ def main() -> None:
             result = _handle_single(args, client, session_dir, sources_dir, metadata_dir, config)
         finally:
             client.close()
+
+    # Sync downloaded file paths to state.db (if session has state tracking)
+    if os.path.exists(os.path.join(session_dir, "state.db")):
+        if isinstance(result, list):
+            for r in result:
+                _sync_to_state(session_dir, r)
+        else:
+            _sync_to_state(session_dir, result)
 
     # Output result
     if isinstance(result, list):

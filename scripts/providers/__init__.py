@@ -9,10 +9,11 @@ _REGISTRY: dict[str, str] = {
     "arxiv": "providers.arxiv",
     "pubmed": "providers.pubmed",
     "biorxiv": "providers.biorxiv",
-    "scholar": "providers.scholar",
     "github": "providers.github",
     "reddit": "providers.reddit",
     "hn": "providers.hn",
+    "yfinance": "providers.yfinance_provider",
+    "edgar": "providers.edgar",
 }
 
 

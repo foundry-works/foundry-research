@@ -19,14 +19,42 @@ You are a research agent with access to academic databases, web search, and stru
 | `semantic_scholar` | Academic search, citations, recommendations | `--cited-by`, `--references`, `--recommendations`, `--author` |
 | `openalex` | Broad academic, open-access filtering | `--open-access-only`, `--year-range` |
 | `arxiv` | CS/physics preprints, category filtering | `--categories`, `--days`, `--download` |
-| `pubmed` | Biomedical, clinical, MeSH terms | `--type`, `--cited-by`, `--references`, `--mesh` |
+| `pubmed` | Biomedical, clinical, MeSH terms (returns PMIDs; use `--fetch-pmids` for metadata) | `--type`, `--cited-by`, `--references`, `--mesh`, `--fetch-pmids` |
 | `biorxiv` | Bio/med preprints | `--server`, `--days`, `--category` |
-| `scholar` | Discovery search, BibTeX export | `--format`, `--parse` |
 | `github` | Repos, code, implementations | `--type`, `--min-stars`, `--repo` |
 | `reddit` | Community discussion, experiences | `--subreddits`, `--post-url` |
 | `hn` | Technical commentary | `--story-id`, `--tags` |
+| `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
+| `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
 
 Common flags: `--query "..." --limit N --offset N --session-dir DIR`
+
+#### yfinance data types
+
+```
+./search --provider yfinance --ticker AAPL --type profile       # company overview + key ratios
+./search --provider yfinance --ticker AAPL --type history --period 1y --interval 1d
+./search --provider yfinance --ticker AAPL --type financials --statement income --frequency quarterly
+./search --provider yfinance --ticker AAPL --type options --expiration 2026-06-19
+./search --provider yfinance --ticker AAPL --type dividends
+./search --provider yfinance --ticker AAPL --type holders      # institutional holders
+./search --provider yfinance --ticker AAPL,MSFT --type profile  # multi-ticker (max 5)
+```
+
+Types: `profile`, `history`, `financials`, `options`, `dividends`, `holders`. Statements: `income`, `balance_sheet`, `cash_flow`. Frequencies: `annual`, `quarterly`. Periods: `1d` `5d` `1mo` `3mo` `6mo` `1y` `2y` `5y` `10y` `ytd` `max`.
+
+#### EDGAR modes
+
+```
+./search --provider edgar --query "artificial intelligence" --form-type 10-K --year 2024
+./search --provider edgar --ticker AAPL --form-type 10-K,10-Q --limit 5
+./search --provider edgar --ticker AAPL --type facts                          # list all XBRL concepts
+./search --provider edgar --ticker AAPL --type facts --concept Revenue        # time series for one concept
+./search --provider edgar --ticker AAPL --type concept --concept Assets --taxonomy us-gaap
+./search --provider edgar --accession 0000320193-23-000106                     # fetch specific filing
+```
+
+Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-full`, `dei`. Full-text search (no `--ticker`) uses SEC EFTS; company queries use the submissions API.
 
 ### Download (`./download`)
 
@@ -84,6 +112,8 @@ summary                           # brief + sources + findings + gaps
 
 **Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. For degraded PDF conversions (`"quality": "degraded"` in metadata), rely on the abstract and seek alternate sources. `./enrich` fills venue, authors, and retraction status for key papers.
 
+**Paywalled papers.** The PDF cascade (`./download --doi`) tries 6 sources (OpenAlex → Unpaywall → arXiv → PMC → Anna's Archive → Sci-Hub). If all fail, the paper is paywalled. Use `./download --url` to grab the abstract page instead, or rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
+
 **Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the 5-10 most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding of the rest.
 
 **journal.md captures reasoning.** Intermediate thoughts, emerging patterns, contradictions, and strategy decisions belong in `journal.md`. This prevents reasoning loss on context compression and makes thinking auditable.
@@ -93,6 +123,8 @@ summary                           # brief + sources + findings + gaps
 **Garbled PDF awareness.** Converted PDFs may have scrambled text around tables, figures, and equations. When text looks garbled, note the limitation and seek the information elsewhere rather than interpreting nonsense.
 
 **Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `./state log-finding` and `./state log-gap` track coverage persistently.
+
+**Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
 ---
 
@@ -105,10 +137,12 @@ summary                           # brief + sources + findings + gaps
 - **Need implementations / benchmarks** — GitHub
 - **Latest preprints** — arXiv (CS/physics), bioRxiv (bio/med)
 - **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort
-- **Need BibTeX** — Google Scholar
 - **Community opinions** — Reddit + HN
-
-Google Scholar is **best-effort** — it aggressively blocks scrapers. If it fails, fall back to Semantic Scholar or OpenAlex. Don't retry Scholar more than once per session.
+- **Comparative questions** (e.g., "X vs Y") — combine academic providers with Reddit/HN for practitioner perspective
+- **Company fundamentals** — yfinance (profile + financials); EDGAR for SEC filings and XBRL data
+- **Industry/sector screening** — yfinance multi-ticker profiles; EDGAR full-text search across filings
+- **Regulatory filings** — EDGAR (10-K, 10-Q, 8-K, proxy statements, insider transactions)
+- **Financial deep dive** — Screening (yfinance profiles) → fundamentals (yfinance financials + EDGAR XBRL) → SEC verification (EDGAR filings) → academic context (Semantic Scholar/OpenAlex) → synthesis
 
 ---
 

@@ -18,6 +18,8 @@ _IDENTIFIER_FLAGS = {
     "hn": {"story_id"},
     "biorxiv": {"doi"},
     "pubmed": {"fetch_pmids"},
+    "edgar": {"ticker", "accession"},
+    "yfinance": {"ticker"},
 }
 
 

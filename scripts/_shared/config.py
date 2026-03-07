@@ -33,7 +33,6 @@ RATE_LIMITS = {
     "api.openalex.org": 10.0,
     "api.crossref.org": 10.0,
     "api.unpaywall.org": 10.0,
-    "scholar.google.com": 0.2,
     "www.reddit.com": 0.15,
     "eutils.ncbi.nlm.nih.gov": 3.0,
     "api.biorxiv.org": 1.0,
@@ -42,6 +41,10 @@ RATE_LIMITS = {
     "sci-hub.*": 0.2,
     "arxiv.org": 1.0,
     "ncbi.nlm.nih.gov": 3.0,
+    "query2.finance.yahoo.com": 0.4,
+    "efts.sec.gov": 10.0,
+    "data.sec.gov": 10.0,
+    "www.sec.gov": 10.0,
     "_default": 2.0,
 }
 

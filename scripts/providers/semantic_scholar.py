@@ -14,7 +14,7 @@ from _shared.output import error_response, log, success_response
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 RECS_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 
-PAPER_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,tldr,venue,journal,isRetracted"
+PAPER_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,tldr,venue,journal"
 AUTHOR_FIELDS = "authorId,name,paperCount,citationCount,hIndex"
 
 

@@ -33,23 +33,23 @@ PAPER_SCHEMA = {
 # Which provider is best for each field (later in list = higher priority)
 # Spec ordering: Crossref > OpenAlex > Semantic Scholar > PubMed > others
 _FIELD_PRIORITY = {
-    "venue": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "volume": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "issue": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "pages": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "year": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "is_retracted": ["scholar", "pubmed", "semantic_scholar", "openalex", "crossref"],
-    "abstract": ["scholar", "crossref", "semantic_scholar", "openalex"],
-    "topics": ["scholar", "crossref", "semantic_scholar", "openalex"],
-    "fields_of_study": ["scholar", "crossref", "semantic_scholar", "openalex"],
-    "citation_count": ["scholar", "crossref", "openalex", "semantic_scholar"],
-    "authors": ["scholar", "openalex", "semantic_scholar", "crossref"],
+    "venue": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "volume": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "issue": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "pages": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "year": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "is_retracted": ["pubmed", "semantic_scholar", "openalex", "crossref"],
+    "abstract": ["crossref", "semantic_scholar", "openalex"],
+    "topics": ["crossref", "semantic_scholar", "openalex"],
+    "fields_of_study": ["crossref", "semantic_scholar", "openalex"],
+    "citation_count": ["crossref", "openalex", "semantic_scholar"],
+    "authors": ["openalex", "semantic_scholar", "crossref"],
     "peer_reviewed": ["openalex", "crossref", "pubmed"],
     "publication_types": ["openalex", "crossref", "pubmed"],
 }
 
 # Default precedence for fields not explicitly listed
-_DEFAULT_PRIORITY = ["scholar", "biorxiv", "arxiv", "pubmed", "semantic_scholar", "openalex", "crossref"]
+_DEFAULT_PRIORITY = ["biorxiv", "arxiv", "pubmed", "semantic_scholar", "openalex", "crossref"]
 
 
 def normalize_paper(raw: dict, provider: str) -> dict:
@@ -74,8 +74,6 @@ def normalize_paper(raw: dict, provider: str) -> dict:
         paper = _normalize_openalex(paper, raw)
     elif provider == "crossref":
         paper = _normalize_crossref(paper, raw)
-    elif provider == "scholar":
-        paper = _normalize_scholar(paper, raw)
     elif provider == "pubmed":
         paper = _normalize_pubmed(paper, raw)
     elif provider == "arxiv":
@@ -183,18 +181,6 @@ def _normalize_crossref(paper: dict, raw: dict) -> dict:
 
     return paper
 
-
-def _normalize_scholar(paper: dict, raw: dict) -> dict:
-    """Normalize Google Scholar parsed results."""
-    for key in PAPER_SCHEMA:
-        if key in raw and raw[key] is not None:
-            paper[key] = raw[key]
-    paper["provider"] = "scholar"
-    if isinstance(paper.get("authors"), str):
-        paper["authors"] = [_reformat_author(a.strip()) for a in paper["authors"].split(" and ")]
-    elif isinstance(paper.get("authors"), list):
-        paper["authors"] = [_reformat_author(a) for a in paper["authors"]]
-    return paper
 
 
 def _normalize_pubmed(paper: dict, raw: dict) -> dict:

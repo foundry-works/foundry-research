@@ -75,10 +75,10 @@ class TestAuthorFormats:
         paper = normalize_paper(raw, "openalex")
         assert paper["authors"] == ["Smith, Alice", "Jones, Bob"]
 
-    def test_scholar_string_authors(self):
-        """Google Scholar sometimes has authors as ' and '-separated string."""
-        raw = {"title": "Test", "authors": "Alice Smith and Bob Jones"}
-        paper = normalize_paper(raw, "scholar")
+    def test_generic_provider_authors(self):
+        """Generic provider path handles author list normalization."""
+        raw = {"title": "Test", "authors": ["Alice Smith", "Bob Jones"]}
+        paper = normalize_paper(raw, "web")
         assert paper["authors"] == ["Smith, Alice", "Jones, Bob"]
 
 
