@@ -13,15 +13,17 @@ You are a research agent with access to academic databases, web search, and stru
 ## Quick-Start Workflow
 
 1. `${CLAUDE_SKILL_DIR}/state init --query "..." --session-dir ./deep-research-{topic}` — creates session (auto-discovers session dir for all subsequent commands)
-2. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`)
-3. Search academic providers (parallel OK within academic)
+2. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`). **Must include 3-7 concrete research questions.** Example brief JSON: `{"scope": "Impact of X on Y", "questions": ["Q1: What mechanisms drive X?", "Q2: How does Y vary across populations?", "Q3: What interventions exist?"], "completeness_criteria": "Each question answered with 2+ sources"}`
+3. Search academic providers (parallel OK within academic). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, plan at least one web search round.
 4. Search web providers (Tavily/WebSearch — **SEPARATE batch from academic**)
 5. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
 6. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs
-7. Spawn reader subagents for downloaded papers (parallel, 2-3 sources per agent)
-8. `${CLAUDE_SKILL_DIR}/state log-finding` per research question
-9. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
-10. Write report — use audit stats in Methodology section
+7. Spawn reader subagents for downloaded papers (parallel, one source per agent)
+8. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`
+9. `${CLAUDE_SKILL_DIR}/state log-finding` per research question
+10. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`
+11. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
+12. Write report — use audit stats in Methodology section
 
 ---
 
@@ -42,7 +44,7 @@ You are a research agent with access to academic databases, web search, and stru
 | `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
 | `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
 
-Common flags: `--query "..." --limit N --offset N --session-dir DIR`
+Common flags: `--query "..." --limit N --offset N --session-dir DIR` — **always set `--limit`** (50 broad, 20 targeted, 10 citation traversal)
 
 **Session directory auto-discovery:** After `${CLAUDE_SKILL_DIR}/state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars. You can still override with `--session-dir DIR` or `$DEEP_RESEARCH_SESSION_DIR` if needed.
 
@@ -137,7 +139,9 @@ audit --strict                    # exit non-zero if warnings found
 
 **A research brief sharpens everything.** A structured brief — scope, key aspects, 3-7 concrete research questions, what a complete answer looks like — drives better searches and becomes the report skeleton. Save it with `${CLAUDE_SKILL_DIR}/state set-brief`.
 
-**Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage.
+**Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage. **Always set `--limit` explicitly:** `--limit 50` for initial broad searches, `--limit 20` for targeted follow-ups, `--limit 10` for citation/reference traversal. OpenAlex and Semantic Scholar defaults can return thousands of results — explicit limits prevent noise.
+
+**Search query crafting.** Poor queries cause off-topic contamination. Three rules: (1) Always include the core topic term in every query — use "uncanny valley cross-cultural" not "cross-cultural differences individual variation". (2) If a search returns >500 results, the query is too broad — add qualifying terms. (3) After each search round, spot-check the last few results for relevance — if off-topic, tighten the query before continuing.
 
 **Parallel search resilience.** **Never mix CLI searches (`${CLAUDE_SKILL_DIR}/search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** Claude Code cancels all sibling tool calls when any parallel call returns non-zero. CLI searches always exit 0 (errors are in the JSON envelope), so they are safe to parallelize with each other. But Tavily/WebSearch failures can still cancel siblings, so keep them in a separate response block.
 
@@ -161,7 +165,7 @@ audit --strict                    # exit non-zero if warnings found
 
 **Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `${CLAUDE_SKILL_DIR}/state log-finding` and `${CLAUDE_SKILL_DIR}/state log-gap` track coverage persistently.
 
-**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Use `${CLAUDE_SKILL_DIR}/state log-finding` after each synthesis insight and `${CLAUDE_SKILL_DIR}/state log-gap` when a research question lacks adequate sources. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays.
+**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Use `${CLAUDE_SKILL_DIR}/state log-finding` after each synthesis insight. **You must call `${CLAUDE_SKILL_DIR}/state log-gap` for every research question that has fewer than 2 supporting sources** — this is not optional. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays.
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
@@ -173,6 +177,7 @@ audit --strict                    # exit non-zero if warnings found
 - **CS / ML / AI** — arXiv + Semantic Scholar; add OpenAlex for breadth
 - **Cross-cutting** (e.g., "ML for drug safety") — start broad (Semantic Scholar + PubMed), narrow based on results
 - **General technical** — Tavily/WebSearch + GitHub; Reddit/HN for community perspective
+- **When unsure** — search at least 3 providers including one web source (Tavily/WebSearch). Many topics have significant non-academic coverage that academic-only searches miss.
 - **Need implementations / benchmarks** — GitHub
 - **Latest preprints** — arXiv (CS/physics), bioRxiv (bio/med)
 - **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort
@@ -219,6 +224,8 @@ Use the **Agent tool** to spawn subagents only for **unstructured text comprehen
 - **Source summarization:** Spawn **one reader subagent per source** and run them in parallel. Each subagent reads one paper, writes a summary to `notes/`, and returns a compact manifest entry. One-to-one assignment ensures the agent devotes full attention to that paper's methodology, evidence, and nuance — batching papers into a single agent degrades comprehension quality.
 - **Claim verification:** Subagent checks draft claims against source files, returns a verification table.
 - **Relevance assessment:** Subagent deep-reads a source and rates relevance.
+
+**After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Example: `${CLAUDE_SKILL_DIR}/state mark-read --id src-003`.
 
 **Wait for all reader subagents before logging findings or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Log findings only after you have read and integrated the reader notes.
 
