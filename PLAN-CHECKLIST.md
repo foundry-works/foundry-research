@@ -1,45 +1,79 @@
-# Plan Checklist: SKILL.md Improvements
+# Plan Checklist: Deep Research Skill Improvements (Round 2)
 
-## Pre-flight
+## Phase 1: Bug Fixes
 
-- [ ] Read current SKILL.md in full to confirm line numbers from PLAN.md are still accurate
-- [ ] Verify no other pending changes to SKILL.md on this branch
+### 1.1 Fix silent `_sync_to_state` failures
+**File:** `scripts/download.py` — `_sync_to_state` (~line 111)
+- [ ] After `subprocess.run()`, decode stdout and parse as JSON
+- [ ] Check for `"status": "error"` in parsed response
+- [ ] Log warning with source_id and error details on failure
+- [ ] Handle `JSONDecodeError` gracefully (log and continue)
+- [ ] **Verify:** download a source → confirm `content_file` appears in state.db
+- [ ] **Verify:** pass a bad source_id to `_sync_to_state` → confirm warning is logged (not silent)
 
-## Changes
+### 1.2 Fix `download-pending` to check disk
+**File:** `scripts/state.py` — `cmd_download_pending` (~line 865-871)
+- [ ] After DB query, for each pending source check if `sources/{id}.md` or `sources/{id}.pdf` exists on disk
+- [ ] Exclude sources with existing on-disk content from the pending list
+- [ ] Log count of filtered sources ("N sources already on disk, skipping")
+- [ ] **Verify:** create source with NULL content_file in DB but existing .md on disk → excluded from pending
 
-### 1. Mandate brief questions (Quick-Start step 2)
-- [ ] Expand step 2 to require 3-7 research questions in the brief
-- [ ] Add inline JSON example showing `{"scope": "...", "questions": ["Q1: ...", "Q2: ..."], "completeness_criteria": "..."}`
-- [ ] Verify the example uses `--from-stdin` or `--from-json` correctly
+### 1.3 Record ingested count in searches table
+**File:** `scripts/state.py` — schema, `cmd_log_search`, `cmd_searches`
+- [ ] Add `ingested_count INTEGER` column to `searches` in `_SCHEMA`
+- [ ] Add `ALTER TABLE searches ADD COLUMN ingested_count INTEGER` migration in schema setup (wrapped in try/except for existing DBs)
+- [ ] Add `--ingested-count` argument to `log-search` parser
+- [ ] Store `ingested_count` in `cmd_log_search` INSERT statement
+- [ ] Include `ingested_count` in `cmd_searches` SELECT output
 
-### 2. Add gap-check step (Quick-Start steps 8-9)
-- [ ] Insert new step between log-finding and audit: "Review each research question — `log-gap` for any with < 2 sources"
-- [ ] Renumber subsequent steps (audit becomes step 10, report becomes step 11)
-- [ ] Strengthen "Structured coverage tracking" paragraph — make `log-gap` required, not optional
+**File:** `scripts/search.py` — `_log_search_to_state`
+- [ ] Compute `len(result.get("results", []))` as the ingested count
+- [ ] Pass `--ingested-count` to the `state.py log-search` subprocess call
 
-### 3. Reader subagents call `mark-read` (Delegation + Quick-Start)
-- [ ] Add post-reader step in Quick-Start (after step 7): "After readers complete, `mark-read` for each source with a note"
-- [ ] Update Delegation section source summarization bullet to mention `mark-read`
-- [ ] Renumber subsequent steps after insertion
+**Audit integration (optional, do if straightforward):**
+- [ ] If audit calculates efficiency, use `ingested_count` instead of `result_count`
 
-### 4. Query specificity guidance (What Good Research Looks Like)
-- [ ] Add "Search Query Crafting" content after "Iterative search across multiple providers" paragraph
-- [ ] Include rule: always include core topic term in every query
-- [ ] Include rule: >500 results = too broad, add qualifying terms
-- [ ] Include rule: spot-check last few results for relevance
+- [ ] **Verify:** run a search with `--limit 20` → confirm DB has `result_count` = API total AND `ingested_count` = 20
 
-### 5. Web source consideration prompt (Quick-Start + Provider Selection)
-- [ ] Add sentence to steps 3-4: evaluate whether topic warrants web sources
-- [ ] Add heuristic to Provider Selection Guidance: "at least 3 providers including one web source when unsure"
+### 1.4 Scale download timeout with batch size
+**File:** `scripts/state.py` — `_auto_download_pending` (~line 935) and parser (~line 1359)
+- [ ] Replace `timeout=600` with `max(600, len(batch) * 30)`
+- [ ] Add `--timeout` flag to `download-pending` parser
+- [ ] If user passes `--timeout`, use that value; otherwise use dynamic calculation
+- [ ] Log the timeout: `f"Downloading {len(batch)} sources (timeout: {timeout}s)"`
+- [ ] **Verify:** batch of 5 → 600s; batch of 50 → 1500s; `--timeout 120` → 120s
 
-### 6. Default search limit guidance (Search section + What Good Research Looks Like)
-- [ ] Add limit defaults to Common flags line: `--limit 50` broad, `--limit 20` targeted
-- [ ] Add note that OpenAlex/Semantic Scholar can return thousands without explicit `--limit`
-- [ ] Add limit guidance to "Iterative search" paragraph
+---
 
-## Post-flight
+## Phase 2: SKILL.md Guidance
 
-- [ ] Re-read final SKILL.md for consistency — no contradictions between sections
-- [ ] Confirm total line count hasn't bloated excessively (target: < 30 lines added net)
-- [ ] Run a session init + set-brief to verify the example JSON works
-- [ ] Commit changes
+**File:** `skills/deep-research/SKILL.md`
+
+### 2.1 Add citation chasing guidance
+- [ ] Add new paragraph after "Iterative search across multiple providers"
+- [ ] Explain **why** citation networks beat keyword search (pre-filtered relevance)
+- [ ] Explain **when** to trigger (after finding 2-3 key papers)
+- [ ] Explain **how** (`--cited-by`, `--references`, `--recommendations` with `--limit 10`)
+- [ ] Include concrete example to make it tangible
+
+### 2.2 Expand query refinement guidance
+- [ ] Expand existing "Search query crafting" subsection
+- [ ] Explain **why** refinement matters (search is a dialogue; round 1 reveals the field's terminology)
+- [ ] Add technique: use terms from round 1 papers in round 2 queries
+- [ ] Add technique: combine broad concepts with specific methodological terms
+
+### 2.3 Strengthen journal.md guidance
+- [ ] Expand "journal.md captures reasoning" paragraph
+- [ ] Explain **why** it matters (persistent memory survives context compression; without it the agent repeats work)
+- [ ] List specific things to log: strategy pivots, emerging patterns, contradictions, coverage gaps
+- [ ] Set minimum bar: 500+ words for a full session
+- [ ] Add 2-3 example journal entries to make the expectation concrete
+
+---
+
+## Post-Flight
+
+- [ ] Re-read SKILL.md for internal consistency (no contradictions between sections)
+- [ ] Run `state init` + `search` + `download` to smoke-test bug fixes
+- [ ] Confirm `audit` output reflects accurate download counts
+- [ ] Commit with descriptive message referencing the reflection

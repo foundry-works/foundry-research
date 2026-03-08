@@ -1,90 +1,113 @@
-# Plan: SKILL.md Improvements from Uncanny Valley Reflection
+# Plan: Deep Research Skill Improvements (Round 2)
 
-## Context
-
-The `deep-research-uncanny-valley/REFLECTION.md` evaluation (6.5/10) identified six systematic issues where the agent underused state management tools, searched too broadly, and skipped web sources. All six are addressable through SKILL.md guidance changes — no code changes required.
-
-## Target File
-
-`skills/deep-research/SKILL.md`
+**Source:** `deep-research-uncanny-valley/REFLECTION.md` (session score: 6.8/10)
+**Supersedes:** Previous PLAN.md (round 1 SKILL.md changes — most already applied)
+**Goal:** Fix infrastructure bugs and strengthen SKILL.md guidance to raise baseline session quality.
 
 ---
 
-## Change 1: Mandate brief questions in workflow step 2
+## Part 1: Bug Fixes (Infrastructure & Process Efficiency)
 
-**Problem:** Agent had research questions (Q1-Q6) in its reasoning but never persisted them via `set-brief`. The `questions` field was `[]` despite findings referencing Q1-Q6.
+Code changes in `skills/deep-research/scripts/`. These directly caused the Infrastructure score of 5/10 and Process Efficiency score of 6/10.
 
-**Root cause:** Step 2 says "Draft research brief → set-brief" but doesn't specify that the questions array is mandatory or show what good questions look like.
+### 1.1 Fix silent `_sync_to_state` failures in download.py
 
-**Change:** Expand step 2 in the Quick-Start Workflow to explicitly require 3-7 concrete research questions in the brief JSON. Add an inline example showing the expected `set-brief` JSON structure with a `questions` array.
+**Problem:** After downloading a source, `_sync_to_state()` calls `state.py update-source` via subprocess to record `content_file` in the DB. But it never checks the response — not the exit code, not the JSON body. Since all commands exit 0 (errors conveyed in the JSON envelope per `_shared/output.py`), failures are completely invisible. This caused 55 of 58 downloaded files to have no `content_file` in state.db, making `audit` and `download-pending` unreliable.
 
-**Location:** Lines 16-17 (Quick-Start Workflow, step 2)
+**Root cause:** `subprocess.run(cmd, capture_output=True, timeout=5)` at `download.py:111` — output is captured but discarded. Confirmed by investigation: even when `state.py update-source` returns `{"status": "error", "errors": ["Source src-210 not found"]}`, exit code is 0 and nothing is logged.
 
----
+**Fix:**
+- Parse the JSON response from stdout after the subprocess call
+- Check for `"status": "error"` in the response
+- Log warnings on failure with source_id and error details
+- This is diagnostic logging only — the download itself succeeded, only the DB sync failed
 
-## Change 2: Add post-synthesis gap-check step
+**Files:** `scripts/download.py` — `_sync_to_state` function (~lines 74-116)
 
-**Problem:** Zero gaps logged despite Q4 having no coverage at all. The agent never called `log-gap`.
+### 1.2 Fix `download-pending` to check disk, not just DB
 
-**Root cause:** `log-gap` is mentioned in the tools reference and in "Completion signals" but there's no workflow step that prompts the agent to check for gaps.
+**Problem:** `cmd_download_pending` queries `WHERE content_file IS NULL AND pdf_file IS NULL` to find sources needing download. But since bug 1.1 means `content_file` is often NULL even when files exist on disk, this re-downloads sources that already have content — wasting time, API calls, and rate limit budget.
 
-**Change:** Add a step between current steps 8 and 9 (after logging findings, before audit) that says: review each research question — if any has < 2 supporting sources, call `log-gap`. Also strengthen the "Structured coverage tracking" paragraph to make gap-logging a required practice, not optional.
+**Fix:**
+- After the DB query, filter out sources where `sources/{id}.md` or `sources/{id}.pdf` exists on disk
+- Use the same logic `audit` already uses at lines 1009-1014
+- Log how many were filtered ("N sources already on disk, skipping")
+- This makes `download-pending` correct even when the DB is out of sync (defense in depth)
 
-**Location:** Lines 22-23 (Quick-Start Workflow, steps 8-9), lines 163-164 (Structured coverage tracking paragraph)
+**Files:** `scripts/state.py` — `cmd_download_pending` function (~lines 860-891)
 
----
+### 1.3 Record ingested count in searches table
 
-## Change 3: Reader subagents must call `mark-read`
+**Problem:** `search.py` logs `total_results` from the provider response to the `result_count` column — but this is the API's total matching count (e.g., Semantic Scholar returns 9,088 for a broad query). Only 20 results were actually ingested (because `--limit 20`). This makes efficiency metrics in `audit` misleading: "152 sources from 12,966 results" looks like 1.2% efficiency when real ingestion was much higher.
 
-**Problem:** 11 sources had reader notes in `notes/` but `is_read` was 0 for all 87 sources. The flag was never updated.
+**Fix:**
+- Add `ingested_count INTEGER` column to `searches` table schema (with `ALTER TABLE` migration for existing DBs)
+- In `search.py _log_search_to_state`, pass `len(result.get("results", []))` as `--ingested-count`
+- In `state.py cmd_log_search`, accept and store the new column
+- Keep `result_count` as API total — it's useful signal for spotting unfocused queries
 
-**Root cause:** The Delegation section describes what reader subagents do (read paper, write summary to `notes/`) but never instructs them to call `mark-read`.
+**Why both columns:** The API total tells you how broad your query was (helps diagnose unfocused searches). The ingested count tells you what you actually got (needed for efficiency metrics). Dropping either loses signal.
 
-**Change:** In the Delegation section's source summarization bullet, add that after writing the note to `notes/src-NNN.md`, the reader subagent must also call `mark-read --id src-NNN`. Add `mark-read` to the reader subagent's tool list. Alternatively, instruct the main agent to call `mark-read` for each source after confirming its note file exists.
+**Files:** `scripts/state.py` (schema + `cmd_log_search` + `cmd_searches` output), `scripts/search.py` (`_log_search_to_state`)
 
-**Decision:** Have the main agent do it after reader subagents return, since subagents may not have session context. Add a post-reader step: "After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`."
+### 1.4 Scale `download-pending --auto-download` timeout with batch size
 
-**Location:** Lines 218-223 (Delegation section, source summarization), and add a step 7.5 in Quick-Start Workflow after reader spawning.
+**Problem:** `_auto_download_pending` has a hardcoded 600-second (10 min) timeout. With 149 sources, each DOI cascade can take 5-15 seconds across 6 providers, so 149 × ~10s ≈ 25 minutes needed. The timeout kills the download subprocess mid-run.
 
----
+**Fix:**
+- Calculate timeout dynamically: `max(600, len(batch) * 30)` seconds
+- Add `--timeout` flag to `download-pending` parser for manual override
+- Log the calculated timeout so the operator can plan accordingly
 
-## Change 4: Query specificity guidance to prevent off-topic contamination
-
-**Problem:** Queries like "cross-cultural differences individual variation" pulled in food science and emotional regulation papers (20+ off-topic sources out of 87).
-
-**Root cause:** SKILL.md says "narrow based on what emerges" but doesn't warn about generic queries or high result counts.
-
-**Change:** Add a "Search Query Crafting" subsection to the "What Good Research Looks Like" section with three rules:
-1. Always include the core topic term in every query (e.g., "uncanny valley cross-cultural" not "cross-cultural differences individual variation")
-2. If a search returns >500 results, the query is too broad — add qualifying terms
-3. After each search round, spot-check the last few results for relevance — if off-topic, the query needs tightening
-
-**Location:** After the "Iterative search across multiple providers" paragraph (after line 141)
-
----
-
-## Change 5: Prompt for web source consideration
-
-**Problem:** Topic (uncanny valley) had significant non-academic coverage but no web sources were searched. 71% provider concentration on Semantic Scholar.
-
-**Root cause:** The workflow steps mention web search (step 4) but don't prompt the agent to evaluate whether the topic warrants web sources. Easy to skip.
-
-**Change:** Add a sentence to step 3/4 in the workflow: "Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, plan at least one web search round." Also add to Provider Selection Guidance a heuristic: "When unsure, search at least 3 providers including one web source."
-
-**Location:** Lines 17-18 (Quick-Start Workflow, steps 3-4), lines 170-184 (Provider Selection Guidance)
+**Files:** `scripts/state.py` — `_auto_download_pending` (~line 935) and parser (~line 1359)
 
 ---
 
-## Change 6: Default search limit guidance
+## Part 2: SKILL.md Guidance Improvements (Search Strategy & Process)
 
-**Problem:** Search efficiency was 1.4% — 87 sources tracked from 6,168 total results. Individual searches returned 1,000-2,000+ results.
+Changes to `skills/deep-research/SKILL.md`. These address Search Strategy (6/10) and Process Efficiency (6/10) by giving the agent better decision-making principles. Each change explains not just the what and how, but **why** — so the agent internalizes the principle rather than just following a rule.
 
-**Root cause:** No guidance on `--limit` values. Agent used provider defaults, which can return thousands.
+### 2.1 Add citation chasing guidance
 
-**Change:** Add limit guidance to the Search tool section and to the "Iterative search" paragraph:
-- Initial broad search: `--limit 50` (enough to find key papers)
-- Targeted follow-up: `--limit 20`
-- Citation/reference traversal: `--limit 10`
-- Note: OpenAlex and Semantic Scholar default limits can be very high — always set `--limit` explicitly
+**Problem:** The session ran 7 first-round keyword searches in parallel but never used `--cited-by`, `--references`, or `--recommendations`. After identifying Kätsyri (2015) and MacDorman (2016) as seminal papers, citation traversal would have found the active research network with higher precision than more keyword searches.
 
-**Location:** Lines 45 (Common flags), and the "Iterative search across multiple providers" paragraph (line 140)
+**What to add:** New paragraph after "Iterative search across multiple providers" explaining citation chasing as a second-round strategy. Must include:
+- **Why it works:** Citation networks have higher precision than keyword search because relevance is pre-filtered by the citing/cited authors — a paper that cites Kätsyri 2015 is almost certainly about the uncanny valley, whereas a keyword match for "uncanny valley cross-cultural" pulls in food science papers.
+- **When to trigger:** After identifying 2-3 key/seminal papers in initial results.
+- **How to scope:** `--cited-by PAPER_ID --limit 10`, `--references PAPER_ID --limit 10`.
+
+### 2.2 Expand query refinement guidance
+
+**Problem:** All 7 searches were first-round queries with no refinement. One returned 9,088 results. The existing SKILL.md says "Broad initial queries narrow based on what emerges" but doesn't explain the feedback loop.
+
+**What to add:** Expand the "Search query crafting" subsection with:
+- **Why refinement matters:** Treating search as a one-shot misses the feedback loop. Initial results reveal the field's actual terminology (e.g., discovering that "realism inconsistency" is the accepted term, not "appearance mismatch"), which makes follow-up queries far more precise.
+- **Concrete technique:** Use terminology discovered in round 1 papers to craft round 2 queries. Combine broad concept terms with specific methodological terms from key papers.
+
+### 2.3 Strengthen journal.md guidance
+
+**Problem:** The session's journal was 200 words — too brief to capture reasoning. No mid-session strategy adjustments, no contradiction analysis, no decision points logged.
+
+**What to add:** Expand "journal.md captures reasoning" into a substantive paragraph with:
+- **Why it matters:** journal.md is the agent's persistent memory. During long sessions, context compression erases reasoning traces. Without journal entries, the agent loses track of what it tried, what worked, and why it pivoted — leading to repeated searches and missed contradictions.
+- **What to log:** Strategy decisions ("pivoting to targeted searches for Q3"), emerging patterns ("three papers converge on perceptual mismatch"), contradictions ("Kätsyri challenges MacDorman's framing"), coverage assessments ("Q6 has 1 source, need follow-up").
+- **Minimum bar:** 500+ words across a full session.
+
+---
+
+## Sequencing
+
+```
+Phase 1 (bug fixes — can be parallelized):
+  1.1  Fix _sync_to_state error handling
+  1.2  Fix download-pending disk check
+  1.3  Add ingested_count column
+  1.4  Scale download timeout
+
+Phase 2 (SKILL.md — do together):
+  2.1  Citation chasing guidance
+  2.2  Query refinement guidance
+  2.3  Journal.md guidance
+```
+
+Phases 1 and 2 are independent and could be done in parallel.
