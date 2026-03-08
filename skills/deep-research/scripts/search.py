@@ -8,7 +8,8 @@ import sys
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _shared.output import error_response, log  # noqa: E402
+from _shared.config import _discover_session_dir_from_marker  # noqa: E402
+from _shared.output import error_response, log, set_quiet  # noqa: E402
 from providers import available_providers, get_provider  # noqa: E402
 
 # Flags that substitute for --query (provider -> set of flag dest names)
@@ -37,6 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", "--max-results", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--offset", type=int, default=0, help="Skip first N results (default: 0)")
     parser.add_argument("--session-dir", default=None, help="Session directory for state integration")
+    parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
     return parser
 
 
@@ -56,6 +58,9 @@ def _has_identifier_flag(provider: str, extra_args: list[str]) -> bool:
 def main() -> None:
     parser = _build_parser()
     args, extra_args = parser.parse_known_args()
+
+    if args.quiet:
+        set_quiet(True)
 
     provider = args.provider
 
@@ -112,7 +117,11 @@ def main() -> None:
         result.setdefault("offset", args.offset)
         result.setdefault("limit", args.limit)
 
-    # Log search to session state if --session-dir provided
+    # Auto-discover session dir if not explicitly provided
+    if not args.session_dir:
+        args.session_dir = _discover_session_dir_from_marker() or os.environ.get("DEEP_RESEARCH_SESSION_DIR")
+
+    # Log search to session state if session-dir available
     if args.session_dir and isinstance(result, dict) and result.get("status") == "ok":
         _log_search_to_state(args, result)
 

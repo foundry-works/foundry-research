@@ -3,6 +3,15 @@
 import json
 import sys
 
+# Global quiet mode flag — suppresses stderr log output when True
+_quiet = False
+
+
+def set_quiet(quiet: bool) -> None:
+    """Enable or disable quiet mode (suppresses stderr log output)."""
+    global _quiet
+    _quiet = quiet
+
 
 def success_response(results: list | dict, total_results: int | None = None, **extra) -> str:
     """Print JSON success envelope to stdout and return it.
@@ -59,8 +68,11 @@ def error_response(errors: list[str], partial_results: list | dict | None = None
 def log(message: str, level: str = "info") -> None:
     """Log a message to stderr (keeps stdout clean for JSON output).
 
+    Suppressed when quiet mode is enabled via set_quiet(True) or --quiet flag.
+
     Args:
         message: The log message.
         level: Log level label (info, warn, error, debug).
     """
-    print(f"[{level}] {message}", file=sys.stderr)
+    if not _quiet:
+        print(f"[{level}] {message}", file=sys.stderr)

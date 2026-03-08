@@ -7,27 +7,27 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
 ## Phase 1: Core Ergonomics
 
 ### #1 — Session Directory Auto-Discovery
-- [ ] Add `.deep-research-session` marker file write to `state.py` `init` subcommand
-- [ ] Update `get_session_dir()` in `scripts/_shared/config.py`:
-  - [ ] Add precedence level 3: walk up from cwd looking for `.deep-research-session`
-  - [ ] Read absolute session path from marker file contents
-  - [ ] Add `.deep-research-session` to `.gitignore`
+- [x] Add `.deep-research-session` marker file write to `state.py` `init` subcommand
+- [x] Update `get_session_dir()` in `scripts/_shared/config.py`:
+  - [x] Add precedence level 3: walk up from cwd looking for `.deep-research-session`
+  - [x] Read absolute session path from marker file contents
+  - [x] Add `.deep-research-session` to `.gitignore`
 - [ ] Update SKILL.md: document auto-discovery behavior
 - [ ] Update SKILL.md: add zsh-compatible syntax note (`VAR=val command`, not `export VAR=val && command`)
-- [ ] Test: `./state init --query "test" --session-dir ./test-session` creates marker; subsequent `./state summary` works without `--session-dir`
+- [x] Test: `./state init --query "test" --session-dir ./test-session` creates marker; subsequent `./state summary` works without `--session-dir`
 
 ### #2 — Structured Output (Logs vs. JSON)
-- [ ] Audit `scripts/_shared/output.py` — identify all log/print functions
-- [ ] Route `[info]`, `[warn]`, `[error]`, `[debug]` output to **stderr**
-- [ ] Ensure **stdout** contains only the JSON result envelope
-- [ ] Add `--quiet` flag to suppress stderr log output
-- [ ] Audit and fix all direct `print()` calls in:
-  - [ ] `scripts/search.py`
-  - [ ] `scripts/download.py`
-  - [ ] `scripts/state.py`
-  - [ ] `scripts/enrich.py`
-- [ ] Test: `./search ... 2>/dev/null` produces valid JSON on stdout
-- [ ] Test: `./search ... | python3 -c "import sys,json; json.load(sys.stdin)"` works
+- [x] Audit `scripts/_shared/output.py` — identify all log/print functions
+- [x] Route `[info]`, `[warn]`, `[error]`, `[debug]` output to **stderr** (already correct)
+- [x] Ensure **stdout** contains only the JSON result envelope
+- [x] Add `--quiet` flag to suppress stderr log output
+- [x] Audit and fix all direct `print()` calls in:
+  - [x] `scripts/search.py` (no stray prints found)
+  - [x] `scripts/download.py` (no stray prints found)
+  - [x] `scripts/state.py` (fixed `_connect()` to use `error_response()`)
+  - [x] `scripts/enrich.py` (no stray prints found)
+- [x] Test: `./state summary 2>/dev/null` produces valid JSON on stdout
+- [x] Test: `./state summary | python3 -c "import sys,json; json.load(sys.stdin)"` works
 
 ---
 

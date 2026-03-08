@@ -12,8 +12,9 @@ from datetime import datetime, timezone
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _shared.config import get_session_dir, write_session_marker
 from _shared.doi_utils import canonicalize_url, normalize_doi
-from _shared.output import error_response, success_response
+from _shared.output import error_response, log, set_quiet, success_response
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -125,8 +126,7 @@ def _now() -> str:
 def _connect(session_dir: str, readonly: bool = False) -> sqlite3.Connection:
     db_path = os.path.join(session_dir, "state.db")
     if readonly and not os.path.exists(db_path):
-        print(json.dumps({"status": "error", "errors": [f"state.db not found in {session_dir}"], "results": [], "total_results": 0}))
-        sys.exit(1)
+        error_response([f"state.db not found in {session_dir}"])
     uri = f"file:{db_path}" + ("?mode=ro" if readonly else "")
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
@@ -251,6 +251,10 @@ def cmd_init(args):
     conn.commit()
     _regenerate_snapshot(session_dir, conn, session_id)
     conn.close()
+
+    # Write marker file for auto-discovery by subsequent commands
+    write_session_marker(session_dir)
+    log(f"Session marker written to .deep-research-session (auto-discovery enabled)")
 
     success_response({"session_id": session_id, "session_dir": session_dir})
 
@@ -865,6 +869,7 @@ def _load_json_raw(path: str) -> dict | list:
 
 def main():
     parser = argparse.ArgumentParser(description="Session state tracker")
+    parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output (for pipeline use)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # init
@@ -872,116 +877,119 @@ def main():
     p.add_argument("--query", required=True)
     p.add_argument("--session-dir", required=True)
 
+    # All other subcommands get --session-dir as optional (auto-discovered)
+    _sd = {"default": None, "help": "Session directory (auto-discovered from .deep-research-session marker if omitted)"}
+
     # export
     p = sub.add_parser("export")
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # set-brief
     p = sub.add_parser("set-brief")
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # log-search
     p = sub.add_parser("log-search")
     p.add_argument("--provider", required=True)
     p.add_argument("--query", required=True)
     p.add_argument("--result-count", type=int, required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # add-source
     p = sub.add_parser("add-source")
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # add-sources
     p = sub.add_parser("add-sources")
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # check-dup
     p = sub.add_parser("check-dup")
     p.add_argument("--doi", default=None)
     p.add_argument("--url", default=None)
     p.add_argument("--title", default=None)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # check-dup-batch
     p = sub.add_parser("check-dup-batch")
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # log-finding
     p = sub.add_parser("log-finding")
     p.add_argument("--text", required=True)
     p.add_argument("--sources", default=None)
     p.add_argument("--question", default=None)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # log-gap
     p = sub.add_parser("log-gap")
     p.add_argument("--text", required=True)
     p.add_argument("--question", default=None)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # resolve-gap
     p = sub.add_parser("resolve-gap")
     p.add_argument("--gap-id", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # searches
     p = sub.add_parser("searches")
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # sources
     p = sub.add_parser("sources")
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # get-source
     p = sub.add_parser("get-source")
     p.add_argument("--id", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # update-source
     p = sub.add_parser("update-source")
     p.add_argument("--id", required=True)
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # summary
     p = sub.add_parser("summary")
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # mark-read
     p = sub.add_parser("mark-read")
     p.add_argument("--id", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # set-status
     p = sub.add_parser("set-status")
     p.add_argument("--id", required=True)
     p.add_argument("--status", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # add-tag
     p = sub.add_parser("add-tag")
     p.add_argument("--id", required=True)
     p.add_argument("--tag", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # list-sources
     p = sub.add_parser("list-sources")
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # search-sources
     p = sub.add_parser("search-sources")
     p.add_argument("--query", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # set-quality
     p = sub.add_parser("set-quality")
     p.add_argument("--id", required=True)
     p.add_argument("--quality", type=float, required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # log-metric
     p = sub.add_parser("log-metric")
@@ -992,24 +1000,31 @@ def main():
     p.add_argument("--unit", default="USD")
     p.add_argument("--period", default=None)
     p.add_argument("--filed-date", default=None)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # log-metrics
     p = sub.add_parser("log-metrics")
     p.add_argument("--from-json", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # get-metrics
     p = sub.add_parser("get-metrics")
     p.add_argument("--ticker", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     # get-metric
     p = sub.add_parser("get-metric")
     p.add_argument("--metric", required=True)
-    p.add_argument("--session-dir", required=True)
+    p.add_argument("--session-dir", **_sd)
 
     args = parser.parse_args()
+
+    if args.quiet:
+        set_quiet(True)
+
+    # Resolve session-dir via auto-discovery for all commands except init
+    if args.command != "init":
+        args.session_dir = get_session_dir(args)
 
     commands = {
         "init": cmd_init,

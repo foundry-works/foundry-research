@@ -22,7 +22,7 @@ from _shared.metadata import (  # noqa: E402
     write_source_metadata,
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
-from _shared.output import error_response, log, success_response  # noqa: E402
+from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown, validate_pdf  # noqa: E402
 
 # arXiv download constraints
@@ -62,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--year", type=int, default=None, help="Publication year")
     parser.add_argument("--venue", default=None, help="Publication venue")
     parser.add_argument("--citation-count", type=int, default=None, help="Citation count")
+    parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
 
     return parser
 
@@ -111,6 +112,9 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.quiet:
+        set_quiet(True)
 
     # Require at least one input mode
     if not any([args.url, args.pdf_url, args.doi, args.arxiv, args.local_dir, args.from_json]):

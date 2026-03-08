@@ -16,6 +16,7 @@ env/
 
 # Research session output (generated per-run)
 deep-research-*/
+.deep-research-session
 specs/
 
 # IDE

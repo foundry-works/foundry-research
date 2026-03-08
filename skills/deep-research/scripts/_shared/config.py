@@ -92,12 +92,45 @@ def get_config(session_dir: str | None = None) -> dict:
     return config
 
 
+MARKER_FILENAME = ".deep-research-session"
+
+
+def _discover_session_dir_from_marker() -> str | None:
+    """Walk up from cwd looking for a .deep-research-session marker file.
+
+    The marker file contains the absolute path to the session directory.
+    Returns the session directory path if found, None otherwise.
+    """
+    current = Path.cwd()
+    for directory in [current, *current.parents]:
+        marker = directory / MARKER_FILENAME
+        if marker.is_file():
+            content = marker.read_text(encoding="utf-8").strip()
+            if content and Path(content).is_dir():
+                return content
+        # Stop at filesystem root
+        if directory == directory.parent:
+            break
+    return None
+
+
+def write_session_marker(session_dir: str) -> None:
+    """Write a .deep-research-session marker file in the current working directory.
+
+    The marker contains the absolute path to the session directory,
+    enabling auto-discovery by subsequent commands.
+    """
+    marker_path = Path.cwd() / MARKER_FILENAME
+    marker_path.write_text(str(Path(session_dir).resolve()) + "\n", encoding="utf-8")
+
+
 def get_session_dir(args) -> str:
-    """Resolve session directory from CLI args or environment.
+    """Resolve session directory from CLI args, environment, or marker file.
 
     Precedence:
         1. args.session_dir (from --session-dir CLI flag)
         2. $DEEP_RESEARCH_SESSION_DIR environment variable
+        3. .deep-research-session marker file (walk up from cwd)
 
     Creates the directory and sources/metadata/ subdirectory if they don't exist.
 
@@ -114,8 +147,10 @@ def get_session_dir(args) -> str:
     if not session_dir:
         session_dir = os.environ.get("DEEP_RESEARCH_SESSION_DIR")
     if not session_dir:
+        session_dir = _discover_session_dir_from_marker()
+    if not session_dir:
         import sys
-        print("Error: No session directory specified. Use --session-dir or set DEEP_RESEARCH_SESSION_DIR.", file=sys.stderr)
+        print("Error: No session directory specified. Use --session-dir, set DEEP_RESEARCH_SESSION_DIR, or run from a directory with a .deep-research-session marker.", file=sys.stderr)
         sys.exit(1)
 
     path = Path(session_dir).resolve()

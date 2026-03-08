@@ -17,7 +17,7 @@ from _shared.metadata import (  # noqa: E402  # noqa: E402
     read_source_metadata,
     write_source_metadata,
 )
-from _shared.output import error_response, log, success_response  # noqa: E402
+from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 
 # Crossref API base URL
 _API_URL = "https://api.crossref.org/works"
@@ -47,6 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--session-dir", default=None,
         help="Session directory (for rate limiter state and metadata merge)",
     )
+    parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
     return parser
 
 
@@ -54,8 +55,12 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
+    if args.quiet:
+        set_quiet(True)
+
     # Resolve session dir (optional for enrich — only used for rate limiter)
-    session_dir = args.session_dir or os.environ.get("DEEP_RESEARCH_SESSION_DIR")
+    from _shared.config import _discover_session_dir_from_marker
+    session_dir = args.session_dir or os.environ.get("DEEP_RESEARCH_SESSION_DIR") or _discover_session_dir_from_marker()
     if not session_dir:
         import tempfile
         session_dir = tempfile.mkdtemp(prefix="enrich_")
