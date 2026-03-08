@@ -36,3 +36,5 @@ Thumbs.db
 .ruff_cache
 .claude/
 .cache/
+.pytest_cache
+settings.json

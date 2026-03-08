@@ -27,8 +27,8 @@ cp -r "$REPO_DIR/scripts" "$DEST/scripts"
 find "$DEST/scripts" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # --- Subagent ---
-mkdir -p "$DEST/.claude/agents"
-cp "$REPO_DIR/.claude/agents/research-reader.md" "$DEST/.claude/agents/"
+mkdir -p "$REPO_DIR/.claude/agents"
+cp "$REPO_DIR/agents/research-reader.md" "$REPO_DIR/.claude/agents/"
 
 echo "Copied deep-research skill to $DEST"
 echo "Contents:"
