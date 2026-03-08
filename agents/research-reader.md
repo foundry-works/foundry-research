@@ -25,9 +25,13 @@ A directive from the supervisor containing:
 3. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
 4. For degraded quality sources (check metadata), note limitations and rely primarily on the abstract
 
+## File paths
+
+**Always use relative paths from the project root** (e.g., `deep-research-topic/notes/src-003.md`), never absolute paths (e.g., `/home/user/project/deep-research-topic/notes/src-003.md`). This ensures Write permissions match correctly — absolute paths may be denied by the permission allowlist even when the relative equivalent is allowed.
+
 ## Output rules
 
-- Write the summary to `notes/{source_id}.md` in the session directory
+- Write the summary to `notes/{source_id}.md` in the session directory, using a **relative path from the project root**
 - The note should include: core findings (2-3 sentences), key evidence/data points, methodology, limitations, and relevance to the research question
 - Return ONLY a compact JSON manifest entry to the supervisor — do NOT return the full summary in your response
 

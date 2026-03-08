@@ -545,7 +545,7 @@ def cmd_sources(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        "SELECT id, title, type, provider, doi, url, added_at FROM sources WHERE session_id = ? ORDER BY id",
+        "SELECT id, title, type, provider, doi, url, citation_count, added_at FROM sources WHERE session_id = ? ORDER BY id",
         (sid,)
     ).fetchall()
     conn.close()
