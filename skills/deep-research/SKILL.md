@@ -10,6 +10,21 @@ You are a research agent with access to academic databases, web search, and stru
 
 ---
 
+## Quick-Start Workflow
+
+1. `./state init --query "..."` — creates session (auto-discovers session dir for all subsequent commands)
+2. Draft research brief → `./state set-brief --from-json FILE` (or `--from-stdin`)
+3. Search academic providers (parallel OK within academic)
+4. Search web providers (Tavily/WebSearch — **SEPARATE batch from academic**)
+5. Sources and searches are auto-tracked by `./search` — no manual `add-sources` or `log-search` needed
+6. `./state download-pending --auto-download` — download all sources with DOIs
+7. Spawn reader subagents for downloaded papers (parallel, 2-3 sources per agent)
+8. `./state log-finding` per research question
+9. `./state audit` — check coverage, identify gaps, get methodology stats
+10. Write report — use audit stats in Methodology section
+
+---
+
 ## Tools Available
 
 ### Search (`./search --provider <name>`)
@@ -29,7 +44,9 @@ You are a research agent with access to academic databases, web search, and stru
 
 Common flags: `--query "..." --limit N --offset N --session-dir DIR`
 
-Set `$DEEP_RESEARCH_SESSION_DIR` to avoid repeating `--session-dir` on every command.
+**Session directory auto-discovery:** After `./state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars. You can still override with `--session-dir DIR` or `$DEEP_RESEARCH_SESSION_DIR` if needed.
+
+**Searches are auto-tracked:** `./search` automatically logs the search and adds all results to state.db when a session is active. No manual `./state log-search` or `./state add-sources` needed.
 
 #### yfinance data types
 
@@ -61,6 +78,7 @@ Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-ful
 ### Download (`./download`)
 
 ```
+--source-id src-003 --to-md       # download by source ID (looks up DOI/URL from state.db)
 --url URL --type web              # web page content
 --doi DOI --to-md                 # PDF cascade by DOI
 --arxiv ID --to-md                # arXiv PDF
@@ -83,10 +101,10 @@ Each item can include: `doi`, `url`, `pdf_url`, `arxiv`, `source_id`, `title`, `
 
 ```
 init --query "..."                # start session (creates state.db, journal.md, notes/, sources/)
-set-brief --from-json FILE        # save research brief + questions
-log-search --provider X ...       # record completed search (prevents re-searching)
-add-source --from-json FILE       # dedup + track single source
-add-sources --from-json FILE      # batch dedup + insert (preferred after search)
+set-brief --from-json FILE        # save research brief + questions (or --from-stdin)
+log-search --provider X ...       # record search (auto-called by ./search)
+add-source --from-json FILE       # dedup + track single source (or --from-stdin)
+add-sources --from-json FILE      # batch dedup + insert (auto-called by ./search; or --from-stdin)
 check-dup --doi/--url/--title     # check before downloading
 check-dup-batch --from-json FILE  # batch dedup check
 log-finding --text "..." --sources "src-001,src-003" --question "Q1"
@@ -103,7 +121,7 @@ audit                             # pre-report coverage & quality check
 audit --strict                    # exit non-zero if warnings found
 ```
 
-**IMPORTANT:** All JSON payloads must be passed via `--from-json FILE`. Write JSON to a temp file first, then pass the path. There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts.
+**JSON input:** Pass JSON via `--from-json FILE` (write to a temp file first) or `--from-stdin` (pipe JSON via stdin). There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts. Example: `echo '{"scope":"..."}' | ./state set-brief --from-stdin`
 
 ### Native Tools
 
@@ -121,9 +139,11 @@ audit --strict                    # exit non-zero if warnings found
 
 **Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage.
 
-**Parallel search resilience.** When launching parallel searches, keep academic provider searches separate from web searches (Tavily/WebSearch). If one call in a parallel batch fails, other calls in the same batch may be cancelled by the runtime.
+**Parallel search resilience.** **CRITICAL: Never mix academic CLI searches (`./search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** If one fails, the runtime cancels all siblings. Always separate them into distinct response blocks.
 
-**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. For degraded PDF conversions (`"quality": "degraded"` in metadata), rely on the abstract and seek alternate sources. `./enrich` fills venue, authors, and retraction status for key papers.
+**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `./enrich` fills venue, authors, and retraction status for key papers.
+
+**Degraded PDFs.** Check `"quality"` in metadata files. Sources with `"degraded"` quality have garbled or minimal text — do NOT claim deep reading. Options: use abstract from search metadata instead, try `./download --url https://doi.org/{doi} --type web` for the landing page, or seek an alternate open-access version. The download tool automatically detects degraded conversions and marks them.
 
 **Paywalled papers.** The PDF cascade (`./download --doi`) tries 6 sources (OpenAlex → Unpaywall → arXiv → PMC → Anna's Archive → Sci-Hub). If all fail, the paper is paywalled. Use `./download --url` to grab the abstract page instead, or rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
 
@@ -141,7 +161,7 @@ audit --strict                    # exit non-zero if warnings found
 
 **Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `./state log-finding` and `./state log-gap` track coverage persistently.
 
-**Structured coverage tracking.** Use `./state log-finding` after each synthesis insight and `./state log-gap` when a research question lacks adequate sources. These persist across context compressions and make `./state summary` actionable — without them, the summary shows empty findings/gaps arrays.
+**Structured coverage tracking.** Searches and sources are auto-tracked by `./search`. Use `./state log-finding` after each synthesis insight and `./state log-gap` when a research question lacks adequate sources. These persist across context compressions and make `./state summary` actionable — without them, the summary shows empty findings/gaps arrays.
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
@@ -183,10 +203,10 @@ audit --strict                    # exit non-zero if warnings found
 ```
 
 - Initialize: `./state init --query "..."`
-- Track sources: `./state add-sources --from-json` (batch, preferred)
+- Sources and searches are auto-tracked by `./search` (no manual step needed)
 - Check duplicates: `./state check-dup-batch --from-json` (batch)
-- Log searches: `./state log-search`
 - Review progress: `./state summary`
+- Pre-report check: `./state audit`
 
 ---
 

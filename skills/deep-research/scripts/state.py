@@ -325,7 +325,7 @@ def cmd_export(args):
 
 
 def cmd_set_brief(args):
-    data = _load_json_dict(args.from_json)
+    data = _load_json_dict(_resolve_json_input(args))
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -363,7 +363,7 @@ def cmd_log_search(args):
 
 
 def cmd_add_source(args):
-    data = _load_json_dict(args.from_json)
+    data = _load_json_dict(_resolve_json_input(args))
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -375,7 +375,7 @@ def cmd_add_source(args):
 
 
 def cmd_add_sources(args):
-    data = _load_json_list(args.from_json)
+    data = _load_json_list(_resolve_json_input(args))
 
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
@@ -437,7 +437,7 @@ def cmd_check_dup(args):
 
 
 def cmd_check_dup_batch(args):
-    data = _load_json_list(args.from_json)
+    data = _load_json_list(_resolve_json_input(args))
 
     conn = _connect(args.session_dir, readonly=True)
     sid = _get_session_id(conn)
@@ -543,7 +543,7 @@ def cmd_get_source(args):
 
 
 def cmd_update_source(args):
-    data = _load_json_dict(args.from_json)
+    data = _load_json_dict(_resolve_json_input(args))
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -782,7 +782,7 @@ def cmd_log_metric(args):
 
 
 def cmd_log_metrics(args):
-    data = _load_json_list(args.from_json)
+    data = _load_json_list(_resolve_json_input(args))
 
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
@@ -1130,6 +1130,32 @@ def _load_json_raw(path: str) -> dict | list:
         raise SystemExit(1)
 
 
+def _resolve_json_input(args) -> str:
+    """Resolve JSON input source: --from-json FILE or --from-stdin.
+
+    When --from-stdin is used, reads stdin into a temp file and returns its path.
+    Returns the path to pass to _load_json_dict/_load_json_list.
+    """
+    if getattr(args, "from_json", None):
+        return args.from_json
+    if getattr(args, "from_stdin", False):
+        import tempfile
+        try:
+            raw = sys.stdin.read()
+            data = json.loads(raw)  # validate JSON
+        except json.JSONDecodeError as e:
+            error_response([f"Invalid JSON from stdin: {e}"])
+            raise SystemExit(1)
+        # Write to temp file so _load_json_raw works uniformly
+        session_dir = getattr(args, "session_dir", None) or "."
+        tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False)
+        json.dump(data, tf)
+        tf.close()
+        return tf.name
+    error_response(["No JSON input specified. Use --from-json FILE or --from-stdin"])
+    raise SystemExit(1)
+
+
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
@@ -1153,7 +1179,9 @@ def main():
 
     # set-brief
     p = sub.add_parser("set-brief")
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # log-search
@@ -1165,12 +1193,16 @@ def main():
 
     # add-source
     p = sub.add_parser("add-source")
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # add-sources
     p = sub.add_parser("add-sources")
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # check-dup
@@ -1182,7 +1214,9 @@ def main():
 
     # check-dup-batch
     p = sub.add_parser("check-dup-batch")
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # log-finding
@@ -1219,7 +1253,9 @@ def main():
     # update-source
     p = sub.add_parser("update-source")
     p.add_argument("--id", required=True)
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # summary
@@ -1271,7 +1307,9 @@ def main():
 
     # log-metrics
     p = sub.add_parser("log-metrics")
-    p.add_argument("--from-json", required=True)
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
     p.add_argument("--session-dir", **_sd)
 
     # get-metrics

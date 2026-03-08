@@ -12,8 +12,8 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
   - [x] Add precedence level 3: walk up from cwd looking for `.deep-research-session`
   - [x] Read absolute session path from marker file contents
   - [x] Add `.deep-research-session` to `.gitignore`
-- [ ] Update SKILL.md: document auto-discovery behavior
-- [ ] Update SKILL.md: add zsh-compatible syntax note (`VAR=val command`, not `export VAR=val && command`)
+- [x] Update SKILL.md: document auto-discovery behavior
+- [x] Update SKILL.md: add zsh-compatible syntax note — no longer needed since auto-discovery eliminates the need
 - [x] Test: `./state init --query "test" --session-dir ./test-session` creates marker; subsequent `./state summary` works without `--session-dir`
 
 ### #2 — Structured Output (Logs vs. JSON)
@@ -120,28 +120,32 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
 ## Phase 5: Polish
 
 ### #4 — SKILL.md Instruction Updates
-- [ ] Add Quick-Start Workflow section (10-step condensed workflow)
-- [ ] Bold the parallel search warning (academic vs. web in separate batches)
-- [ ] Add degraded PDF handling guidance
-- [ ] Remove any instructions that are now handled by tools:
-  - [ ] "Log searches" → auto-logged (#7)
-  - [ ] "Add sources after search" → auto-added (#9)
-  - [ ] "Pre-report audit checklist" → replaced by `./state audit` (#8)
-- [ ] Update Output Format section with split references template
+- [x] Add Quick-Start Workflow section (10-step condensed workflow)
+- [x] Bold the parallel search warning (academic vs. web in separate batches)
+- [x] Add degraded PDF handling guidance
+- [x] Remove any instructions that are now handled by tools:
+  - [x] "Log searches" → auto-logged (#7)
+  - [x] "Add sources after search" → auto-added (#9)
+  - [x] "Pre-report audit checklist" → replaced by `./state audit` (#8)
+- [x] Update Output Format section with split references template (already done in Phase 3)
+- [x] Document session auto-discovery and `--from-stdin` support
+- [x] Document `--source-id` download mode
+- [x] Update SKILL.md: document auto-discovery behavior
+- [x] Update SKILL.md: add zsh-compatible syntax note (`VAR=val command`, not `export VAR=val && command`) — no longer needed since auto-discovery eliminates the need
 
 ### #6 — `--from-stdin` Support
-- [ ] In `scripts/state.py`, for subcommands that accept `--from-json`:
-  - [ ] Add `--from-stdin` as mutually exclusive alternative
-  - [ ] When used, read JSON from `sys.stdin`
-  - [ ] Subcommands: `set-brief`, `add-source`, `add-sources`, `check-dup-batch`
-- [ ] Test: `echo '{"scope":"test"}' | ./state set-brief --from-stdin`
+- [x] In `scripts/state.py`, for subcommands that accept `--from-json`:
+  - [x] Add `--from-stdin` as mutually exclusive alternative
+  - [x] When used, read JSON from `sys.stdin`
+  - [x] Subcommands: `set-brief`, `add-source`, `add-sources`, `check-dup-batch`, `update-source`, `log-metrics`
+- [x] Test: `echo '{"scope":"test"}' | ./state set-brief --from-stdin`
 
 ### #10 — Download by Source ID
-- [ ] Add `--source-id` flag to `scripts/download.py`
-- [ ] Look up DOI and/or URL from state.db
-- [ ] Run existing download logic with resolved DOI/URL
-- [ ] Ensure downloaded content maps to the correct source ID
-- [ ] Test: `./download --source-id src-003 --to-md` → downloads and maps correctly
+- [x] Add `--source-id` flag to `scripts/download.py` (already existed as common flag, now works as standalone input mode)
+- [x] Look up DOI and/or URL from state.db
+- [x] Run existing download logic with resolved DOI/URL
+- [x] Ensure downloaded content maps to the correct source ID
+- [x] Test: `./download --source-id src-003 --to-md` → resolves DOI from state.db and runs cascade
 
 ---
 

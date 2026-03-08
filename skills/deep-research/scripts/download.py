@@ -152,6 +152,33 @@ def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: di
         log(f"Failed to auto-create web source: {e}", level="warn")
 
 
+def _resolve_source_id(session_dir: str, source_id: str) -> dict:
+    """Look up DOI, URL, and metadata from state.db by source ID.
+
+    Returns dict with keys: doi, url, pdf_url, title, authors, year, venue, type.
+    """
+    import sqlite3 as _sqlite3
+
+    db_path = os.path.join(session_dir, "state.db")
+    if not os.path.exists(db_path):
+        error_response([f"No state.db found in {session_dir}"], error_code="no_state")
+        raise SystemExit(1)
+
+    conn = _sqlite3.connect(db_path)
+    conn.row_factory = _sqlite3.Row
+    row = conn.execute(
+        "SELECT doi, url, pdf_url, title, authors, year, venue, type FROM sources WHERE id = ?",
+        (source_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        error_response([f"Source {source_id} not found in state.db"], error_code="source_not_found")
+        raise SystemExit(1)
+
+    return dict(row)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -159,10 +186,40 @@ def main() -> None:
     if args.quiet:
         set_quiet(True)
 
+    # Resolve --source-id as standalone input mode (look up DOI/URL from state.db)
+    if args.source_id and not any([args.url, args.pdf_url, args.doi, args.arxiv, args.local_dir, args.from_json]):
+        session_dir = get_session_dir(args)
+        source_info = _resolve_source_id(session_dir, args.source_id)
+        log(f"Resolved {args.source_id}: doi={source_info.get('doi')}, url={source_info.get('url')}")
+
+        # Set download mode based on available identifiers
+        if source_info.get("doi"):
+            args.doi = source_info["doi"]
+            args.to_md = True  # default to markdown conversion for DOI downloads
+        elif source_info.get("pdf_url"):
+            args.pdf_url = source_info["pdf_url"]
+            args.to_md = True
+        elif source_info.get("url"):
+            args.url = source_info["url"]
+            args.type = source_info.get("type") or "web"
+        else:
+            error_response(
+                [f"Source {args.source_id} has no DOI, URL, or PDF URL to download"],
+                error_code="no_download_target",
+            )
+
+        # Carry metadata from state.db into download
+        if not args.title and source_info.get("title"):
+            args.title = source_info["title"]
+        if not args.year and source_info.get("year"):
+            args.year = source_info["year"]
+        if not args.venue and source_info.get("venue"):
+            args.venue = source_info["venue"]
+
     # Require at least one input mode
     if not any([args.url, args.pdf_url, args.doi, args.arxiv, args.local_dir, args.from_json]):
         error_response(
-            ["No input specified. Use --url, --pdf-url, --doi, --arxiv, --local-dir, or --from-json"],
+            ["No input specified. Use --url, --pdf-url, --doi, --arxiv, --local-dir, --from-json, or --source-id"],
             error_code="missing_input",
         )
 
