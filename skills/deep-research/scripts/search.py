@@ -19,7 +19,7 @@ _IDENTIFIER_FLAGS = {
     "semantic_scholar": {"cited_by", "references", "recommendations", "author"},
     "reddit": {"post_url", "post_id", "browse"},
     "hn": {"story_id"},
-    "biorxiv": {"doi"},
+    "biorxiv": {"doi", "list_categories"},
     "pubmed": {"fetch_pmids"},
     "edgar": {"ticker", "accession"},
     "yfinance": {"ticker"},

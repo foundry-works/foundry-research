@@ -37,7 +37,7 @@ You are a research agent with access to academic databases, web search, and stru
 | `openalex` | Broad academic, open-access filtering | `--open-access-only`, `--year-range` |
 | `arxiv` | Broad academic preprints and quantitative finance | `--categories`, `--list-categories`, `--days`, `--download` |
 | `pubmed` | Biomedical, clinical, MeSH terms (returns PMIDs; use `--fetch-pmids` for metadata) | `--type`, `--cited-by`, `--references`, `--mesh`, `--fetch-pmids` |
-| `biorxiv` | Bio/med preprints | `--server`, `--days`, `--category` |
+| `biorxiv` | Bio/med preprints (bioRxiv + medRxiv) | `--server`, `--days`, `--category`, `--list-categories` |
 | `github` | Repos, code, implementations | `--type`, `--min-stars`, `--repo` |
 | `reddit` | Community discussion, experiences | `--subreddits`, `--post-url` |
 | `hn` | Technical commentary | `--story-id`, `--tags` |

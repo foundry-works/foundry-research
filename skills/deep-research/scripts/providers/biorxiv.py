@@ -38,10 +38,19 @@ def add_arguments(parser) -> None:
         default=None,
         help="Look up a single paper by DOI",
     )
+    parser.add_argument(
+        "--list-categories",
+        action="store_true",
+        default=False,
+        help="List available categories for bioRxiv/medRxiv and exit",
+    )
 
 
 def search(args) -> dict:
     """Search bioRxiv/medRxiv and return a JSON envelope dict."""
+    if getattr(args, "list_categories", False):
+        return _list_categories(args)
+
     session_dir = getattr(args, "session_dir", None) or tempfile.mkdtemp(prefix="biorxiv_")
     query = getattr(args, "query", None)
     doi = getattr(args, "doi", None)
@@ -59,6 +68,39 @@ def search(args) -> dict:
         return error_response([f"bioRxiv search failed: {e}"], error_code="provider_error")
     finally:
         http.close()
+
+
+def _list_categories(args) -> dict:
+    """Fetch available categories by sampling recent papers from bioRxiv and/or medRxiv."""
+    import requests
+
+    server = getattr(args, "server", "both")
+    servers = _resolve_servers(server)
+
+    end = date.today()
+    start = end - timedelta(days=90)
+    date_range = f"{start.isoformat()}/{end.isoformat()}"
+
+    result: dict[str, list[str]] = {}
+
+    for srv in servers:
+        url = f"{BASE_URL}/details/{srv}/{date_range}/0"
+        log(f"Fetching {srv} categories from recent papers...")
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            cats: set[str] = set()
+            for item in data.get("collection", []):
+                cat = item.get("category", "")
+                if cat:
+                    cats.add(cat)
+            result[srv] = sorted(cats)
+        except Exception as e:
+            log(f"Failed to fetch {srv} categories: {e}", level="error")
+            result[srv] = []
+
+    return success_response(result)
 
 
 def _openalex_search(http, args, session_dir: str) -> dict:
