@@ -2,8 +2,10 @@
 """Unified search CLI — routes queries to provider-specific modules."""
 
 import argparse
+import json
 import os
 import sys
+import tempfile
 
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -105,25 +107,35 @@ def main() -> None:
     elif extra_args:
         log(f"Provider '{provider}' does not define add_arguments(); ignoring extra flags: {extra_args}", level="warn")
 
-    # Call provider search
+    # Call provider search (prints JSON to stdout and returns JSON string)
     log(f"Searching {provider}" + (f" for: {args.query}" if args.query else ""))
-    result = mod.search(args)
+    result_str = mod.search(args)
 
-    # Inject provider metadata into the result envelope
-    if isinstance(result, dict):
-        result.setdefault("provider", provider)
-        if args.query:
-            result.setdefault("query", args.query)
-        result.setdefault("offset", args.offset)
-        result.setdefault("limit", args.limit)
+    # Parse result back into dict for state integration
+    result = None
+    if isinstance(result_str, str):
+        try:
+            result = json.loads(result_str)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    elif isinstance(result_str, dict):
+        result = result_str
+
+    if not result or result.get("status") != "ok":
+        return
 
     # Auto-discover session dir if not explicitly provided
     if not args.session_dir:
         args.session_dir = _discover_session_dir_from_marker() or os.environ.get("DEEP_RESEARCH_SESSION_DIR")
 
-    # Log search to session state if session-dir available
-    if args.session_dir and isinstance(result, dict) and result.get("status") == "ok":
-        _log_search_to_state(args, result)
+    if not args.session_dir:
+        return
+
+    # Log search to session state
+    _log_search_to_state(args, result)
+
+    # Auto-add sources to session state
+    _add_sources_to_state(args, result)
 
 
 def _log_search_to_state(args, result: dict) -> None:
@@ -140,9 +152,68 @@ def _log_search_to_state(args, result: dict) -> None:
             "--result-count", str(result.get("total_results", 0)),
             "--session-dir", args.session_dir,
         ]
-        subprocess.run(cmd, capture_output=True, timeout=5)
+        proc = subprocess.run(cmd, capture_output=True, timeout=5)
+        if proc.returncode == 0:
+            log(f"Search logged to state (provider={args.provider})")
+        else:
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            log(f"log-search returned non-zero: {stderr}", level="warn")
     except Exception as e:
         log(f"Failed to log search to state: {e}", level="warn")
+
+
+def _add_sources_to_state(args, result: dict) -> None:
+    """Auto-add search results as sources to session state via state.py."""
+    results = result.get("results")
+    if not isinstance(results, list) or not results:
+        return
+
+    # Filter to items that look like citable sources (have title)
+    sources = []
+    for item in results:
+        if isinstance(item, dict) and item.get("title"):
+            sources.append(item)
+
+    if not sources:
+        return
+
+    try:
+        import subprocess
+
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        state_script = os.path.join(scripts_dir, "state.py")
+
+        # Write sources to temp JSON file
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="search_sources_")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(sources, f, ensure_ascii=False)
+
+            cmd = [
+                sys.executable, state_script, "add-sources",
+                "--from-json", tmp_path,
+                "--session-dir", args.session_dir,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, timeout=10)
+            if proc.returncode == 0:
+                stdout = proc.stdout.decode("utf-8", errors="replace").strip()
+                try:
+                    add_result = json.loads(stdout)
+                    added = add_result.get("results", {})
+                    if isinstance(added, dict):
+                        n_added = len(added.get("added", []))
+                        n_dup = len(added.get("duplicates", []))
+                        log(f"Sources auto-added to state: {n_added} new, {n_dup} duplicates")
+                except (json.JSONDecodeError, TypeError):
+                    log("Sources sent to state (could not parse response)")
+            else:
+                stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+                log(f"add-sources returned non-zero: {stderr}", level="warn")
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    except Exception as e:
+        log(f"Failed to auto-add sources to state: {e}", level="warn")
 
 
 if __name__ == "__main__":

@@ -34,34 +34,35 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
 ## Phase 2: Data Quality
 
 ### #3 — PDF Quality Detection and Fallback
-- [ ] Create quality assessment utility in `scripts/_shared/quality.py`:
-  - [ ] Alphabetic character ratio check
-  - [ ] Sentence detection regex (`[A-Z].*[.!?]`)
-  - [ ] Minimum content length threshold (>500 chars of real text)
-  - [ ] Return quality grade: `ok`, `degraded`, `empty`
-- [ ] Integrate into `scripts/download.py` after markdown conversion:
-  - [ ] Run quality check on converted `.md` file
-  - [ ] Set `"quality": "degraded"` in result when heuristics fail
-  - [ ] Include `"quality_details"` in JSON output (char_ratio, sentence_count)
-  - [ ] Print `[WARN]` to stderr for degraded conversions
-- [ ] Add abstract fallback on cascade failure:
-  - [ ] When all 6 PDF sources fail, attempt `https://doi.org/{doi}` as web download
-  - [ ] Mark result as `"quality": "abstract_only"`
-- [ ] Update source metadata in state.db with quality field
+- [x] Create quality assessment utility in `scripts/_shared/quality.py`:
+  - [x] Alphabetic character ratio check
+  - [x] Sentence detection regex (`[A-Z].*[.!?]`)
+  - [x] Minimum content length threshold (>500 chars of real text)
+  - [x] Return quality grade: `ok`, `degraded`, `empty`
+- [x] Integrate into `scripts/download.py` after markdown conversion:
+  - [x] Run quality check on converted `.md` file
+  - [x] Set `"quality": "degraded"` in result when heuristics fail
+  - [x] Include `"quality_details"` in JSON output (char_ratio, sentence_count)
+  - [x] Print `[WARN]` to stderr for degraded conversions
+- [x] Add abstract fallback on cascade failure:
+  - [x] When all 6 PDF sources fail, attempt `https://doi.org/{doi}` as web download
+  - [x] Mark result as `"quality": "abstract_only"`
+- [x] Update source metadata in state.db with quality field
 - [ ] Test: download a known-degraded PDF (e.g., some Elsevier accepted manuscripts) → quality marked as degraded
 
 ### #7 + #9 — Search Auto-Logs, Auto-Adds Sources, and Silent Failure Fix
-- [ ] Extract `log_search()` and `add_sources()` from `state.py` into importable functions
-- [ ] In `scripts/search.py`, after successful search:
-  - [ ] Auto-call `log_search()` with provider, query, result_count
-  - [ ] Auto-call `add_sources()` with search results (using existing dedup logic)
-  - [ ] Include assigned source IDs in the JSON output
-- [ ] Handle gracefully when no session directory is available (skip auto-log/add, no error)
-- [ ] Verify `state.json` is regenerated after auto-log/add (calls `_regenerate_snapshot`)
+- [x] ~~Extract `log_search()` and `add_sources()` from `state.py` into importable functions~~ (Used subprocess calls instead, consistent with existing patterns)
+- [x] In `scripts/search.py`, after successful search:
+  - [x] Auto-call `log_search()` with provider, query, result_count
+  - [x] Auto-call `add_sources()` with search results (using existing dedup logic)
+  - [x] ~~Include assigned source IDs in the JSON output~~ (source IDs logged to stderr; stdout already printed by provider)
+- [x] Handle gracefully when no session directory is available (skip auto-log/add, no error)
+- [x] Verify `state.json` is regenerated after auto-log/add (calls `_regenerate_snapshot`)
+- [x] **Bug fix**: Phase 1's `_log_search_to_state` was never called because `success_response()` returns a JSON string, not a dict. Fixed by parsing the result string back into a dict.
 - [ ] Test: `./search --provider semantic_scholar --query "test"` → `./state summary` shows search count > 0 and sources added
 - [ ] Test: running same search twice doesn't create duplicate sources
 - [ ] Test: `state.json` reflects searches and sources after search completes
-- [ ] Root cause note: searches were NEVER logged in any prior session (manual `log-search` was never called). Findings went missing in a prior session likely due to zsh session-dir syntax errors causing silent `log-finding` failures. Both fixed by auto-discovery (#1) + auto-logging (#7/#9).
+- [x] Root cause note: searches were NEVER logged in any prior session (manual `log-search` was never called). Findings went missing in a prior session likely due to zsh session-dir syntax errors causing silent `log-finding` failures. Both fixed by auto-discovery (#1) + auto-logging (#7/#9).
 
 ---
 

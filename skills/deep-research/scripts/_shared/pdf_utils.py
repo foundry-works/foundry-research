@@ -7,13 +7,7 @@ import sys
 from pathlib import Path
 
 from _shared.output import log
-
-# Quality check thresholds
-_MIN_LINEBREAKS_PER_CHARS = 500  # <1 break per 500 chars → degraded
-_MAX_NON_ALPHA_RATIO = 0.20  # >20% non-alphanumeric → degraded
-
-# Common punctuation that should NOT count as "non-alphanumeric junk"
-_NORMAL_PUNCT = set(" \t\n\r.,;:!?'\"-()[]{}/#@&*+=<>|~`^%$_\\")
+from _shared.quality import assess_quality
 
 # Heading pattern for TOC extraction
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
@@ -189,7 +183,12 @@ def pdf_to_markdown(
         }
 
     # Quality check
-    quality = _check_quality(md_text)
+    qa = assess_quality(md_text)
+    quality = qa["quality"]
+    quality_details = qa["quality_details"]
+
+    if quality == "degraded":
+        log(f"PDF conversion quality is degraded — content may be unusable: {quality_details.get('reasons', [])}", level="warn")
 
     # Write markdown
     Path(md_path).parent.mkdir(parents=True, exist_ok=True)
@@ -211,6 +210,7 @@ def pdf_to_markdown(
         "toc_file": toc_file,
         "converter": converter,
         "quality": quality,
+        "quality_details": quality_details,
     }
 
 
@@ -325,34 +325,3 @@ def _run_pypdf(pdf_path: str) -> str | None:
     return "\n\n".join(pages) if pages else None
 
 
-def _check_quality(md_text: str) -> str:
-    """Check structural quality of converted markdown.
-
-    Returns "ok" or "degraded".
-    """
-    if not md_text:
-        return "degraded"
-
-    # Strip warning comments for quality check
-    check_text = md_text
-    if check_text.startswith("<!-- WARNING:"):
-        # Skip past the warning line
-        idx = check_text.find("-->")
-        if idx >= 0:
-            check_text = check_text[idx + 3:].strip()
-
-    if not check_text:
-        return "degraded"
-
-    # Check linebreak density
-    linebreaks = check_text.count("\n")
-    chars = len(check_text)
-    if chars > 0 and chars / max(linebreaks, 1) > _MIN_LINEBREAKS_PER_CHARS:
-        return "degraded"
-
-    # Check non-alphanumeric ratio (excluding normal punctuation and whitespace)
-    non_alpha = sum(1 for c in check_text if not c.isalnum() and c not in _NORMAL_PUNCT)
-    if chars > 0 and non_alpha / chars > _MAX_NON_ALPHA_RATIO:
-        return "degraded"
-
-    return "ok"

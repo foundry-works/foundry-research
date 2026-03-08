@@ -80,6 +80,8 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
         update["pdf_file"] = result["pdf_file"]
     if result.get("pdf_downloaded") or result.get("content_file"):
         update["status"] = "downloaded"
+    if result.get("quality"):
+        update["quality"] = result["quality"]
 
     if not update:
         return
@@ -393,8 +395,32 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
 
-    # All sources exhausted
+    # All sources exhausted — try DOI landing page as abstract fallback
     if not result["pdf_downloaded"]:
+        log(f"All PDF cascade sources failed for DOI {doi}. Attempting DOI landing page fallback.", level="warn")
+        try:
+            landing_url = f"https://doi.org/{doi}"
+            resp = client.get(landing_url, timeout=(15, 30))
+            if resp.status_code == 200 and resp.text:
+                content = extract_readable_content(resp.text)
+                if content and len(content) > 100:
+                    md_path = os.path.join(sources_dir, f"{source_id}.md")
+                    Path(md_path).write_text(content, encoding="utf-8")
+                    result["content_file"] = f"sources/{source_id}.md"
+                    result["content_length"] = len(content)
+                    result["source_used"] = "doi_landing_page"
+                    result["quality"] = "abstract_only"
+                    result["quality_details"] = {
+                        "content_length": len(content),
+                        "alpha_ratio": 0.0,
+                        "sentence_count": 0,
+                        "reasons": ["fallback to DOI landing page — abstract/metadata only, not full text"],
+                    }
+                    log(f"DOI landing page fallback succeeded: {len(content)} chars extracted")
+                    return
+        except Exception as e:
+            log(f"DOI landing page fallback failed: {e}", level="warn")
+
         result["errors"].append(f"No PDF found via cascade for DOI {doi}")
 
 
@@ -491,6 +517,8 @@ def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result:
         result["content_length"] = conv["content_length"]
         result["toc_file"] = f"sources/{source_id}.toc" if conv.get("toc_file") else None
         result["quality"] = conv.get("quality", "ok")
+        if conv.get("quality_details"):
+            result["quality_details"] = conv["quality_details"]
     else:
         result["errors"].append(f"PDF conversion failed (converter: {conv['converter']})")
 
