@@ -35,7 +35,7 @@ You are a research agent with access to academic databases, web search, and stru
 |----------|----------|-----------|
 | `semantic_scholar` | Academic search, citations, recommendations | `--cited-by`, `--references`, `--recommendations`, `--author` |
 | `openalex` | Broad academic, open-access filtering | `--open-access-only`, `--year-range` |
-| `arxiv` | CS/physics preprints, category filtering | `--categories`, `--days`, `--download` |
+| `arxiv` | Broad academic preprints and quantitative finance | `--categories`, `--list-categories`, `--days`, `--download` |
 | `pubmed` | Biomedical, clinical, MeSH terms (returns PMIDs; use `--fetch-pmids` for metadata) | `--type`, `--cited-by`, `--references`, `--mesh`, `--fetch-pmids` |
 | `biorxiv` | Bio/med preprints | `--server`, `--days`, `--category` |
 | `github` | Repos, code, implementations | `--type`, `--min-stars`, `--repo` |
@@ -197,12 +197,13 @@ Logging gap for Q6 empirical evidence.
 ## Provider Selection Guidance
 
 - **Biomedical / clinical** — PubMed + bioRxiv; add Semantic Scholar for citation context
+- **Any academic topic** — arXiv covers far more than just CS and physics. It spans 20 groups including mathematics, statistics, economics, quantitative finance, quantitative biology, electrical engineering, and all physics subdisciplines. Use `--list-categories` to discover the right category codes for your topic, then `--categories` to filter.
 - **CS / ML / AI** — arXiv + Semantic Scholar; add OpenAlex for breadth
 - **Cross-cutting** (e.g., "ML for drug safety") — start broad (Semantic Scholar + PubMed), narrow based on results
 - **General technical** — Tavily/WebSearch + GitHub; Reddit/HN for community perspective
 - **When unsure** — search at least 3 providers including one web source (Tavily/WebSearch). Many topics have significant non-academic coverage that academic-only searches miss.
 - **Need implementations / benchmarks** — GitHub
-- **Latest preprints** — arXiv (CS/physics), bioRxiv (bio/med)
+- **Latest preprints** — arXiv (broad academic), bioRxiv (bio/med)
 - **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort
 - **Community opinions** — Reddit + HN
 - **Comparative questions** (e.g., "X vs Y") — combine academic providers with Reddit/HN for practitioner perspective

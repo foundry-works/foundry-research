@@ -21,10 +21,79 @@ NS = {
 
 SORT_CHOICES = ("relevance", "lastUpdatedDate", "submittedDate")
 
+OAI_PMH_URL = "https://export.arxiv.org/oai2?verb=ListSets"
+OAI_NS = {"oai": "http://www.openarchives.org/OAI/2.0/"}
+
+
+def _fetch_categories() -> list[dict]:
+    """Fetch the full arXiv category taxonomy from the OAI-PMH endpoint.
+
+    OAI-PMH setSpec uses colon-delimited hierarchy:
+      1 segment:  "cs"                   -> top-level group
+      2 segments: "cs:cs"                -> mid-level (skip, redundant)
+                  "physics:astro-ph"     -> mid-level physics subgroup -> becomes its own group
+      3 segments: "cs:cs:AI"             -> leaf, arXiv code = "cs.AI"
+                  "physics:astro-ph:CO"  -> leaf, arXiv code = "astro-ph.CO"
+                  "physics:physics:acc-ph" -> leaf, arXiv code = "physics.acc-ph"
+    """
+    import requests
+
+    resp = requests.get(OAI_PMH_URL, timeout=15)
+    resp.raise_for_status()
+    root = ET.fromstring(resp.text)
+
+    # Parse all entries into (parts, name) tuples
+    entries: list[tuple[list[str], str]] = []
+    for s in root.findall(".//oai:set", OAI_NS):
+        spec_el = s.find("oai:setSpec", OAI_NS)
+        name_el = s.find("oai:setName", OAI_NS)
+        if spec_el is None or name_el is None or spec_el.text is None or name_el.text is None:
+            continue
+        entries.append((spec_el.text.split(":"), name_el.text))
+
+    groups: dict[str, dict] = {}  # arXiv prefix -> {"name": ..., "categories": [...]}
+
+    # Pass 1: register top-level groups (1-segment entries like "cs", "math", "physics")
+    for parts, name in entries:
+        if len(parts) == 1:
+            groups[parts[0]] = {"name": name, "categories": []}
+
+    # Pass 2: identify physics mid-level subgroups that have their own subcategories
+    # e.g., "physics:astro-ph" is a group because "physics:astro-ph:CO" exists
+    three_seg_parents = {p[1] for p, _ in entries if len(p) == 3 and p[0] == "physics"}
+    for parts, name in entries:
+        if len(parts) == 2 and parts[0] == "physics" and parts[1] != "physics":
+            if parts[1] in three_seg_parents:
+                # Mid-level group like astro-ph, cond-mat — promote to own group
+                groups[parts[1]] = {"name": name, "categories": []}
+            else:
+                # Standalone physics category with no subcategories (e.g., gr-qc, quant-ph)
+                groups[parts[1]] = {"name": name, "categories": []}
+
+    # Pass 3: register leaf categories (3-segment entries)
+    for parts, name in entries:
+        if len(parts) != 3:
+            continue
+        # parts[1] is the arXiv prefix, parts[2] is the suffix
+        # "cs:cs:AI" -> prefix="cs", suffix="AI" -> code="cs.AI"
+        # "physics:astro-ph:CO" -> prefix="astro-ph", suffix="CO" -> code="astro-ph.CO"
+        prefix = parts[1]
+        suffix = parts[2]
+        cat_code = f"{prefix}.{suffix}"
+
+        if prefix in groups:
+            groups[prefix]["categories"].append({"code": cat_code, "name": name})
+
+    result = []
+    for key, info in groups.items():
+        result.append({"group": key, "name": info["name"], "categories": info["categories"]})
+    return result
+
 
 def add_arguments(parser):
     parser.add_argument("--categories", nargs="+", default=None, help="Category filters, e.g. cs.AI cs.LG cs.CL")
     parser.add_argument("--category-expr", default=None, help='Category expression, e.g. "(cs.AI AND cs.RO) OR cs.LG"')
+    parser.add_argument("--list-categories", action="store_true", default=False, help="List all arXiv categories and exit")
     parser.add_argument("--sort", default="relevance", choices=SORT_CHOICES, help="Sort order (default: relevance)")
     parser.add_argument("--days", type=int, default=None, help="Filter to last N days (client-side)")
     parser.add_argument("--download", default=None, help='Download PDFs for result indices, e.g. "1,3-5"')
@@ -32,6 +101,13 @@ def add_arguments(parser):
 
 
 def search(args) -> dict:
+    if args.list_categories:
+        try:
+            taxonomy = _fetch_categories()
+            return success_response(taxonomy)
+        except Exception as e:
+            return error_response([f"Failed to fetch arXiv taxonomy: {e}"], error_code="api_error")
+
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="arxiv_")
     client = create_session(session_dir, rate_limits={"export.arxiv.org": 1.0})
 

@@ -23,6 +23,7 @@ _IDENTIFIER_FLAGS = {
     "pubmed": {"fetch_pmids"},
     "edgar": {"ticker", "accession"},
     "yfinance": {"ticker"},
+    "arxiv": {"list_categories"},
 }
 
 
