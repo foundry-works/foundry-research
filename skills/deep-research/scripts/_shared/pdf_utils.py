@@ -18,6 +18,31 @@ _NORMAL_PUNCT = set(" \t\n\r.,;:!?'\"-()[]{}/#@&*+=<>|~`^%$_\\")
 # Heading pattern for TOC extraction
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
+# Heuristic patterns for academic section headings in plain-text PDFs
+# Matches "1. Introduction", "2.1. Design", "1.3.2. Differences from..."
+_NUMBERED_SECTION_RE = re.compile(
+    r"^(\d+(?:\.\d+)*)\.?\s+([A-Z][A-Za-z\s,:\-–—]{2,80})$"
+)
+_ALLCAPS_SECTION_RE = re.compile(
+    r"^([A-Z]{3,}(?:\s+[A-Z&]{2,}){0,5})$"
+)
+_ACADEMIC_SECTIONS = {
+    "abstract", "introduction", "background", "related work",
+    "methods", "method", "methodology", "materials and methods",
+    "experimental setup", "experimental design",
+    "results", "findings", "analysis",
+    "discussion", "general discussion", "limitations",
+    "conclusion", "conclusions", "concluding remarks", "summary",
+    "references", "bibliography",
+    "acknowledgements", "acknowledgments",
+    "appendix", "appendices",
+    "supplementary material", "supplementary materials",
+    "data availability", "competing interests", "author contributions",
+    "participants", "stimuli", "procedure", "design",
+    "measures", "dependent variables", "independent variables",
+    "statistical analysis", "data analysis",
+}
+
 # pymupdf4llm subprocess timeout (seconds)
 _PYMUPDF_TIMEOUT = 60
 
@@ -192,6 +217,10 @@ def pdf_to_markdown(
 def generate_toc(md_path: str, toc_path: str) -> dict:
     """Extract headings from Markdown and write a TOC file.
 
+    Uses markdown heading syntax first, then falls back to heuristic
+    detection of academic section headings (ALL-CAPS lines, numbered
+    sections, known section names) when markdown headings are sparse.
+
     Output format: LINE_NUMBER<tab>HEADING_LEVEL<tab>HEADING_TEXT
 
     Returns:
@@ -205,12 +234,47 @@ def generate_toc(md_path: str, toc_path: str) -> dict:
     lines = text.splitlines()
     toc_entries = []
 
+    # Pass 1: explicit markdown headings
     for line_num, line in enumerate(lines, start=1):
         match = _HEADING_RE.match(line)
         if match:
             level = len(match.group(1))
             heading_text = match.group(2).strip()
             toc_entries.append(f"{line_num}\t{level}\t{heading_text}")
+
+    # Pass 2: heuristic detection if markdown headings are sparse (<=3)
+    if len(toc_entries) <= 3:
+        heading_lines = {int(e.split("\t")[0]) for e in toc_entries}
+        for line_num, line in enumerate(lines, start=1):
+            if line_num in heading_lines:
+                continue
+            stripped = line.strip()
+            if not stripped or len(stripped) > 120:
+                continue
+
+            # Numbered sections: "1. Introduction", "2.1. Participants", "1.3.2. Differences"
+            m = _NUMBERED_SECTION_RE.match(stripped)
+            if m:
+                num_part = m.group(1)
+                depth = num_part.count(".") + 2  # "1" -> level 2, "1.1" -> level 3
+                toc_entries.append(f"{line_num}\t{depth}\t{stripped}")
+                heading_lines.add(line_num)
+                continue
+
+            # ALL-CAPS lines (<=6 words, letters and spaces only)
+            m = _ALLCAPS_SECTION_RE.match(stripped)
+            if m and len(stripped.split()) <= 6:
+                toc_entries.append(f"{line_num}\t2\t{stripped.title()}")
+                heading_lines.add(line_num)
+                continue
+
+            # Known academic section names (case-insensitive, standalone short lines)
+            if stripped.lower() in _ACADEMIC_SECTIONS and len(stripped) < 50:
+                toc_entries.append(f"{line_num}\t2\t{stripped.title()}")
+                heading_lines.add(line_num)
+
+        # Re-sort by line number after heuristic additions
+        toc_entries.sort(key=lambda e: int(e.split("\t")[0]))
 
     if not toc_entries:
         return {"headings": 0, "toc_file": None}

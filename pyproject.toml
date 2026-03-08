@@ -15,5 +15,5 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["scripts"]
+where = ["skills/deep-research/scripts"]
 include = ["_shared*", "providers*"]

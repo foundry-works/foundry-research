@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 
-STATE_PY = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "state.py")
+STATE_PY = os.path.join(os.path.dirname(__file__), os.pardir, "skills", "deep-research", "scripts", "state.py")
 
 
 def run_state(*cli_args):

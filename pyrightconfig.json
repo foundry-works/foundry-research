@@ -1,6 +1,6 @@
 {
-    "include": ["scripts"],
-    "extraPaths": ["scripts"],
+    "include": ["skills/deep-research/scripts"],
+    "extraPaths": ["skills/deep-research/scripts"],
     "pythonVersion": "3.10",
     "typeCheckingMode": "basic",
     "reportMissingImports": "warning",

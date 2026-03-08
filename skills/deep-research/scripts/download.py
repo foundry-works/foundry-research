@@ -158,7 +158,12 @@ def main() -> None:
 def _handle_single(args, client, _session_dir: str, sources_dir: str,
                    metadata_dir: str, config: dict) -> dict:
     """Handle a single download (URL, PDF URL, DOI, or arXiv)."""
-    source_id = args.source_id or _generate_source_id(sources_dir)
+    source_id = args.source_id
+    if not source_id:
+        doi = normalize_doi(args.doi) if args.doi else None
+        source_id = _lookup_source_id_from_state(_session_dir, doi)
+    if not source_id:
+        source_id = _generate_source_id(sources_dir)
     result: dict = {
         "source_id": source_id,
         "doi": None,
@@ -518,6 +523,27 @@ def _build_metadata(args, source_id: str) -> dict:
         meta["provider"] = "arxiv"
 
     return meta
+
+
+def _lookup_source_id_from_state(session_dir: str, doi: str | None) -> str | None:
+    """Look up existing source ID in state.db by DOI."""
+    if not doi:
+        return None
+    db_path = os.path.join(session_dir, "state.db")
+    if not os.path.exists(db_path):
+        return None
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id FROM sources WHERE doi = ?",
+            (normalize_doi(doi),)
+        ).fetchone()
+        conn.close()
+        return row["id"] if row else None
+    except Exception:
+        return None
 
 
 def _generate_source_id(sources_dir: str) -> str:

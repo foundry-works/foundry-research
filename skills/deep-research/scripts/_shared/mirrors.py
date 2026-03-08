@@ -3,8 +3,10 @@
 All HTTP requests go through the shared HttpClient for consistent rate limiting.
 """
 
+import json
 import os
 import re
+import tempfile
 import time
 
 from _shared.output import log
@@ -43,6 +45,29 @@ _MIRROR_PATTERNS = {
 _mirror_cache: dict[str, tuple[str | None, float]] = {}
 _MIRROR_CACHE_TTL = 3600  # 1 hour
 
+# Disk-backed cache for cross-process persistence
+_MIRROR_CACHE_FILE = os.path.join(tempfile.gettempdir(), "deep-research-mirror-cache.json")
+
+
+def _load_disk_cache() -> dict:
+    """Read mirror cache from disk. Return {} on any error."""
+    try:
+        with open(_MIRROR_CACHE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_disk_cache(cache: dict) -> None:
+    """Atomic write mirror cache to disk."""
+    try:
+        tmp_path = _MIRROR_CACHE_FILE + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        os.replace(tmp_path, _MIRROR_CACHE_FILE)
+    except Exception:
+        pass
+
 
 def _discover_mirrors(service: str, client) -> list[str]:
     """Fetch Wikipedia article and extract mirror domains."""
@@ -66,25 +91,43 @@ def _discover_mirrors(service: str, client) -> list[str]:
 
 
 def _find_working_mirror(service: str, client) -> str | None:
-    """Find a working mirror, using cache when available."""
+    """Find a working mirror, using in-memory then disk cache before discovery."""
+    now = time.time()
+
+    # 1. Check in-memory cache
     if service in _mirror_cache:
         cached_mirror, cached_at = _mirror_cache[service]
-        if time.time() - cached_at < _MIRROR_CACHE_TTL:
+        if now - cached_at < _MIRROR_CACHE_TTL:
             return cached_mirror
 
+    # 2. Check disk cache
+    disk_cache = _load_disk_cache()
+    if service in disk_cache:
+        entry = disk_cache[service]
+        cached_at = entry.get("cached_at", 0)
+        if now - cached_at < _MIRROR_CACHE_TTL:
+            mirror = entry.get("mirror")
+            _mirror_cache[service] = (mirror, cached_at)
+            return mirror
+
+    # 3. Discover and probe
     mirrors = _discover_mirrors(service, client)
     for mirror in mirrors:
         try:
             resp = client.get(f"https://{mirror}", timeout=(10, 10), allow_redirects=True)
             if resp.status_code < 500:
                 log(f"Found working {service} mirror: {mirror}")
-                _mirror_cache[service] = (mirror, time.time())
+                _mirror_cache[service] = (mirror, now)
+                disk_cache[service] = {"mirror": mirror, "cached_at": now}
+                _save_disk_cache(disk_cache)
                 return mirror
         except Exception:
             continue
 
     log(f"No working {service} mirror found", level="warn")
-    _mirror_cache[service] = (None, time.time())
+    _mirror_cache[service] = (None, now)
+    disk_cache[service] = {"mirror": None, "cached_at": now}
+    _save_disk_cache(disk_cache)
     return None
 
 

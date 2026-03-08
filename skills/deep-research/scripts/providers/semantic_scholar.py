@@ -75,6 +75,8 @@ def _keyword_search(client, args) -> dict:
         return error_response([f"API returned {resp.status_code}: {resp.text[:500]}"], error_code="api_error")
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected API response type: {type(data).__name__}")
     raw_papers = data.get("data") or []
     total = data.get("total", len(raw_papers))
 
@@ -99,6 +101,8 @@ def _forward_citations(client, args) -> dict:
         return error_response([f"API returned {resp.status_code}: {resp.text[:500]}"], error_code="api_error")
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected API response type: {type(data).__name__}")
     raw_items = data.get("data") or []
     total = data.get("total", len(raw_items))
 
@@ -126,6 +130,8 @@ def _backward_references(client, args) -> dict:
         return error_response([f"API returned {resp.status_code}: {resp.text[:500]}"], error_code="api_error")
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected API response type: {type(data).__name__}")
     raw_items = data.get("data") or []
     total = data.get("total", len(raw_items))
 
@@ -153,6 +159,8 @@ def _get_recommendations(client, args) -> dict:
         return error_response([f"API returned {resp.status_code}: {resp.text[:500]}"], error_code="api_error")
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected API response type: {type(data).__name__}")
     raw_papers = data.get("recommendedPapers") or []
 
     papers = _normalize_papers(raw_papers, args.min_citations)
@@ -177,6 +185,8 @@ def _author_search(client, args) -> dict:
         return error_response([f"API returned {resp.status_code}: {resp.text[:500]}"], error_code="api_error")
 
     data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Unexpected API response type: {type(data).__name__}")
     authors = data.get("data") or []
     total = data.get("total", len(authors))
 
