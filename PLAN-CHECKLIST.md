@@ -69,38 +69,38 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
 ## Phase 3: Citation Integrity
 
 ### #11 — Download-First Citation Policy
-- [ ] Add `./download --batch --from-json FILE` mode:
-  - [ ] Accept JSON array of `{"doi": "...", "url": "..."}` objects
-  - [ ] Download in parallel with rate limiting (max 3 concurrent)
-  - [ ] Return per-item results (success/fail/degraded)
-- [ ] Add `./state download-pending` convenience command:
-  - [ ] Query state.db for all sources without on-disk content files
-  - [ ] Output DOI/URL list in batch-download format
-  - [ ] Option: `--auto-download` to immediately download all pending
-- [ ] Update SKILL.md citation policy:
-  - [ ] Only sources with on-disk `.md` content (quality != degraded) may appear in main References
-  - [ ] Abstract-only sources go in "Further Reading" section
-  - [ ] Report methodology must distinguish deep reads vs. abstract-only
-- [ ] Update report template in SKILL.md:
-  - [ ] Split references: `## References (Sources Read)` and `## Further Reading`
-- [ ] Update SKILL.md workflow:
-  - [ ] After search rounds, download ALL relevant sources (not just top 5-8)
-  - [ ] Triage downloaded sources by quality
-  - [ ] Spawn reader subagents for all good-quality sources
-  - [ ] Only cite sources with notes in `notes/`
+- [x] Add `./download --batch --from-json FILE` mode:
+  - [x] Accept JSON array of `{"doi": "...", "url": "..."}` objects
+  - [x] Download in parallel with rate limiting (max 3 concurrent)
+  - [x] Return per-item results (success/fail/degraded)
+- [x] Add `./state download-pending` convenience command:
+  - [x] Query state.db for all sources without on-disk content files
+  - [x] Output DOI/URL list in batch-download format
+  - [x] Option: `--auto-download` to immediately download all pending
+- [x] Update SKILL.md citation policy:
+  - [x] Only sources with on-disk `.md` content (quality != degraded) may appear in main References
+  - [x] Abstract-only sources go in "Further Reading" section
+  - [x] Report methodology must distinguish deep reads vs. abstract-only
+- [x] Update report template in SKILL.md:
+  - [x] Split references: `## References (Sources Read)` and `## Further Reading`
+- [x] Update SKILL.md workflow:
+  - [x] After search rounds, download ALL relevant sources (not just top 5-8)
+  - [x] Triage downloaded sources by quality
+  - [x] Spawn reader subagents for all good-quality sources
+  - [x] Only cite sources with notes in `notes/`
 
 ### #8 — Pre-Report Audit Command
-- [ ] Add `audit` subcommand to `scripts/state.py`:
-  - [ ] Count sources tracked vs. downloaded vs. with notes
-  - [ ] List sources with degraded quality
-  - [ ] Count findings per research question
-  - [ ] Flag questions with <2 findings
-  - [ ] Count sources with no on-disk content
-  - [ ] Compute methodology stats: deep reads, abstract-only, web sources
-  - [ ] Print structured summary to stdout (JSON) and human-readable to stderr
-- [ ] Add `--strict` flag: exit with non-zero if any source is cited without on-disk content
-- [ ] Update SKILL.md: replace manual pre-report audit checklist with `./state audit` command
-- [ ] Test: run `./state audit` against the uncanny valley session → should flag 16 sources without on-disk content
+- [x] Add `audit` subcommand to `scripts/state.py`:
+  - [x] Count sources tracked vs. downloaded vs. with notes
+  - [x] List sources with degraded quality
+  - [x] Count findings per research question
+  - [x] Flag questions with <2 findings
+  - [x] Count sources with no on-disk content
+  - [x] Compute methodology stats: deep reads, abstract-only, web sources
+  - [x] Print structured summary to stdout (JSON) and human-readable to stderr
+- [x] Add `--strict` flag: exit with non-zero if any source is cited without on-disk content
+- [x] Update SKILL.md: replace manual pre-report audit checklist with `./state audit` command
+- [x] Test: run `./state audit` against the uncanny valley session → flags 14 sources without on-disk content
 
 ---
 

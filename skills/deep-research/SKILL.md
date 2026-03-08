@@ -66,7 +66,12 @@ Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-ful
 --arxiv ID --to-md                # arXiv PDF
 --pdf-url URL --to-md             # direct PDF URL
 --local-dir DIR --to-md           # ingest existing PDFs from a local folder
+--from-json FILE --to-md          # batch download from JSON array
+--from-json FILE --to-md --parallel 3  # parallel batch download
 ```
+
+Batch JSON format: `[{"doi": "10.1234/..."}, {"url": "https://...", "type": "web"}, ...]`
+Each item can include: `doi`, `url`, `pdf_url`, `arxiv`, `source_id`, `title`, `authors`, `year`, `venue`, `type`.
 
 ### Enrich (`./enrich`)
 
@@ -92,6 +97,10 @@ update-source --id src-003 --from-json FILE
 searches                          # list all searches
 sources                           # list all sources
 summary                           # brief + sources + findings + gaps
+download-pending                  # list sources without on-disk content
+download-pending --auto-download  # download all pending (--parallel N, default 3)
+audit                             # pre-report coverage & quality check
+audit --strict                    # exit non-zero if warnings found
 ```
 
 **IMPORTANT:** All JSON payloads must be passed via `--from-json FILE`. Write JSON to a temp file first, then pass the path. There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts.
@@ -118,9 +127,13 @@ summary                           # brief + sources + findings + gaps
 
 **Paywalled papers.** The PDF cascade (`./download --doi`) tries 6 sources (OpenAlex → Unpaywall → arXiv → PMC → Anna's Archive → Sci-Hub). If all fail, the paper is paywalled. Use `./download --url` to grab the abstract page instead, or rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
 
-**Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the 5-10 most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding of the rest.
+**Download aggressively, cite only what you've read.** After search rounds, use `./state download-pending --auto-download` to download ALL relevant sources — not just the top 5-8. Triage by quality: which have good content? which degraded? which paywalled? Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read. Use `./download --from-json FILE --to-md --parallel 3` for batch downloads.
+
+**Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
 
 **journal.md captures reasoning.** Intermediate thoughts, emerging patterns, contradictions, and strategy decisions belong in `journal.md`. This prevents reasoning loss on context compression and makes thinking auditable.
+
+**Pre-report audit.** Before writing `report.md`, run `./state audit` to check source coverage. The audit reports: sources tracked vs. downloaded vs. with notes, degraded quality sources, findings per research question, and methodology stats (deep reads vs. abstract-only). Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
 **Theme-based synthesis with verified citations.** Findings group by research question, not by source — "Three studies converge on X [1][3][7]" rather than source-by-source summaries. Every factual claim must be verified against the corresponding on-disk `.md` file before inclusion. Claims that cannot be verified against a source get dropped. Contradictions between sources are flagged explicitly with context (methodology differences, recency, evidence quality). Every claim carries an inline citation [1], [2].
 
@@ -223,16 +236,26 @@ Don't over-research simple questions. Don't under-research complex ones.
 ...
 
 ## Methodology
-- Sources examined: N
+- Sources deeply read: N (with notes in notes/)
+- Abstract-only sources: M
+- Web sources: K
 - Providers used: [list]
 - Session directory: [path]
 
-## References
+## References (Sources Read)
 [1] Author, "Title," Venue, Year. [URL/DOI] [academic]
 [2] Author, "Title," Venue, Year. [URL/DOI] [preprint]
 ...
+
+## Further Reading
+- Author, "Title," Venue, Year. [URL/DOI] — cited for abstract/metadata only
+- ...
 ```
 
 Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`, `[reddit]`, `[hn]`.
 
-Every cited source must have a corresponding `.md` file in the session's `sources/` directory.
+**Citation rules:**
+- Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
+- Sources known only from abstracts or search metadata go in **Further Reading**
+- The Methodology section must honestly report deep reads vs. abstract-only counts (use `./state audit` output)
+- Never claim to have "deeply read" a source that only has degraded or abstract-only content

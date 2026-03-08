@@ -830,6 +830,273 @@ def cmd_get_metric(args):
 
 
 # ---------------------------------------------------------------------------
+# download-pending
+# ---------------------------------------------------------------------------
+
+def cmd_download_pending(args):
+    """List or download sources that have no on-disk content."""
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    rows = conn.execute(
+        """SELECT id, title, doi, url, pdf_url, type, status
+           FROM sources WHERE session_id = ?
+           AND content_file IS NULL AND pdf_file IS NULL
+           ORDER BY id""",
+        (sid,)
+    ).fetchall()
+    conn.close()
+
+    pending = []
+    for r in rows:
+        item = {"source_id": r["id"], "title": r["title"], "type": r["type"] or "academic"}
+        if r["doi"]:
+            item["doi"] = r["doi"]
+        if r["url"]:
+            item["url"] = r["url"]
+        if r["pdf_url"]:
+            item["pdf_url"] = r["pdf_url"]
+        pending.append(item)
+
+    log(f"Found {len(pending)} sources without on-disk content")
+
+    if args.auto_download and pending:
+        _auto_download_pending(args.session_dir, pending, args.parallel)
+        return
+
+    success_response(pending, total_results=len(pending))
+
+
+def _auto_download_pending(session_dir: str, pending: list, parallel: int) -> None:
+    """Auto-download all pending sources by calling download.py --from-json."""
+    import subprocess
+    import tempfile
+
+    # Build batch list — prefer DOI, then pdf_url, then url
+    batch = []
+    for item in pending:
+        entry = {"source_id": item["source_id"]}
+        if item.get("doi"):
+            entry["doi"] = item["doi"]
+        elif item.get("pdf_url"):
+            entry["pdf_url"] = item["pdf_url"]
+        elif item.get("url"):
+            entry["url"] = item["url"]
+            entry["type"] = "web"
+        else:
+            log(f"Skipping {item['source_id']} — no DOI, URL, or PDF URL", level="warn")
+            continue
+        batch.append(entry)
+
+    if not batch:
+        success_response({"downloaded": 0, "message": "No downloadable sources found"})
+        return
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
+        json.dump(batch, tf)
+        tmp_path = tf.name
+
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    download_script = os.path.join(scripts_dir, "download.py")
+    cmd = [
+        sys.executable, download_script,
+        "--from-json", tmp_path,
+        "--to-md",
+        "--session-dir", session_dir,
+        "--parallel", str(parallel),
+    ]
+
+    log(f"Downloading {len(batch)} sources (parallel={parallel})...")
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=600)
+        os.unlink(tmp_path)
+
+        if result.returncode == 0:
+            try:
+                output = json.loads(result.stdout.decode())
+                success_response(output)
+                return
+            except json.JSONDecodeError:
+                pass
+        stderr_text = result.stderr.decode()[-500:] if result.stderr else ""
+        error_response([f"Download subprocess failed (exit {result.returncode}): {stderr_text}"])
+    except subprocess.TimeoutExpired:
+        os.unlink(tmp_path)
+        error_response(["Download timed out after 600 seconds"])
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        error_response([f"Download failed: {e}"])
+
+
+# ---------------------------------------------------------------------------
+# audit
+# ---------------------------------------------------------------------------
+
+def cmd_audit(args):
+    """Pre-report audit: check source coverage, quality, and readiness."""
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    # Load all sources
+    sources = [dict(r) for r in conn.execute(
+        "SELECT * FROM sources WHERE session_id = ? ORDER BY id", (sid,)
+    ).fetchall()]
+
+    # Load brief for research questions
+    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
+    questions = []
+    if brief_row:
+        questions = json.loads(brief_row["questions"])
+
+    # Load findings
+    findings = [dict(r) for r in conn.execute(
+        "SELECT * FROM findings WHERE session_id = ? ORDER BY id", (sid,)
+    ).fetchall()]
+    for f in findings:
+        f["sources"] = json.loads(f["sources"]) if f.get("sources") else []
+
+    # Load gaps
+    gaps = [dict(r) for r in conn.execute(
+        "SELECT * FROM gaps WHERE session_id = ? AND status = 'open' ORDER BY id", (sid,)
+    ).fetchall()]
+
+    conn.close()
+
+    # Check on-disk files
+    notes_dir = os.path.join(args.session_dir, "notes")
+    sources_dir = os.path.join(args.session_dir, "sources")
+
+    downloaded = []
+    with_notes = []
+    degraded = []
+    no_content = []
+    abstract_only = []
+
+    for s in sources:
+        sid_val = s["id"]
+        has_content = False
+
+        # Check content file
+        if s.get("content_file"):
+            content_path = os.path.join(args.session_dir, s["content_file"])
+            if os.path.exists(content_path):
+                has_content = True
+        # Also check if file exists even without content_file in DB
+        if not has_content:
+            for ext in (".md", ".pdf"):
+                if os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")):
+                    has_content = True
+                    break
+
+        if has_content:
+            downloaded.append(sid_val)
+        else:
+            no_content.append(sid_val)
+
+        # Check notes
+        note_path = os.path.join(notes_dir, f"{sid_val}.md")
+        if os.path.exists(note_path):
+            with_notes.append(sid_val)
+
+        # Check quality
+        quality = s.get("quality")
+        if isinstance(quality, str):
+            if quality == "degraded":
+                degraded.append(sid_val)
+            elif quality == "abstract_only":
+                abstract_only.append(sid_val)
+        elif isinstance(quality, (int, float)) and quality < 0.5:
+            degraded.append(sid_val)
+
+    # Count findings per question
+    findings_by_question: dict[str, list[str]] = {}
+    for f in findings:
+        q = f.get("question") or "unassigned"
+        findings_by_question.setdefault(q, []).append(f["id"])
+
+    # Identify questions with insufficient coverage
+    sparse_questions = []
+    for q in questions:
+        q_text = q if isinstance(q, str) else q.get("text", str(q))
+        count = len(findings_by_question.get(q_text, []))
+        if count < 2:
+            sparse_questions.append({"question": q_text, "finding_count": count})
+
+    # Methodology stats
+    deep_reads = len(with_notes)
+    total_downloaded = len(downloaded)
+    total_abstract_only = len(no_content) + len(abstract_only)
+    web_sources = sum(1 for s in sources if (s.get("type") or "").lower() == "web")
+
+    # Build warnings
+    warnings = []
+    for sid_val in degraded:
+        warnings.append(f"{sid_val} has degraded PDF quality — do not claim deep reading")
+    for sq in sparse_questions:
+        warnings.append(f'"{sq["question"]}" has insufficient coverage ({sq["finding_count"]} findings)')
+    if no_content:
+        warnings.append(f"{len(no_content)} sources have no on-disk content (abstract-only)")
+    if len(gaps) > 0:
+        warnings.append(f"{len(gaps)} open research gaps remain")
+
+    # Human-readable summary to stderr
+    log("=== Pre-Report Audit ===")
+    log(f"Sources tracked:     {len(sources)}")
+    log(f"Sources downloaded:  {total_downloaded}  ({', '.join(downloaded[:10])}{'...' if len(downloaded) > 10 else ''})")
+    log(f"Sources with notes:  {deep_reads}  ({', '.join(with_notes[:10])}{'...' if len(with_notes) > 10 else ''})")
+    log(f"Degraded quality:    {len(degraded)}  ({', '.join(degraded)})" if degraded else "Degraded quality:    0")
+    log(f"Abstract only:       {len(abstract_only)}  ({', '.join(abstract_only)})" if abstract_only else "Abstract only:       0")
+    log(f"Findings logged:     {len(findings)}")
+    log(f"Open gaps:           {len(gaps)}")
+    if sparse_questions:
+        qs = ", ".join(sq["question"][:40] for sq in sparse_questions)
+        log(f"Sparse coverage:     {qs}")
+    log("")
+    if warnings:
+        log("WARNINGS:")
+        for w in warnings:
+            log(f"  - {w}", level="warn")
+    log("")
+    log("Methodology stats (use these in report):")
+    log(f"  Deep reads: {deep_reads}")
+    log(f"  Abstract-only: {total_abstract_only}")
+    log(f"  Web sources: {web_sources}")
+
+    # JSON result
+    audit_result = {
+        "sources_tracked": len(sources),
+        "sources_downloaded": total_downloaded,
+        "downloaded_ids": downloaded,
+        "sources_with_notes": deep_reads,
+        "notes_ids": with_notes,
+        "degraded_quality": degraded,
+        "abstract_only": abstract_only,
+        "no_content": no_content,
+        "findings_count": len(findings),
+        "findings_by_question": {k: len(v) for k, v in findings_by_question.items()},
+        "open_gaps": len(gaps),
+        "sparse_questions": sparse_questions,
+        "methodology": {
+            "deep_reads": deep_reads,
+            "abstract_only": total_abstract_only,
+            "web_sources": web_sources,
+        },
+        "warnings": warnings,
+    }
+
+    # --strict: exit non-zero if warnings exist
+    if getattr(args, "strict", False) and warnings:
+        error_response(
+            [f"Audit found {len(warnings)} warning(s)"],
+            partial_results=audit_result,
+            error_code="audit_warnings",
+        )
+    else:
+        success_response(audit_result)
+
+
+# ---------------------------------------------------------------------------
 # JSON loading helper
 # ---------------------------------------------------------------------------
 
@@ -1017,6 +1284,17 @@ def main():
     p.add_argument("--metric", required=True)
     p.add_argument("--session-dir", **_sd)
 
+    # download-pending
+    p = sub.add_parser("download-pending")
+    p.add_argument("--auto-download", action="store_true", help="Immediately download all pending sources")
+    p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
+    p.add_argument("--session-dir", **_sd)
+
+    # audit
+    p = sub.add_parser("audit")
+    p.add_argument("--strict", action="store_true", help="Exit non-zero if audit finds warnings")
+    p.add_argument("--session-dir", **_sd)
+
     args = parser.parse_args()
 
     if args.quiet:
@@ -1053,6 +1331,8 @@ def main():
         "log-metrics": cmd_log_metrics,
         "get-metrics": cmd_get_metrics,
         "get-metric": cmd_get_metric,
+        "download-pending": cmd_download_pending,
+        "audit": cmd_audit,
     }
 
     commands[args.command](args)

@@ -700,9 +700,32 @@ def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: s
     return results
 
 
+def _make_batch_args(item: dict, to_md: bool) -> argparse.Namespace:
+    """Build an args-like namespace from a batch JSON item."""
+    return argparse.Namespace(
+        url=item.get("url"),
+        pdf_url=item.get("pdf_url"),
+        doi=item.get("doi"),
+        arxiv=item.get("arxiv"),
+        source_id=item.get("source_id"),
+        to_md=to_md,
+        type=item.get("type", "academic"),
+        title=item.get("title"),
+        authors=item.get("authors"),
+        year=item.get("year"),
+        venue=item.get("venue"),
+        citation_count=item.get("citation_count"),
+        local_dir=None,
+        from_json=None,
+    )
+
+
 def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
                   config: dict) -> list:
-    """Handle batch downloads from a JSON file."""
+    """Handle batch downloads from a JSON file.
+
+    Supports --parallel N for concurrent downloads (default 1 = serial).
+    """
     json_path = args.from_json
     try:
         with open(json_path, encoding="utf-8") as f:
@@ -715,34 +738,59 @@ def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
         error_response(["JSON file must contain an array of download items"], error_code="invalid_json")
         return []
 
+    parallel = getattr(args, "parallel", 1) or 1
+
+    if parallel > 1 and len(items) > 1:
+        return _handle_batch_parallel(items, args, session_dir, sources_dir, metadata_dir, config, parallel)
+
+    # Serial path
     results = []
     client = create_session(session_dir)
-
     try:
-        for item in items:
-            # Build args-like namespace from JSON item
-            batch_args = argparse.Namespace(
-                url=item.get("url"),
-                pdf_url=item.get("pdf_url"),
-                doi=item.get("doi"),
-                arxiv=item.get("arxiv"),
-                source_id=item.get("source_id"),
-                to_md=args.to_md,
-                type=item.get("type", "academic"),
-                title=item.get("title"),
-                authors=item.get("authors"),
-                year=item.get("year"),
-                venue=item.get("venue"),
-                citation_count=item.get("citation_count"),
-                local_dir=None,
-                from_json=None,
-            )
+        for i, item in enumerate(items):
+            log(f"Batch download {i + 1}/{len(items)}")
+            batch_args = _make_batch_args(item, args.to_md)
             result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config)
             results.append(result)
     finally:
         client.close()
 
     return results
+
+
+def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str,
+                           metadata_dir: str, config: dict, max_workers: int) -> list:
+    """Download batch items in parallel using ThreadPoolExecutor."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results: list[dict | None] = [None] * len(items)
+
+    def _download_one(index: int, item: dict) -> tuple[int, dict]:
+        client = create_session(session_dir)
+        try:
+            log(f"Batch download {index + 1}/{len(items)} (parallel)")
+            batch_args = _make_batch_args(item, args.to_md)
+            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config)
+            return index, result
+        except Exception as e:
+            return index, {
+                "source_id": item.get("source_id"),
+                "doi": item.get("doi"),
+                "errors": [f"Parallel download failed: {e}"],
+                "pdf_downloaded": False,
+                "content_file": None,
+                "pdf_file": None,
+            }
+        finally:
+            client.close()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_download_one, i, item): i for i, item in enumerate(items)}
+        for future in as_completed(futures):
+            idx, result = future.result()
+            results[idx] = result
+
+    return [r for r in results if r is not None]
 
 
 if __name__ == "__main__":
