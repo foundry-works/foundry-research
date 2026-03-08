@@ -1,12 +1,8 @@
 """Tests for consistent JSON envelope structure across provider output."""
 
 import json
-import os
-import sys
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
 
 from _shared.output import error_response, success_response
 

@@ -2,10 +2,7 @@
 
 import base64
 import os
-import sys
 import tempfile
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.config import get_config
 from _shared.http_client import create_session

@@ -1,10 +1,6 @@
 """Tests for HTTP client retry logic, error handling, timeout, and User-Agent."""
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
 
 import requests
 

@@ -2,20 +2,30 @@
 
 import json
 import os
-import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from _shared.http_client import create_session  # noqa: E402
-from _shared.output import error_response, log, success_response  # noqa: E402
+from _shared.config import get_config
+from _shared.http_client import create_session
+from _shared.output import error_response, log, success_response
 
 EFTS_BASE = "https://efts.sec.gov/LATEST/search-index"
 DATA_BASE = "https://data.sec.gov"
 SEC_BASE = "https://www.sec.gov"
 TICKERS_URL = f"{SEC_BASE}/files/company_tickers.json"
 
-USER_AGENT = "deep-research-skill admin@example.com"
+_DEFAULT_USER_AGENT = "deep-research-skill research@example.com"
+
+
+def _get_user_agent(session_dir: str | None = None) -> str:
+    """Build SEC User-Agent from config or env var SEC_EDGAR_EMAIL."""
+    email = os.environ.get("SEC_EDGAR_EMAIL")
+    if not email:
+        config = get_config(session_dir)
+        email = config.get("sec_edgar_email")
+    if email:
+        return f"deep-research-skill {email}"
+    log("No SEC_EDGAR_EMAIL configured — using default User-Agent. Set SEC_EDGAR_EMAIL for reliable access.", level="warn")
+    return _DEFAULT_USER_AGENT
 
 TYPE_CHOICES = ("filings", "facts", "concept")
 TAXONOMY_CHOICES = ("us-gaap", "ifrs-full", "dei")
@@ -39,7 +49,7 @@ def search(args) -> dict:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="edgar_")
     rate_limits = {"efts.sec.gov": 10.0, "data.sec.gov": 10.0, "www.sec.gov": 10.0}
     client = create_session(session_dir, rate_limits=rate_limits)
-    client.session.headers.update({"User-Agent": USER_AGENT})
+    client.session.headers.update({"User-Agent": _get_user_agent(session_dir)})
 
     try:
         if args.accession:

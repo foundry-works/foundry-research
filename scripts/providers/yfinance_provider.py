@@ -1,13 +1,9 @@
 """Yahoo Finance provider — company profiles, price history, financials, options, dividends, holders."""
 
 import math
-import os
-import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from _shared.output import error_response, log, success_response  # noqa: E402
+from _shared.output import error_response, log, success_response
 
 TYPE_CHOICES = ("history", "financials", "profile", "options", "dividends", "holders")
 PERIOD_CHOICES = ("1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max")

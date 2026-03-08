@@ -1,13 +1,9 @@
 """Tests for token-bucket per-domain rate limiter."""
 
-import os
-import sys
 import time
 from unittest.mock import patch
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
 
 from _shared.rate_limiter import RateLimiter
 

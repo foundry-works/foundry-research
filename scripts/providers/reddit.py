@@ -1,11 +1,7 @@
 """Reddit search provider — search posts, browse subreddits, fetch post details with comments."""
 
-import os
 import re
-import sys
 import tempfile
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.http_client import create_session
 from _shared.output import error_response, log, success_response

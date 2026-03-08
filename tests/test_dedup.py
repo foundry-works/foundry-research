@@ -1,54 +1,16 @@
 """Tests for 3-tier deduplication logic in state.py."""
 
 import json
-import os
 import sqlite3
-import sys
+
 import pytest
 
-# Make scripts importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
-
-from state import _authors_overlap, _check_duplicate, _title_similarity
+from state import _SCHEMA, _authors_overlap, _check_duplicate, _title_similarity
 from _shared.doi_utils import canonicalize_url, normalize_doi
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-_SCHEMA_EXCERPT = """
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    query TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sources (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    authors TEXT NOT NULL DEFAULT '[]',
-    year INTEGER,
-    abstract TEXT,
-    doi TEXT,
-    url TEXT,
-    pdf_url TEXT,
-    venue TEXT,
-    citation_count INTEGER,
-    type TEXT DEFAULT 'academic',
-    provider TEXT NOT NULL,
-    content_file TEXT,
-    pdf_file TEXT,
-    is_read INTEGER DEFAULT 0,
-    tags TEXT DEFAULT '[]',
-    quality REAL,
-    status TEXT DEFAULT 'pending',
-    added_at TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-CREATE INDEX IF NOT EXISTS idx_sources_doi ON sources(session_id, doi) WHERE doi IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sources_url ON sources(session_id, url) WHERE url IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sources_title ON sources(session_id, title);
-"""
 
 SID = "test-session"
 
@@ -58,7 +20,7 @@ def conn():
     """In-memory SQLite with schema + one session row."""
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
-    c.executescript(_SCHEMA_EXCERPT)
+    c.executescript(_SCHEMA)
     c.execute(
         "INSERT INTO sessions (id, query, created_at) VALUES (?, ?, ?)",
         (SID, "test query", "2026-01-01T00:00:00Z"),

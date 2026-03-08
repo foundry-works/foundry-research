@@ -12,6 +12,7 @@ _ENV_KEYS = {
     "ncbi_api_key": "NCBI_API_KEY",
     "github_token": "GITHUB_TOKEN",
     "annas_secret_key": "ANNAS_SECRET_KEY",
+    "sec_edgar_email": "SEC_EDGAR_EMAIL",
 }
 
 # All known config keys with None defaults
@@ -22,6 +23,7 @@ _DEFAULT_CONFIG: dict[str, str | None] = {
     "ncbi_api_key": None,
     "github_token": None,
     "annas_secret_key": None,
+    "sec_edgar_email": None,
 }
 
 # Global config file path

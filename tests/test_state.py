@@ -7,30 +7,8 @@ import subprocess
 import sys
 import threading
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
-
+from helpers import init_session as _init_session, write_json_file as _write_json_file, STATE_PY
 from state import _connect, _insert_source, _next_id, _now
-
-STATE_PY = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "state.py")
-
-
-def _write_json_file(tmp_path, data, name="input.json"):
-    """Write data to a JSON file and return its path."""
-    path = os.path.join(str(tmp_path), name)
-    with open(path, "w") as f:
-        json.dump(data, f)
-    return path
-
-
-def _init_session(session_dir: str, query: str = "test query") -> str:
-    """Initialize a session via CLI and return the session ID."""
-    result = subprocess.run(
-        [sys.executable, STATE_PY, "init", "--session-dir", session_dir, "--query", query],
-        capture_output=True, text=True,
-    )
-    assert result.returncode == 0, f"init failed: {result.stderr}"
-    data = json.loads(result.stdout)
-    return data["results"]["session_id"]
 
 
 # ---------------------------------------------------------------------------

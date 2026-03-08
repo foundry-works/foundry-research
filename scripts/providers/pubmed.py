@@ -1,12 +1,8 @@
 """PubMed search provider — keyword search, citations, references, related articles, MeSH lookup."""
 
-import os
 import re
-import sys
 import tempfile
 import xml.etree.ElementTree as ET
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.config import get_config
 from _shared.html_extract import strip_jats_xml

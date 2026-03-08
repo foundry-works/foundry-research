@@ -1,14 +1,10 @@
 """arXiv search provider — keyword search with category filtering and date ranges."""
 
-import os
 import re
-import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.http_client import create_session
 from _shared.metadata import normalize_paper

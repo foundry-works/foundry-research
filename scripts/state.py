@@ -848,14 +848,6 @@ def _load_json_list(path: str) -> list:
 
 
 def _load_json_raw(path: str) -> dict | list:
-    # Accept inline JSON strings (starting with { or [) in addition to file paths
-    stripped = path.strip()
-    if stripped.startswith("{") or stripped.startswith("["):
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError as e:
-            error_response([f"Invalid inline JSON: {e}"])
-            raise SystemExit(1)
     try:
         with open(path) as f:
             return json.load(f)

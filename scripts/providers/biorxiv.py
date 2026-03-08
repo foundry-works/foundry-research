@@ -1,11 +1,7 @@
 """bioRxiv / medRxiv search provider — preprint browsing, DOI lookup, and keyword search via OpenAlex."""
 
-import os
-import sys
 import tempfile
 from datetime import date, timedelta
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.config import get_config
 from _shared.http_client import create_session

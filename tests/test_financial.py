@@ -1,45 +1,19 @@
 """Tests for yfinance provider, EDGAR provider, and metrics state commands."""
 
 import json
-import os
-import subprocess
 import sys
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "scripts"))
-
+from helpers import init_session as _init_session, run_state as _run_state, write_json_file as _write_json_file
 from providers import yfinance_provider, edgar
-
-STATE_PY = os.path.join(os.path.dirname(__file__), os.pardir, "scripts", "state.py")
 
 
 def _parse_result(json_string):
     """Parse the JSON string returned by success_response."""
     return json.loads(json_string)
-
-
-def _run_state(*cli_args):
-    result = subprocess.run(
-        [sys.executable, STATE_PY, *cli_args],
-        capture_output=True, text=True,
-    )
-    return result, json.loads(result.stdout) if result.stdout.strip() else {}
-
-
-def _init_session(session_dir, query="test query"):
-    result, data = _run_state("init", "--session-dir", session_dir, "--query", query)
-    assert result.returncode == 0, f"init failed: {result.stderr}"
-    return data["results"]["session_id"]
-
-
-def _write_json_file(tmp_path, data, name="input.json"):
-    path = os.path.join(str(tmp_path), name)
-    with open(path, "w") as f:
-        json.dump(data, f)
-    return path
 
 
 # ===========================================================================
@@ -270,7 +244,9 @@ class TestEdgarArguments:
         assert "dei" in edgar.TAXONOMY_CHOICES
 
     def test_user_agent_set(self):
-        assert edgar.USER_AGENT and len(edgar.USER_AGENT) > 0
+        ua = edgar._get_user_agent()
+        assert ua and len(ua) > 0
+        assert "deep-research-skill" in ua
 
 
 class TestEdgarCIKResolution:

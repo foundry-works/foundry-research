@@ -1,12 +1,8 @@
 """Hacker News search provider — search stories/comments via Algolia API and fetch story details."""
 
-import os
 import re
-import sys
 import tempfile
 import time
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from _shared.html_extract import html_to_text
 from _shared.http_client import create_session

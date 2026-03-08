@@ -21,6 +21,7 @@ from _shared.metadata import (  # noqa: E402
     PAPER_SCHEMA,
     write_source_metadata,
 )
+from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, success_response  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown, validate_pdf  # noqa: E402
 
@@ -84,16 +85,25 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
 
     try:
         import subprocess
+        import tempfile
+
+        # Write update as a temp JSON file (state.py requires file-only --from-json)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
+            json.dump(update, tf)
+            tmp_path = tf.name
 
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         state_script = os.path.join(scripts_dir, "state.py")
         cmd = [
             sys.executable, state_script, "update-source",
             "--id", source_id,
-            "--from-json", json.dumps(update),
+            "--from-json", tmp_path,
             "--session-dir", session_dir,
         ]
-        subprocess.run(cmd, capture_output=True, timeout=5)
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=5)
+        finally:
+            os.unlink(tmp_path)
     except Exception as e:
         log(f"Failed to sync download to state: {e}", level="warn")
 
@@ -331,7 +341,7 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 pdf_url = _resolve_pmc(doi, client)
             elif source_name == "annas_archive":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
-                if _download_annas_archive(doi, pdf_path, config):
+                if download_annas_archive(doi, pdf_path, config, client):
                     result["pdf_file"] = f"sources/{source_id}.pdf"
                     result["pdf_size_bytes"] = os.path.getsize(pdf_path)
                     result["pdf_downloaded"] = True
@@ -342,7 +352,7 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 continue
             elif source_name == "scihub":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
-                if _download_scihub(doi, pdf_path):
+                if download_scihub(doi, pdf_path, client):
                     result["pdf_file"] = f"sources/{source_id}.pdf"
                     result["pdf_size_bytes"] = os.path.getsize(pdf_path)
                     result["pdf_downloaded"] = True
@@ -675,341 +685,6 @@ def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
         client.close()
 
     return results
-
-
-# ---------------------------------------------------------------------------
-# Anna's Archive integration
-# ---------------------------------------------------------------------------
-
-_BROWSER_UA = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
-_ANNAS_FALLBACK_MIRRORS = [
-    "annas-archive.li",
-    "annas-archive.gd",
-    "annas-archive.gl",
-    "annas-archive.pk",
-    "annas-archive.vg",
-]
-
-_SCIHUB_FALLBACK_MIRRORS = [
-    "sci-hub.se",
-    "sci-hub.st",
-    "sci-hub.ru",
-    "sci-hub.su",
-    "sci-hub.box",
-    "sci-hub.red",
-    "sci-hub.mksa.top",
-]
-
-# Wikipedia pages for mirror discovery
-_MIRROR_SOURCES = {
-    "annas": "https://en.wikipedia.org/wiki/Anna%27s_Archive",
-    "scihub": "https://en.wikipedia.org/wiki/Sci-Hub",
-}
-
-_MIRROR_PATTERNS = {
-    "annas": r"annas-archive\.([a-z]{2,6})",
-    "scihub": r"sci-hub\.([a-z]{2,6})",
-}
-
-# Session-level mirror cache
-_mirror_cache: dict[str, tuple[str | None, float]] = {}
-_MIRROR_CACHE_TTL = 3600  # 1 hour
-
-
-def _discover_mirrors(service: str) -> list[str]:
-    """Fetch Wikipedia article and extract mirror domains."""
-    import re as _re
-
-    url = _MIRROR_SOURCES[service]
-    pattern = _MIRROR_PATTERNS[service]
-    fallbacks = _ANNAS_FALLBACK_MIRRORS if service == "annas" else _SCIHUB_FALLBACK_MIRRORS
-
-    try:
-        import requests
-        resp = requests.get(url, headers={"User-Agent": _BROWSER_UA}, timeout=15)
-        resp.raise_for_status()
-        tlds = set(_re.findall(pattern, resp.text))
-        base = "annas-archive" if service == "annas" else "sci-hub"
-        discovered = [f"{base}.{tld}" for tld in tlds]
-        if discovered:
-            log(f"Discovered {len(discovered)} {service} mirrors from Wikipedia")
-            return discovered
-    except Exception as e:
-        log(f"Wikipedia mirror discovery failed for {service}: {e}", level="warn")
-
-    return list(fallbacks)
-
-
-def _find_working_mirror(service: str) -> str | None:
-    """Find a working mirror, using cache when available."""
-    # Check cache
-    if service in _mirror_cache:
-        cached_mirror, cached_at = _mirror_cache[service]
-        if time.time() - cached_at < _MIRROR_CACHE_TTL:
-            return cached_mirror
-
-    mirrors = _discover_mirrors(service)
-    for mirror in mirrors:
-        try:
-            import requests
-            resp = requests.head(
-                f"https://{mirror}",
-                headers={"User-Agent": _BROWSER_UA},
-                timeout=10,
-                allow_redirects=True,
-            )
-            if resp.status_code < 500:
-                log(f"Found working {service} mirror: {mirror}")
-                _mirror_cache[service] = (mirror, time.time())
-                return mirror
-        except Exception:
-            continue
-
-    log(f"No working {service} mirror found", level="warn")
-    _mirror_cache[service] = (None, time.time())
-    return None
-
-
-def _download_annas_archive(doi: str, dest_path: str, config: dict) -> bool:
-    """Try downloading a paper via Anna's Archive.
-
-    Strategy:
-    1. Look up DOI via /scidb/{doi} to get MD5 hash
-    2. If ANNAS_SECRET_KEY is set, use fast_download API
-    3. Otherwise, scrape the download page
-    """
-    mirror = _find_working_mirror("annas")
-    if not mirror:
-        return False
-
-    secret_key = config.get("annas_secret_key")
-    md5_hash = _annas_search_doi(doi, mirror)
-    if not md5_hash:
-        return False
-
-    # Try API download first if key is available
-    if secret_key:
-        if _annas_download_api(md5_hash, secret_key, mirror, dest_path):
-            return True
-        log("Anna's Archive API download failed, trying scrape fallback", level="warn")
-
-    # Scrape fallback
-    return _annas_download_scrape(md5_hash, mirror, dest_path)
-
-
-def _annas_search_doi(doi: str, mirror: str) -> str | None:
-    """Look up a DOI on Anna's Archive and extract an MD5 hash."""
-    import re as _re
-
-    url = f"https://{mirror}/scidb/{doi}"
-    try:
-        import requests
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _BROWSER_UA},
-            timeout=15,
-            allow_redirects=True,
-        )
-        if resp.status_code != 200:
-            log(f"Anna's Archive returned {resp.status_code} for DOI {doi}", level="debug")
-            return None
-
-        # Extract MD5 hashes from /md5/ links
-        md5_matches = _re.findall(r'/md5/([a-f0-9]{32})', resp.text, _re.IGNORECASE)
-        if md5_matches:
-            log(f"Anna's Archive found MD5: {md5_matches[0]} for DOI {doi}")
-            return md5_matches[0]
-
-        log(f"No MD5 hash found on Anna's Archive for DOI {doi}", level="debug")
-        return None
-    except Exception as e:
-        log(f"Anna's Archive DOI lookup failed: {e}", level="warn")
-        return None
-
-
-def _annas_download_api(md5: str, secret_key: str, mirror: str, dest: str) -> bool:
-    """Download via Anna's Archive JSON API (requires API key)."""
-    url = f"https://{mirror}/dyn/api/fast_download.json?md5={md5}&key={secret_key}"
-    try:
-        import requests
-        resp = requests.get(url, headers={"User-Agent": _BROWSER_UA}, timeout=15)
-        if resp.status_code != 200:
-            return False
-
-        data = resp.json()
-        download_url = data.get("download_url")
-        if not download_url:
-            return False
-
-        # Download the actual file
-        pdf_resp = requests.get(
-            download_url,
-            headers={"User-Agent": _BROWSER_UA},
-            timeout=60,
-            stream=True,
-        )
-        if pdf_resp.status_code != 200:
-            return False
-
-        Path(dest).parent.mkdir(parents=True, exist_ok=True)
-        with open(dest, "wb") as f:
-            for chunk in pdf_resp.iter_content(chunk_size=64 * 1024):
-                f.write(chunk)
-
-        if validate_pdf(dest):
-            log(f"Anna's Archive API download successful: {dest}")
-            return True
-
-        os.unlink(dest)
-        return False
-    except Exception as e:
-        log(f"Anna's Archive API download failed: {e}", level="warn")
-        if os.path.exists(dest):
-            os.unlink(dest)
-        return False
-
-
-def _annas_download_scrape(md5: str, mirror: str, dest: str) -> bool:
-    """Download via Anna's Archive web scraping (no auth needed)."""
-    import re as _re
-
-    url = f"https://{mirror}/md5/{md5}"
-    try:
-        import requests
-        resp = requests.get(
-            url,
-            headers={"User-Agent": _BROWSER_UA},
-            timeout=15,
-            allow_redirects=True,
-        )
-        if resp.status_code != 200:
-            return False
-
-        # Look for download links in the page
-        # Common patterns: direct download links, LibGen mirrors, etc.
-        download_urls = _re.findall(
-            r'href="(https?://[^"]+)"[^>]*>.*?(?:download|GET|PDF)',
-            resp.text, _re.IGNORECASE | _re.DOTALL,
-        )
-
-        for dl_url in download_urls[:3]:  # Try first 3 matches
-            try:
-                pdf_resp = requests.get(
-                    dl_url,
-                    headers={"User-Agent": _BROWSER_UA},
-                    timeout=60,
-                    stream=True,
-                )
-                if pdf_resp.status_code != 200:
-                    continue
-
-                Path(dest).parent.mkdir(parents=True, exist_ok=True)
-                with open(dest, "wb") as f:
-                    for chunk in pdf_resp.iter_content(chunk_size=64 * 1024):
-                        f.write(chunk)
-
-                if validate_pdf(dest):
-                    log(f"Anna's Archive scrape download successful: {dest}")
-                    return True
-                os.unlink(dest)
-            except Exception:
-                if os.path.exists(dest):
-                    os.unlink(dest)
-                continue
-
-        return False
-    except Exception as e:
-        log(f"Anna's Archive scrape failed: {e}", level="warn")
-        if os.path.exists(dest):
-            os.unlink(dest)
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Sci-Hub integration
-# ---------------------------------------------------------------------------
-
-def _download_scihub(doi: str, dest_path: str) -> bool:
-    """Try downloading a paper via Sci-Hub (pre-2021 papers only).
-
-    Uses a dedicated HttpClient with 0.2 RPS rate limit for Sci-Hub mirrors.
-    """
-    import re as _re
-
-    mirror = _find_working_mirror("scihub")
-    if not mirror:
-        return False
-
-    # Create a rate-limited client for Sci-Hub (0.2 RPS as per config)
-    import tempfile
-    tmp_dir = tempfile.mkdtemp(prefix="scihub_")
-    scihub_client = create_session(
-        tmp_dir,
-        user_agent=_BROWSER_UA,
-        rate_limits={mirror: 0.2},
-    )
-
-    url = f"https://{mirror}/{doi}"
-    try:
-        resp = scihub_client.get(url, timeout=(15, 30))
-        if resp.status_code != 200:
-            log(f"Sci-Hub returned {resp.status_code}", level="debug")
-            return False
-
-        # Extract PDF URL from iframe or embed
-        pdf_url = None
-
-        iframe_match = _re.search(
-            r'<iframe[^>]+(?:id=["\']pdf["\']|src=["\']([^"\']+\.pdf[^"\']*)["\'])[^>]*>',
-            resp.text, _re.IGNORECASE,
-        )
-        if iframe_match:
-            pdf_url = iframe_match.group(1)
-
-        if not pdf_url:
-            embed_match = _re.search(
-                r'<embed[^>]+src=["\']([^"\']+\.pdf[^"\']*)["\']',
-                resp.text, _re.IGNORECASE,
-            )
-            if embed_match:
-                pdf_url = embed_match.group(1)
-
-        if not pdf_url:
-            onclick_match = _re.search(
-                r'location\.href\s*=\s*["\']([^"\']+\.pdf[^"\']*)["\']',
-                resp.text, _re.IGNORECASE,
-            )
-            if onclick_match:
-                pdf_url = onclick_match.group(1)
-
-        if not pdf_url:
-            log("Sci-Hub: could not find PDF URL in response", level="debug")
-            return False
-
-        # Normalize the PDF URL
-        if pdf_url.startswith("//"):
-            pdf_url = "https:" + pdf_url
-        elif pdf_url.startswith("/"):
-            pdf_url = f"https://{mirror}{pdf_url}"
-
-        # Download the PDF (rate limiter enforces 0.2 RPS)
-        dl_result = download_pdf(pdf_url, dest_path, scihub_client)
-        if dl_result["success"]:
-            log(f"Sci-Hub download successful: {dest_path}")
-            return True
-        return False
-
-    except Exception as e:
-        log(f"Sci-Hub download failed: {e}", level="warn")
-        if os.path.exists(dest_path):
-            os.unlink(dest_path)
-        return False
-    finally:
-        scihub_client.close()
 
 
 if __name__ == "__main__":
