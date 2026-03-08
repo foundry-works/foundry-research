@@ -107,13 +107,13 @@ Companion to [PLAN.md](./PLAN.md). Check items off as completed.
 ## Phase 4: Correctness
 
 ### #5 — Web Source ID Mapping
-- [ ] In `scripts/download.py` web download path:
-  - [ ] Look up existing source by URL match in state.db
-  - [ ] If no match found, create a new source entry automatically
-  - [ ] If match found, verify URL matches before assigning content
-  - [ ] Print assigned source ID prominently in output
-- [ ] Test: download a web URL not in state.db → new source created with correct type "web"
-- [ ] Test: download a web URL already in state.db → maps to correct existing source
+- [x] In `scripts/download.py` web download path:
+  - [x] Look up existing source by URL match in state.db
+  - [x] If no match found, create a new source entry automatically
+  - [x] If match found, verify URL matches before assigning content
+  - [x] Print assigned source ID prominently in output
+- [x] Test: download a web URL not in state.db → new source created with correct type "web"
+- [x] Test: download a web URL already in state.db → maps to correct existing source
 
 ---
 

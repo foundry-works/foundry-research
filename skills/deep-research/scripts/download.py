@@ -111,6 +111,47 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
         log(f"Failed to sync download to state: {e}", level="warn")
 
 
+def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: dict) -> None:
+    """Auto-create a new source entry in state.db for a web download not already tracked."""
+    try:
+        import subprocess
+        import tempfile
+
+        source_data = {
+            "title": meta.get("title") or url,
+            "url": url,
+            "type": "web",
+            "provider": "web",
+        }
+        # Include optional metadata if available
+        if meta.get("authors"):
+            source_data["authors"] = meta["authors"]
+        if meta.get("year"):
+            source_data["year"] = meta["year"]
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
+            json.dump([source_data], tf)
+            tmp_path = tf.name
+
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        state_script = os.path.join(scripts_dir, "state.py")
+        cmd = [
+            sys.executable, state_script, "add-sources",
+            "--from-json", tmp_path,
+            "--session-dir", session_dir,
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if proc.returncode == 0:
+                log(f"Auto-created web source in state.db for {url} → {source_id}")
+            else:
+                log(f"Failed to auto-create web source: {proc.stderr}", level="warn")
+        finally:
+            os.unlink(tmp_path)
+    except Exception as e:
+        log(f"Failed to auto-create web source: {e}", level="warn")
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -167,9 +208,14 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     source_id = args.source_id
     if not source_id:
         doi = normalize_doi(args.doi) if args.doi else None
-        source_id = _lookup_source_id_from_state(_session_dir, doi)
+        url = args.url if hasattr(args, "url") else None
+        source_id = _lookup_source_id_from_state(_session_dir, doi, url=url)
+        if source_id:
+            log(f"Matched existing source: {source_id}")
+    is_new_source = False
     if not source_id:
         source_id = _generate_source_id(sources_dir)
+        is_new_source = True
     result: dict = {
         "source_id": source_id,
         "doi": None,
@@ -190,6 +236,9 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
 
     if args.url:
         _download_web(args.url, source_id, client, sources_dir, meta, result)
+        # Auto-create source in state.db for web downloads without an existing source
+        if is_new_source and result.get("content_file") and os.path.exists(os.path.join(_session_dir, "state.db")):
+            _auto_create_web_source(_session_dir, source_id, args.url, meta)
     elif args.pdf_url:
         _download_direct_pdf(args.pdf_url, source_id, client, sources_dir, args.to_md, result)
         result["source_used"] = "direct"
@@ -215,6 +264,9 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     if result.get("content_file"):
         meta["content_file"] = result["content_file"]
     write_source_metadata(metadata_dir, source_id, meta)
+
+    # Prominently log the assigned source ID
+    log(f">>> Assigned source ID: {source_id}")
 
     return result
 
@@ -557,23 +609,44 @@ def _build_metadata(args, source_id: str) -> dict:
     return meta
 
 
-def _lookup_source_id_from_state(session_dir: str, doi: str | None) -> str | None:
-    """Look up existing source ID in state.db by DOI."""
-    if not doi:
+def _lookup_source_id_from_state(session_dir: str, doi: str | None,
+                                  url: str | None = None) -> str | None:
+    """Look up existing source ID in state.db by DOI or URL."""
+    if not doi and not url:
         return None
     db_path = os.path.join(session_dir, "state.db")
     if not os.path.exists(db_path):
         return None
     try:
         import sqlite3
+        from _shared.doi_utils import canonicalize_url as _canon_url
+
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT id FROM sources WHERE doi = ?",
-            (normalize_doi(doi),)
-        ).fetchone()
+
+        # Tier 1: DOI match
+        if doi:
+            row = conn.execute(
+                "SELECT id FROM sources WHERE doi = ?",
+                (normalize_doi(doi),)
+            ).fetchone()
+            if row:
+                conn.close()
+                return row["id"]
+
+        # Tier 2: URL match
+        if url:
+            canon = _canon_url(url)
+            row = conn.execute(
+                "SELECT id FROM sources WHERE url = ?",
+                (canon,)
+            ).fetchone()
+            if row:
+                conn.close()
+                return row["id"]
+
         conn.close()
-        return row["id"] if row else None
+        return None
     except Exception:
         return None
 
