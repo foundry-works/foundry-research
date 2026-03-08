@@ -109,7 +109,7 @@ add-source --from-json FILE       # dedup + track single source (or --from-stdin
 add-sources --from-json FILE      # batch dedup + insert (auto-called by search tool; or --from-stdin)
 check-dup --doi/--url/--title     # check before downloading
 check-dup-batch --from-json FILE  # batch dedup check
-log-finding --text "..." --sources "src-001,src-003" --question "Q1"
+log-finding --text "..." --sources "src-001,src-003" --question "Q1: What mechanisms drive X?"
 log-gap --text "..."              # record coverage gap
 resolve-gap --gap-id "gap-1"      # mark gap resolved
 get-source --id src-003           # get source metadata
@@ -147,6 +147,8 @@ audit --strict                    # exit non-zero if warnings found
 
 **Query refinement is a feedback loop, not a one-shot.** Treating search as fire-and-forget misses the most valuable signal: the field's own terminology. Initial results reveal how researchers actually frame the topic — you may discover that "realism inconsistency" is the accepted term, not "appearance mismatch", or that a subfield uses specific methodological vocabulary you didn't anticipate. Use these discoveries to craft round 2 queries: combine broad concept terms with specific terminology from key papers found in round 1. For example, if round 1 papers consistently reference "perceptual mismatch hypothesis", use that exact phrase in a follow-up search rather than your original paraphrase. This iterative refinement — search, read titles/abstracts, extract terminology, refine query — typically yields better results in 2-3 targeted rounds than 7 parallel broad searches.
 
+**CLI output format.** All CLI commands (`state`, `search`, `download`, `enrich`) exit 0 and return a JSON envelope: `{"status": "ok", "results": {...}}` on success, `{"status": "error", "errors": [...]}` on failure. Never grep for plain-text strings like "SUCCESS" or "FAILED" — parse the JSON `"status"` field instead. When running batch loops, just call each command directly; the JSON output is self-describing and doesn't need grep-based validation.
+
 **Parallel search resilience.** **Never mix CLI searches (`${CLAUDE_SKILL_DIR}/search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** Claude Code cancels all sibling tool calls when any parallel call returns non-zero. CLI searches always exit 0 (errors are in the JSON envelope), so they are safe to parallelize with each other. But Tavily/WebSearch failures can still cancel siblings, so keep them in a separate response block.
 
 **Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `${CLAUDE_SKILL_DIR}/enrich` fills venue, authors, and retraction status for key papers.
@@ -180,7 +182,7 @@ Q6 (mitigation): 2 sources but both are design guidelines, not empirical.
 Logging gap for Q6 empirical evidence.
 ```
 
-**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The audit reports: sources tracked vs. downloaded vs. with notes, degraded quality sources, findings per research question, and methodology stats (deep reads vs. abstract-only). Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
+**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
 **Theme-based synthesis with verified citations.** Findings group by research question, not by source — "Three studies converge on X [1][3][7]" rather than source-by-source summaries. Every factual claim must be verified against the corresponding on-disk `.md` file before inclusion. Claims that cannot be verified against a source get dropped. Contradictions between sources are flagged explicitly with context (methodology differences, recency, evidence quality). Every claim carries an inline citation [1], [2].
 
@@ -188,7 +190,7 @@ Logging gap for Q6 empirical evidence.
 
 **Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `${CLAUDE_SKILL_DIR}/state log-finding` and `${CLAUDE_SKILL_DIR}/state log-gap` track coverage persistently.
 
-**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Use `${CLAUDE_SKILL_DIR}/state log-finding` after each synthesis insight. **You must call `${CLAUDE_SKILL_DIR}/state log-gap` for every research question that has fewer than 2 supporting sources** — this is not optional. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays.
+**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Use `${CLAUDE_SKILL_DIR}/state log-finding` after each synthesis insight. **You must call `${CLAUDE_SKILL_DIR}/state log-gap` for every research question that has fewer than 2 supporting sources** — this is not optional. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays. **Use the full question text from the brief in `--question`** (e.g., `--question "Q1: What mechanisms drive X?"`) — audit matches findings to brief questions, so abbreviated labels like bare "Q1" may cause false sparse-coverage warnings.
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
@@ -249,7 +251,13 @@ Use the **Agent tool** to spawn subagents only for **unstructured text comprehen
 - **Claim verification:** Subagent checks draft claims against source files, returns a verification table.
 - **Relevance assessment:** Subagent deep-reads a source and rates relevance.
 
-**After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Example: `${CLAUDE_SKILL_DIR}/state mark-read --id src-003`.
+**After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Run them in a single bash loop — no grep needed, the JSON output confirms each update:
+
+```bash
+for src in src-003 src-035 src-042; do
+  ${CLAUDE_SKILL_DIR}/state mark-read --id "$src"
+done
+```
 
 **Wait for all reader subagents before logging findings or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Log findings only after you have read and integrated the reader notes.
 

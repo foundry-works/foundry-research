@@ -1059,16 +1059,48 @@ def cmd_audit(args):
         elif isinstance(quality, (int, float)) and quality < 0.5:
             degraded.append(sid_val)
 
+    # Build question text list from brief
+    question_texts = []
+    for q in questions:
+        question_texts.append(q if isinstance(q, str) else q.get("text", str(q)))
+
+    # Match a finding's question field to brief questions.
+    # Agents sometimes use abbreviated labels ("Q1", "Q3: What mechanisms...")
+    # instead of the full question text, so we try:
+    #   1. Exact match
+    #   2. Finding question is a prefix/substring of a brief question
+    #   3. Brief question starts with the finding's question text
+    #   4. "Q<N>" pattern matches the Nth question (1-indexed)
+    import re
+    _qn_pattern = re.compile(r"^Q(\d+)\b")
+
+    def _match_question(finding_q: str) -> str:
+        """Return the matching brief question text, or the original string."""
+        if finding_q in question_texts:
+            return finding_q
+        fq_lower = finding_q.lower().strip()
+        # Check Q<N> pattern first (e.g. "Q1", "Q3: What mechanisms...")
+        m = _qn_pattern.match(finding_q)
+        if m:
+            idx = int(m.group(1)) - 1
+            if 0 <= idx < len(question_texts):
+                return question_texts[idx]
+        # Substring/prefix matching
+        for qt in question_texts:
+            qt_lower = qt.lower()
+            if fq_lower in qt_lower or qt_lower.startswith(fq_lower):
+                return qt
+        return finding_q
+
     # Count findings per question
     findings_by_question: dict[str, list[str]] = {}
     for f in findings:
-        q = f.get("question") or "unassigned"
+        q = _match_question(f.get("question") or "unassigned")
         findings_by_question.setdefault(q, []).append(f["id"])
 
     # Identify questions with insufficient coverage
     sparse_questions = []
-    for q in questions:
-        q_text = q if isinstance(q, str) else q.get("text", str(q))
+    for q_text in question_texts:
         count = len(findings_by_question.get(q_text, []))
         if count < 2:
             sparse_questions.append({"question": q_text, "finding_count": count})
