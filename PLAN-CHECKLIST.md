@@ -50,24 +50,24 @@
 **File:** `skills/deep-research/SKILL.md`
 
 ### 2.1 Add citation chasing guidance
-- [ ] Add new paragraph after "Iterative search across multiple providers"
-- [ ] Explain **why** citation networks beat keyword search (pre-filtered relevance)
-- [ ] Explain **when** to trigger (after finding 2-3 key papers)
-- [ ] Explain **how** (`--cited-by`, `--references`, `--recommendations` with `--limit 10`)
-- [ ] Include concrete example to make it tangible
+- [x] Add new paragraph after "Iterative search across multiple providers"
+- [x] Explain **why** citation networks beat keyword search (pre-filtered relevance)
+- [x] Explain **when** to trigger (after finding 2-3 key papers)
+- [x] Explain **how** (`--cited-by`, `--references`, `--recommendations` with `--limit 10`)
+- [x] Include concrete example to make it tangible
 
 ### 2.2 Expand query refinement guidance
-- [ ] Expand existing "Search query crafting" subsection
-- [ ] Explain **why** refinement matters (search is a dialogue; round 1 reveals the field's terminology)
-- [ ] Add technique: use terms from round 1 papers in round 2 queries
-- [ ] Add technique: combine broad concepts with specific methodological terms
+- [x] Expand existing "Search query crafting" subsection
+- [x] Explain **why** refinement matters (search is a dialogue; round 1 reveals the field's terminology)
+- [x] Add technique: use terms from round 1 papers in round 2 queries
+- [x] Add technique: combine broad concepts with specific methodological terms
 
 ### 2.3 Strengthen journal.md guidance
-- [ ] Expand "journal.md captures reasoning" paragraph
-- [ ] Explain **why** it matters (persistent memory survives context compression; without it the agent repeats work)
-- [ ] List specific things to log: strategy pivots, emerging patterns, contradictions, coverage gaps
-- [ ] Set minimum bar: 500+ words for a full session
-- [ ] Add 2-3 example journal entries to make the expectation concrete
+- [x] Expand "journal.md captures reasoning" paragraph
+- [x] Explain **why** it matters (persistent memory survives context compression; without it the agent repeats work)
+- [x] List specific things to log: strategy pivots, emerging patterns, contradictions, coverage gaps
+- [x] Set minimum bar: 500+ words for a full session
+- [x] Add 2-3 example journal entries to make the expectation concrete
 
 ---
 

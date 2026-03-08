@@ -141,7 +141,11 @@ audit --strict                    # exit non-zero if warnings found
 
 **Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage. **Always set `--limit` explicitly:** `--limit 50` for initial broad searches, `--limit 20` for targeted follow-ups, `--limit 10` for citation/reference traversal. OpenAlex and Semantic Scholar defaults can return thousands of results — explicit limits prevent noise.
 
+**Citation chasing as a second-round strategy.** After initial keyword searches surface 2-3 key or seminal papers, switch from keyword search to citation traversal. Citation networks have higher precision than keyword search because relevance is pre-filtered by the citing and cited authors — a paper that cites Kätsyri (2015) is almost certainly about the uncanny valley, whereas a keyword match for "uncanny valley cross-cultural" pulls in food science papers. Use `--cited-by PAPER_ID --limit 10` to find papers that built on a key work, `--references PAPER_ID --limit 10` to find its foundational sources, and `--recommendations PAPER_ID --limit 10` (Semantic Scholar) to find related work the API identifies. This is the highest-precision search strategy available — use it before running more keyword queries. Example: after finding MacDorman & Chattopadhyay (2016) in round 1, `${CLAUDE_SKILL_DIR}/search --provider semantic_scholar --cited-by S2_PAPER_ID --limit 10` surfaces the active research network around that paper with near-zero noise.
+
 **Search query crafting.** Poor queries cause off-topic contamination. Three rules: (1) Always include the core topic term in every query — use "uncanny valley cross-cultural" not "cross-cultural differences individual variation". (2) If a search returns >500 results, the query is too broad — add qualifying terms. (3) After each search round, spot-check the last few results for relevance — if off-topic, tighten the query before continuing.
+
+**Query refinement is a feedback loop, not a one-shot.** Treating search as fire-and-forget misses the most valuable signal: the field's own terminology. Initial results reveal how researchers actually frame the topic — you may discover that "realism inconsistency" is the accepted term, not "appearance mismatch", or that a subfield uses specific methodological vocabulary you didn't anticipate. Use these discoveries to craft round 2 queries: combine broad concept terms with specific terminology from key papers found in round 1. For example, if round 1 papers consistently reference "perceptual mismatch hypothesis", use that exact phrase in a follow-up search rather than your original paraphrase. This iterative refinement — search, read titles/abstracts, extract terminology, refine query — typically yields better results in 2-3 targeted rounds than 7 parallel broad searches.
 
 **Parallel search resilience.** **Never mix CLI searches (`${CLAUDE_SKILL_DIR}/search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** Claude Code cancels all sibling tool calls when any parallel call returns non-zero. CLI searches always exit 0 (errors are in the JSON envelope), so they are safe to parallelize with each other. But Tavily/WebSearch failures can still cancel siblings, so keep them in a separate response block.
 
@@ -155,7 +159,26 @@ audit --strict                    # exit non-zero if warnings found
 
 **Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
 
-**journal.md captures reasoning.** Intermediate thoughts, emerging patterns, contradictions, and strategy decisions belong in `journal.md`. This prevents reasoning loss on context compression and makes thinking auditable.
+**journal.md is your persistent memory — use it aggressively.** During long research sessions, context compression erases your reasoning traces. Without journal entries, you lose track of what you tried, what worked, and why you pivoted — leading to repeated searches, missed contradictions, and strategy drift. journal.md survives compression and keeps your research coherent across a multi-hour session.
+
+**What to log in journal.md:** Strategy decisions ("pivoting from broad keyword search to citation chasing after finding 3 key papers"), emerging patterns ("three papers converge on perceptual mismatch as the mechanism, but two use different experimental paradigms"), contradictions between sources ("Kätsyri 2015 challenges MacDorman's categorical perception framing — need to reconcile"), coverage assessments ("Q6 has only 1 source after 2 search rounds — need targeted follow-up"), and dead ends ("PubMed search for X returned only clinical studies, not the cognitive science angle needed").
+
+**Minimum bar: 500+ words across a full session.** A 200-word journal means you aren't externalizing your reasoning. Aim for entries at natural decision points: after each search round, after reading key papers, when you notice a pattern or contradiction, and before writing the report. Example entries:
+
+```
+## Search Round 2 (after initial broad sweep)
+Round 1 surfaced Kätsyri (2015) and MacDorman (2016) as central reviews.
+Switching to citation chasing — running --cited-by on both.
+Also noticed the field uses "perceptual mismatch" more than "realism inconsistency" —
+will use this in follow-up keyword searches for Q3.
+
+## Coverage Check (pre-report)
+Q1 (mechanisms): 4 sources, good coverage. Two agree on perceptual mismatch,
+one proposes categorization difficulty — note the tension.
+Q4 (individual differences): Only 1 source. Need targeted search.
+Q6 (mitigation): 2 sources but both are design guidelines, not empirical.
+Logging gap for Q6 empirical evidence.
+```
 
 **Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The audit reports: sources tracked vs. downloaded vs. with notes, degraded quality sources, findings per research question, and methodology stats (deep reads vs. abstract-only). Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
