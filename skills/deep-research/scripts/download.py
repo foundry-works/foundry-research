@@ -108,7 +108,15 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
             "--session-dir", session_dir,
         ]
         try:
-            subprocess.run(cmd, capture_output=True, timeout=5)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            # Parse response — all commands exit 0, errors conveyed in JSON body
+            try:
+                resp = json.loads(proc.stdout) if proc.stdout else {}
+                if resp.get("status") == "error":
+                    errors = resp.get("errors", [])
+                    log(f"_sync_to_state failed for {source_id}: {errors}", level="warn")
+            except json.JSONDecodeError:
+                log(f"_sync_to_state got non-JSON response for {source_id}: {proc.stdout[:200]}", level="warn")
         finally:
             os.unlink(tmp_path)
     except Exception as e:

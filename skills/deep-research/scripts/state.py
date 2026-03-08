@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS searches (
     provider TEXT NOT NULL,
     query TEXT NOT NULL,
     result_count INTEGER NOT NULL,
+    ingested_count INTEGER,
     timestamp TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id),
     UNIQUE(session_id, provider, query)
@@ -132,6 +133,13 @@ def _connect(session_dir: str, readonly: bool = False) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=20000")
+    # Migrate: add ingested_count column to searches (for existing DBs)
+    if not readonly:
+        try:
+            conn.execute("ALTER TABLE searches ADD COLUMN ingested_count INTEGER")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # column already exists
     return conn
 
 
@@ -350,10 +358,11 @@ def cmd_log_search(args):
     sid = _get_session_id(conn)
     search_id = _next_id(conn, "searches", "search", sid)
 
+    ingested_count = getattr(args, "ingested_count", None)
     try:
         conn.execute(
-            "INSERT INTO searches (id, session_id, provider, query, result_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            (search_id, sid, args.provider, args.query, args.result_count, _now())
+            "INSERT INTO searches (id, session_id, provider, query, result_count, ingested_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (search_id, sid, args.provider, args.query, args.result_count, ingested_count, _now())
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -524,7 +533,7 @@ def cmd_searches(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        "SELECT id, provider, query, result_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
+        "SELECT id, provider, query, result_count, ingested_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
         (sid,)
     ).fetchall()
     conn.close()
@@ -871,9 +880,22 @@ def cmd_download_pending(args):
     ).fetchall()
     conn.close()
 
+    # Filter out sources that exist on disk even if DB has NULL content_file/pdf_file
+    sources_dir = os.path.join(args.session_dir, "sources")
     pending = []
+    skipped_on_disk = 0
     for r in rows:
-        item = {"source_id": r["id"], "title": r["title"], "type": r["type"] or "academic"}
+        sid_val = r["id"]
+        # Defense in depth: check disk even when DB says no content
+        on_disk = any(
+            os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}"))
+            for ext in (".md", ".pdf")
+        )
+        if on_disk:
+            skipped_on_disk += 1
+            continue
+
+        item = {"source_id": sid_val, "title": r["title"], "type": r["type"] or "academic"}
         if r["doi"]:
             item["doi"] = r["doi"]
         if r["url"]:
@@ -882,16 +904,19 @@ def cmd_download_pending(args):
             item["pdf_url"] = r["pdf_url"]
         pending.append(item)
 
+    if skipped_on_disk:
+        log(f"{skipped_on_disk} sources already on disk, skipping")
     log(f"Found {len(pending)} sources without on-disk content")
 
     if args.auto_download and pending:
-        _auto_download_pending(args.session_dir, pending, args.parallel)
+        timeout_override = getattr(args, "timeout", None)
+        _auto_download_pending(args.session_dir, pending, args.parallel, timeout_override)
         return
 
     success_response(pending, total_results=len(pending))
 
 
-def _auto_download_pending(session_dir: str, pending: list, parallel: int) -> None:
+def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None) -> None:
     """Auto-download all pending sources by calling download.py --from-json."""
     import subprocess
     import tempfile
@@ -930,9 +955,10 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int) -> No
         "--parallel", str(parallel),
     ]
 
-    log(f"Downloading {len(batch)} sources (parallel={parallel})...")
+    timeout = timeout_override if timeout_override is not None else max(600, len(batch) * 30)
+    log(f"Downloading {len(batch)} sources (parallel={parallel}, timeout: {timeout}s)...")
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
         os.unlink(tmp_path)
 
         if result.returncode == 0:
@@ -946,7 +972,7 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int) -> No
         error_response([f"Download subprocess failed (exit {result.returncode}): {stderr_text}"])
     except subprocess.TimeoutExpired:
         os.unlink(tmp_path)
-        error_response(["Download timed out after 600 seconds"])
+        error_response([f"Download timed out after {timeout} seconds"])
     except Exception as e:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -1222,6 +1248,7 @@ def main():
     p.add_argument("--provider", required=True)
     p.add_argument("--query", required=True)
     p.add_argument("--result-count", type=int, required=True)
+    p.add_argument("--ingested-count", type=int, default=None, help="Actual number of results ingested")
     p.add_argument("--session-dir", **_sd)
 
     # add-source
@@ -1359,6 +1386,7 @@ def main():
     p = sub.add_parser("download-pending")
     p.add_argument("--auto-download", action="store_true", help="Immediately download all pending sources")
     p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
+    p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: max(600, batch_size * 30))")
     p.add_argument("--session-dir", **_sd)
 
     # audit

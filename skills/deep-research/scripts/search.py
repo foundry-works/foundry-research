@@ -145,11 +145,13 @@ def _log_search_to_state(args, result: dict) -> None:
 
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         state_script = os.path.join(scripts_dir, "state.py")
+        ingested_count = len(result.get("results", []))
         cmd = [
             sys.executable, state_script, "log-search",
             "--provider", args.provider,
             "--query", args.query or "",
             "--result-count", str(result.get("total_results", 0)),
+            "--ingested-count", str(ingested_count),
             "--session-dir", args.session_dir,
         ]
         proc = subprocess.run(cmd, capture_output=True, timeout=5)
