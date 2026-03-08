@@ -104,11 +104,11 @@ def normalize_paper(raw: dict, provider: str) -> dict:
 
 def _normalize_semantic_scholar(paper: dict, raw: dict) -> dict:
     paper["title"] = raw.get("title", "")
-    paper["doi"] = raw.get("externalIds", {}).get("DOI", "") or raw.get("doi", "")
+    paper["doi"] = (raw.get("externalIds") or {}).get("DOI", "") or raw.get("doi", "")
     paper["url"] = raw.get("url", "")
     paper["abstract"] = raw.get("abstract", "") or ""
     paper["year"] = raw.get("year") or 0
-    paper["venue"] = raw.get("venue", "") or raw.get("journal", {}).get("name", "") or ""
+    paper["venue"] = raw.get("venue", "") or (raw.get("journal") or {}).get("name", "") or ""
     paper["citation_count"] = raw.get("citationCount") or 0
     paper["pdf_url"] = (raw.get("openAccessPdf") or {}).get("url", "") or ""
     paper["has_pdf"] = bool(paper["pdf_url"])

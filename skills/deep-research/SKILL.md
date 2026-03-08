@@ -12,22 +12,22 @@ You are a research agent with access to academic databases, web search, and stru
 
 ## Quick-Start Workflow
 
-1. `./state init --query "..."` — creates session (auto-discovers session dir for all subsequent commands)
-2. Draft research brief → `./state set-brief --from-json FILE` (or `--from-stdin`)
+1. `${CLAUDE_SKILL_DIR}/state init --query "..." --session-dir ./deep-research-{topic}` — creates session (auto-discovers session dir for all subsequent commands)
+2. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`)
 3. Search academic providers (parallel OK within academic)
 4. Search web providers (Tavily/WebSearch — **SEPARATE batch from academic**)
-5. Sources and searches are auto-tracked by `./search` — no manual `add-sources` or `log-search` needed
-6. `./state download-pending --auto-download` — download all sources with DOIs
+5. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
+6. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs
 7. Spawn reader subagents for downloaded papers (parallel, 2-3 sources per agent)
-8. `./state log-finding` per research question
-9. `./state audit` — check coverage, identify gaps, get methodology stats
+8. `${CLAUDE_SKILL_DIR}/state log-finding` per research question
+9. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
 10. Write report — use audit stats in Methodology section
 
 ---
 
 ## Tools Available
 
-### Search (`./search --provider <name>`)
+### Search (`${CLAUDE_SKILL_DIR}/search --provider <name>`)
 
 | Provider | Best for | Key flags |
 |----------|----------|-----------|
@@ -44,20 +44,20 @@ You are a research agent with access to academic databases, web search, and stru
 
 Common flags: `--query "..." --limit N --offset N --session-dir DIR`
 
-**Session directory auto-discovery:** After `./state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars. You can still override with `--session-dir DIR` or `$DEEP_RESEARCH_SESSION_DIR` if needed.
+**Session directory auto-discovery:** After `${CLAUDE_SKILL_DIR}/state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars. You can still override with `--session-dir DIR` or `$DEEP_RESEARCH_SESSION_DIR` if needed.
 
-**Searches are auto-tracked:** `./search` automatically logs the search and adds all results to state.db when a session is active. No manual `./state log-search` or `./state add-sources` needed.
+**Searches are auto-tracked:** `${CLAUDE_SKILL_DIR}/search` automatically logs the search and adds all results to state.db when a session is active. No manual `${CLAUDE_SKILL_DIR}/state log-search` or `${CLAUDE_SKILL_DIR}/state add-sources` needed.
 
 #### yfinance data types
 
 ```
-./search --provider yfinance --ticker AAPL --type profile       # company overview + key ratios
-./search --provider yfinance --ticker AAPL --type history --period 1y --interval 1d
-./search --provider yfinance --ticker AAPL --type financials --statement income --frequency quarterly
-./search --provider yfinance --ticker AAPL --type options --expiration 2026-06-19
-./search --provider yfinance --ticker AAPL --type dividends
-./search --provider yfinance --ticker AAPL --type holders      # institutional holders
-./search --provider yfinance --ticker AAPL,MSFT --type profile  # multi-ticker (max 5)
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type profile       # company overview + key ratios
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type history --period 1y --interval 1d
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type financials --statement income --frequency quarterly
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type options --expiration 2026-06-19
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type dividends
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type holders      # institutional holders
+${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL,MSFT --type profile  # multi-ticker (max 5)
 ```
 
 Types: `profile`, `history`, `financials`, `options`, `dividends`, `holders`. Statements: `income`, `balance_sheet`, `cash_flow`. Frequencies: `annual`, `quarterly`. Periods: `1d` `5d` `1mo` `3mo` `6mo` `1y` `2y` `5y` `10y` `ytd` `max`.
@@ -65,17 +65,17 @@ Types: `profile`, `history`, `financials`, `options`, `dividends`, `holders`. St
 #### EDGAR modes
 
 ```
-./search --provider edgar --query "artificial intelligence" --form-type 10-K --year 2024
-./search --provider edgar --ticker AAPL --form-type 10-K,10-Q --limit 5
-./search --provider edgar --ticker AAPL --type facts                          # list all XBRL concepts
-./search --provider edgar --ticker AAPL --type facts --concept Revenue        # time series for one concept
-./search --provider edgar --ticker AAPL --type concept --concept Assets --taxonomy us-gaap
-./search --provider edgar --accession 0000320193-23-000106                     # fetch specific filing
+${CLAUDE_SKILL_DIR}/search --provider edgar --query "artificial intelligence" --form-type 10-K --year 2024
+${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --form-type 10-K,10-Q --limit 5
+${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type facts                          # list all XBRL concepts
+${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type facts --concept Revenue        # time series for one concept
+${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type concept --concept Assets --taxonomy us-gaap
+${CLAUDE_SKILL_DIR}/search --provider edgar --accession 0000320193-23-000106                     # fetch specific filing
 ```
 
 Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-full`, `dei`. Full-text search (no `--ticker`) uses SEC EFTS; company queries use the submissions API.
 
-### Download (`./download`)
+### Download (`${CLAUDE_SKILL_DIR}/download`)
 
 ```
 --source-id src-003 --to-md       # download by source ID (looks up DOI/URL from state.db)
@@ -91,20 +91,20 @@ Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-ful
 Batch JSON format: `[{"doi": "10.1234/..."}, {"url": "https://...", "type": "web"}, ...]`
 Each item can include: `doi`, `url`, `pdf_url`, `arxiv`, `source_id`, `title`, `authors`, `year`, `venue`, `type`.
 
-### Enrich (`./enrich`)
+### Enrich (`${CLAUDE_SKILL_DIR}/enrich`)
 
 ```
 --doi DOI [--doi DOI2 ...]        # Crossref metadata enrichment
 ```
 
-### State (`./state`)
+### State (`${CLAUDE_SKILL_DIR}/state`)
 
 ```
-init --query "..."                # start session (creates state.db, journal.md, notes/, sources/)
+init --query "..." --session-dir ./deep-research-{topic}   # start session (creates state.db, journal.md, notes/, sources/)
 set-brief --from-json FILE        # save research brief + questions (or --from-stdin)
-log-search --provider X ...       # record search (auto-called by ./search)
+log-search --provider X ...       # record search (auto-called by search tool)
 add-source --from-json FILE       # dedup + track single source (or --from-stdin)
-add-sources --from-json FILE      # batch dedup + insert (auto-called by ./search; or --from-stdin)
+add-sources --from-json FILE      # batch dedup + insert (auto-called by search tool; or --from-stdin)
 check-dup --doi/--url/--title     # check before downloading
 check-dup-batch --from-json FILE  # batch dedup check
 log-finding --text "..." --sources "src-001,src-003" --question "Q1"
@@ -121,7 +121,7 @@ audit                             # pre-report coverage & quality check
 audit --strict                    # exit non-zero if warnings found
 ```
 
-**JSON input:** Pass JSON via `--from-json FILE` (write to a temp file first) or `--from-stdin` (pipe JSON via stdin). There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts. Example: `echo '{"scope":"..."}' | ./state set-brief --from-stdin`
+**JSON input:** Pass JSON via `--from-json FILE` (write to a temp file first) or `--from-stdin` (pipe JSON via stdin). There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts. Example: `echo '{"scope":"..."}' | ${CLAUDE_SKILL_DIR}/state set-brief --from-stdin`
 
 ### Native Tools
 
@@ -135,33 +135,33 @@ audit --strict                    # exit non-zero if warnings found
 
 ## What Good Research Looks Like
 
-**A research brief sharpens everything.** A structured brief — scope, key aspects, 3-7 concrete research questions, what a complete answer looks like — drives better searches and becomes the report skeleton. Save it with `./state set-brief`.
+**A research brief sharpens everything.** A structured brief — scope, key aspects, 3-7 concrete research questions, what a complete answer looks like — drives better searches and becomes the report skeleton. Save it with `${CLAUDE_SKILL_DIR}/state set-brief`.
 
 **Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage.
 
-**Parallel search resilience.** **CRITICAL: Never mix academic CLI searches (`./search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** If one fails, the runtime cancels all siblings. Always separate them into distinct response blocks.
+**Parallel search resilience.** **Never mix CLI searches (`${CLAUDE_SKILL_DIR}/search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** Claude Code cancels all sibling tool calls when any parallel call returns non-zero. CLI searches always exit 0 (errors are in the JSON envelope), so they are safe to parallelize with each other. But Tavily/WebSearch failures can still cancel siblings, so keep them in a separate response block.
 
-**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `./enrich` fills venue, authors, and retraction status for key papers.
+**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `${CLAUDE_SKILL_DIR}/enrich` fills venue, authors, and retraction status for key papers.
 
-**Degraded PDFs.** Check `"quality"` in metadata files. Sources with `"degraded"` quality have garbled or minimal text — do NOT claim deep reading. Options: use abstract from search metadata instead, try `./download --url https://doi.org/{doi} --type web` for the landing page, or seek an alternate open-access version. The download tool automatically detects degraded conversions and marks them.
+**Degraded PDFs.** Check `"quality"` in metadata files. Sources with `"degraded"` quality have garbled or minimal text — do NOT claim deep reading. Options: use abstract from search metadata instead, try `${CLAUDE_SKILL_DIR}/download --url https://doi.org/{doi} --type web` for the landing page, or seek an alternate open-access version. The download tool automatically detects degraded conversions and marks them.
 
-**Paywalled papers.** The PDF cascade (`./download --doi`) tries 6 sources (OpenAlex → Unpaywall → arXiv → PMC → Anna's Archive → Sci-Hub). If all fail, the paper is paywalled. Use `./download --url` to grab the abstract page instead, or rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
+**Paywalled papers.** The PDF cascade (`${CLAUDE_SKILL_DIR}/download --doi`) tries 6 sources (OpenAlex → Unpaywall → arXiv → PMC → Anna's Archive → Sci-Hub). If all fail, the paper is paywalled. Use `${CLAUDE_SKILL_DIR}/download --url` to grab the abstract page instead, or rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
 
-**Download aggressively, cite only what you've read.** After search rounds, use `./state download-pending --auto-download` to download ALL relevant sources — not just the top 5-8. Triage by quality: which have good content? which degraded? which paywalled? Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read. Use `./download --from-json FILE --to-md --parallel 3` for batch downloads.
+**Download aggressively, cite only what you've read.** After search rounds, use `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` to download ALL relevant sources — not just the top 5-8. Triage by quality: which have good content? which degraded? which paywalled? Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read. Use `${CLAUDE_SKILL_DIR}/download --from-json FILE --to-md --parallel 3` for batch downloads.
 
 **Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
 
 **journal.md captures reasoning.** Intermediate thoughts, emerging patterns, contradictions, and strategy decisions belong in `journal.md`. This prevents reasoning loss on context compression and makes thinking auditable.
 
-**Pre-report audit.** Before writing `report.md`, run `./state audit` to check source coverage. The audit reports: sources tracked vs. downloaded vs. with notes, degraded quality sources, findings per research question, and methodology stats (deep reads vs. abstract-only). Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
+**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The audit reports: sources tracked vs. downloaded vs. with notes, degraded quality sources, findings per research question, and methodology stats (deep reads vs. abstract-only). Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
 **Theme-based synthesis with verified citations.** Findings group by research question, not by source — "Three studies converge on X [1][3][7]" rather than source-by-source summaries. Every factual claim must be verified against the corresponding on-disk `.md` file before inclusion. Claims that cannot be verified against a source get dropped. Contradictions between sources are flagged explicitly with context (methodology differences, recency, evidence quality). Every claim carries an inline citation [1], [2].
 
 **Garbled PDF awareness.** Converted PDFs may have scrambled text around tables, figures, and equations. When text looks garbled, note the limitation and seek the information elsewhere rather than interpreting nonsense.
 
-**Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `./state log-finding` and `./state log-gap` track coverage persistently.
+**Completion signals:** saturation (repeated results), coverage (every research question has 2-3+ sources), and diminishing returns (tangential results). Simple factual lookups need 3-5 sources, not 30. `${CLAUDE_SKILL_DIR}/state log-finding` and `${CLAUDE_SKILL_DIR}/state log-gap` track coverage persistently.
 
-**Structured coverage tracking.** Searches and sources are auto-tracked by `./search`. Use `./state log-finding` after each synthesis insight and `./state log-gap` when a research question lacks adequate sources. These persist across context compressions and make `./state summary` actionable — without them, the summary shows empty findings/gaps arrays.
+**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Use `${CLAUDE_SKILL_DIR}/state log-finding` after each synthesis insight and `${CLAUDE_SKILL_DIR}/state log-gap` when a research question lacks adequate sources. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays.
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
@@ -202,23 +202,25 @@ audit --strict                    # exit non-zero if warnings found
     └── src-001.toc       # Table of contents with line numbers
 ```
 
-- Initialize: `./state init --query "..."`
-- Sources and searches are auto-tracked by `./search` (no manual step needed)
-- Check duplicates: `./state check-dup-batch --from-json` (batch)
-- Review progress: `./state summary`
-- Pre-report check: `./state audit`
+- Initialize: `${CLAUDE_SKILL_DIR}/state init --query "..."`
+- Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` (no manual step needed)
+- Check duplicates: `${CLAUDE_SKILL_DIR}/state check-dup-batch --from-json` (batch)
+- Review progress: `${CLAUDE_SKILL_DIR}/state summary`
+- Pre-report check: `${CLAUDE_SKILL_DIR}/state audit`
 
 ---
 
 ## Delegation
 
-You are the supervisor. Run CLI commands (`./search`, `./download`, `./enrich`, `./state`) directly — no subagent needed for structured JSON output. Use **parallel Bash calls** (multiple in one response) for simultaneous searches across different providers.
+You are the supervisor. Run CLI commands (`${CLAUDE_SKILL_DIR}/search`, `${CLAUDE_SKILL_DIR}/download`, `${CLAUDE_SKILL_DIR}/enrich`, `${CLAUDE_SKILL_DIR}/state`) directly — no subagent needed for structured JSON output. Use **parallel Bash calls** (multiple in one response) for simultaneous searches across different providers.
 
 Use the **Agent tool** to spawn subagents only for **unstructured text comprehension** — tasks where reading full paper text would bloat your context:
 
-- **Source summarization:** Subagent reads papers, writes summaries to `notes/`, returns a compact manifest. Spawn one subagent per source (or small batch of 2-3) and run them in parallel rather than giving one agent many papers serially. Wait for summarization results before writing the report — summaries may surface details not visible in abstracts or search snippets, and can correct misinterpretations.
+- **Source summarization:** Spawn **one reader subagent per source** and run them in parallel. Each subagent reads one paper, writes a summary to `notes/`, and returns a compact manifest entry. One-to-one assignment ensures the agent devotes full attention to that paper's methodology, evidence, and nuance — batching papers into a single agent degrades comprehension quality.
 - **Claim verification:** Subagent checks draft claims against source files, returns a verification table.
-- **Relevance assessment:** Subagent deep-reads a batch of sources and rates relevance.
+- **Relevance assessment:** Subagent deep-reads a source and rates relevance.
+
+**Wait for all reader subagents before logging findings or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Log findings only after you have read and integrated the reader notes.
 
 **Keep in your context:** Research brief, search strategy, coverage assessment, contradiction analysis, synthesis, report writing, and all CLI output parsing.
 
@@ -277,5 +279,5 @@ Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`,
 **Citation rules:**
 - Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
 - Sources known only from abstracts or search metadata go in **Further Reading**
-- The Methodology section must honestly report deep reads vs. abstract-only counts (use `./state audit` output)
+- The Methodology section must honestly report deep reads vs. abstract-only counts (use `${CLAUDE_SKILL_DIR}/state audit` output)
 - Never claim to have "deeply read" a source that only has degraded or abstract-only content

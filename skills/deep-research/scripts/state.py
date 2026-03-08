@@ -325,7 +325,11 @@ def cmd_export(args):
 
 
 def cmd_set_brief(args):
-    data = _load_json_dict(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_dict(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -363,7 +367,11 @@ def cmd_log_search(args):
 
 
 def cmd_add_source(args):
-    data = _load_json_dict(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_dict(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -375,7 +383,11 @@ def cmd_add_source(args):
 
 
 def cmd_add_sources(args):
-    data = _load_json_list(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_list(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
 
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
@@ -437,7 +449,11 @@ def cmd_check_dup(args):
 
 
 def cmd_check_dup_batch(args):
-    data = _load_json_list(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_list(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
 
     conn = _connect(args.session_dir, readonly=True)
     sid = _get_session_id(conn)
@@ -543,7 +559,11 @@ def cmd_get_source(args):
 
 
 def cmd_update_source(args):
-    data = _load_json_dict(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_dict(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
@@ -782,7 +802,11 @@ def cmd_log_metric(args):
 
 
 def cmd_log_metrics(args):
-    data = _load_json_list(_resolve_json_input(args))
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_list(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
 
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
@@ -1130,14 +1154,14 @@ def _load_json_raw(path: str) -> dict | list:
         raise SystemExit(1)
 
 
-def _resolve_json_input(args) -> str:
+def _resolve_json_input(args) -> tuple[str, bool]:
     """Resolve JSON input source: --from-json FILE or --from-stdin.
 
     When --from-stdin is used, reads stdin into a temp file and returns its path.
-    Returns the path to pass to _load_json_dict/_load_json_list.
+    Returns (path, is_temp) — caller must clean up temp files via _cleanup_json_input.
     """
     if getattr(args, "from_json", None):
-        return args.from_json
+        return args.from_json, False
     if getattr(args, "from_stdin", False):
         import tempfile
         try:
@@ -1151,9 +1175,18 @@ def _resolve_json_input(args) -> str:
         tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False)
         json.dump(data, tf)
         tf.close()
-        return tf.name
+        return tf.name, True
     error_response(["No JSON input specified. Use --from-json FILE or --from-stdin"])
     raise SystemExit(1)
+
+
+def _cleanup_json_input(path: str, is_temp: bool) -> None:
+    """Remove temp file created by _resolve_json_input if needed."""
+    if is_temp:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------

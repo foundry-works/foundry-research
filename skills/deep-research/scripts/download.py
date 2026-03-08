@@ -19,11 +19,15 @@ from _shared.html_extract import extract_readable_content  # noqa: E402
 from _shared.http_client import create_session  # noqa: E402
 from _shared.metadata import (  # noqa: E402
     PAPER_SCHEMA,
+    merge_metadata,
+    normalize_paper,
+    read_source_metadata,
     write_source_metadata,
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown, validate_pdf  # noqa: E402
+from _shared.quality import check_content_mismatch  # noqa: E402
 
 # arXiv download constraints
 _ARXIV_DELAY = 3.0  # seconds between arXiv downloads (ToS)
@@ -291,6 +295,10 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     # Build initial metadata from CLI flags
     meta = _build_metadata(args, source_id)
 
+    # Store expected metadata for content mismatch detection
+    result["_expected_title"] = meta.get("title", "")
+    result["_expected_authors"] = meta.get("authors", [])
+
     if args.url:
         _download_web(args.url, source_id, client, sources_dir, meta, result)
         # Auto-create source in state.db for web downloads without an existing source
@@ -321,6 +329,11 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     if result.get("content_file"):
         meta["content_file"] = result["content_file"]
     write_source_metadata(metadata_dir, source_id, meta)
+
+    # Auto-enrich from Crossref if DOI available and metadata is sparse
+    doi = meta.get("doi")
+    if doi and _metadata_needs_enrichment(meta):
+        _auto_enrich_crossref(doi, source_id, _session_dir, metadata_dir)
 
     # Prominently log the assigned source ID
     log(f">>> Assigned source ID: {source_id}")
@@ -376,7 +389,9 @@ def _download_direct_pdf(url: str, source_id: str, client, sources_dir: str,
     result["pdf_downloaded"] = True
 
     if to_md:
-        _convert_and_record(pdf_path, source_id, sources_dir, result)
+        _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
 
 
 def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
@@ -429,7 +444,9 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
             result["sources_tried"].append("arxiv")
 
             if to_md:
-                _convert_and_record(pdf_path, source_id, sources_dir, result)
+                _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
             return
 
         except Exception as e:
@@ -467,7 +484,9 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                     result["pdf_downloaded"] = True
                     result["source_used"] = "annas_archive"
                     if to_md:
-                        _convert_and_record(pdf_path, source_id, sources_dir, result)
+                        _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
                     return
                 continue
             elif source_name == "scihub":
@@ -478,7 +497,9 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                     result["pdf_downloaded"] = True
                     result["source_used"] = "scihub"
                     if to_md:
-                        _convert_and_record(pdf_path, source_id, sources_dir, result)
+                        _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
                     return
                 continue
         except Exception as e:
@@ -500,7 +521,9 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             result["source_used"] = source_name
 
             if to_md:
-                _convert_and_record(pdf_path, source_id, sources_dir, result)
+                _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
 
@@ -615,7 +638,8 @@ def _resolve_pmc(doi: str, client) -> str | None:
     return None
 
 
-def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result: dict) -> None:
+def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result: dict,
+                        title: str = "", authors: list[str] | None = None) -> None:
     """Convert PDF to markdown and update result dict."""
     md_path = os.path.join(sources_dir, f"{source_id}.md")
     conv = pdf_to_markdown(pdf_path, md_path)
@@ -628,8 +652,70 @@ def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result:
         result["quality"] = conv.get("quality", "ok")
         if conv.get("quality_details"):
             result["quality_details"] = conv["quality_details"]
+
+        # Semantic mismatch check: does extracted text match expected metadata?
+        if result["quality"] == "ok" and (title or authors):
+            try:
+                from pathlib import Path as _Path
+                md_text = _Path(md_path).read_text(encoding="utf-8")
+                mismatch = check_content_mismatch(md_text, title=title, authors=authors)
+                if mismatch["mismatched"]:
+                    result["quality"] = "mismatched"
+                    details = result.get("quality_details") or {}
+                    details["reasons"] = details.get("reasons", []) + [mismatch["reason"]]
+                    details["title_hits"] = mismatch["title_hits"]
+                    details["author_hits"] = mismatch["author_hits"]
+                    result["quality_details"] = details
+                    log(f"Content mismatch detected for {source_id}: {mismatch['reason']}", level="warn")
+            except Exception as e:
+                log(f"Mismatch check failed for {source_id}: {e}", level="debug")
     else:
         result["errors"].append(f"PDF conversion failed (converter: {conv['converter']})")
+
+
+def _metadata_needs_enrichment(meta: dict) -> bool:
+    """Check if metadata is missing key fields that Crossref could provide."""
+    return (
+        not meta.get("authors")
+        or not meta.get("year")
+        or not meta.get("venue")
+        or not meta.get("abstract")
+    )
+
+
+def _auto_enrich_crossref(doi: str, source_id: str, session_dir: str, metadata_dir: str) -> None:
+    """Auto-enrich metadata from Crossref after download. Best-effort, never fails the download."""
+    try:
+        client = create_session(session_dir)
+        try:
+            # Reuse enrich.py's Crossref fetching logic inline
+            url = f"https://api.crossref.org/works/{doi}"
+            resp = client.get(url, timeout=(15, 15))
+            if resp.status_code != 200:
+                log(f"Crossref enrichment skipped: HTTP {resp.status_code} for {doi}", level="debug")
+                return
+
+            data = resp.json()
+            message = data.get("message")
+            if not message:
+                return
+
+            # Normalize through the standard pipeline
+            normalized = normalize_paper(message, "crossref")
+            normalized["id"] = source_id
+
+            # Read existing metadata and merge
+            existing = read_source_metadata(metadata_dir, source_id)
+            if not existing:
+                existing = {"id": source_id}
+
+            merged = merge_metadata(existing, normalized)
+            write_source_metadata(metadata_dir, source_id, merged)
+            log(f"Auto-enriched {source_id} from Crossref (doi: {doi})")
+        finally:
+            client.close()
+    except Exception as e:
+        log(f"Auto-enrichment failed for {source_id}: {e}", level="debug")
 
 
 def _build_metadata(args, source_id: str) -> dict:

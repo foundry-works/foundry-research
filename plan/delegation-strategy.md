@@ -29,17 +29,20 @@ description: Read and summarize research source files. Use for batch summarizati
 tools: Read, Glob, Write
 model: sonnet
 ---
-Read the source files listed in your directive. Write your summaries to disk, then return a manifest.
+Read the source file identified in your directive. Write a structured summary to disk, then return a manifest.
+
+You will be assigned **one source** per invocation. Give it your full attention — read carefully,
+extract precise evidence, and note methodological details.
 
 ## Output rules
-- Write each summary to `notes/{source_id}.md` in the session directory (path provided in directive).
-- Return ONLY a compact manifest to the supervisor — do NOT return full summaries in your response.
-  Manifest format: [{"source_id": "src-001", "status": "ok", "path": "notes/src-001.md"}, ...]
+- Write the summary to `notes/{source_id}.md` in the session directory (path provided in directive).
+- Return ONLY a compact manifest entry to the supervisor — do NOT return the full summary.
+  Manifest format: {"source_id": "src-003", "status": "ok", "path": "notes/src-003.md"}
 - This keeps the supervisor's context clean. The supervisor will read notes/ files as needed.
 
 ## Error handling rules
 - NEVER fabricate content. If a file is unreadable, garbled, or empty, say so explicitly.
-- If a source file doesn't exist or can't be read, include it in your manifest with status "unreadable" and the error.
+- If a source file doesn't exist or can't be read, return the manifest with status "unreadable" and the error.
 - If document structure is garbled (no headings, scrambled text), note this in the notes file so the supervisor knows the source quality is degraded.
 - Always return valid JSON for the manifest.
 ```
@@ -103,21 +106,24 @@ The supervisor parses the structured JSON output directly. No intermediate LLM s
 
 #### Source Reading & Summarization (subagent)
 
-Deep-read source files and return structured summaries so the supervisor doesn't consume full paper text.
+Deep-read source files and return structured summaries so the supervisor doesn't consume full paper text. **Spawn one subagent per source** — this ensures each paper gets full attention. Run them in parallel.
 
 ```
-Directive: Read these source files: src-003.md, src-007.md, src-012.md.
-           For each, provide:
-           - Core finding (2-3 sentences)
-           - Key evidence / data points
-           - Methodology used
-           - Limitations or caveats
-           - Relevance to: "How do quantization methods affect model accuracy?"
+# Three parallel Agent calls, one source each:
+
+Directive: Read source src-003 in {session_dir}.
+           Research context: "How do quantization methods affect model accuracy?"
+
+Directive: Read source src-007 in {session_dir}.
+           Research context: "How do quantization methods affect model accuracy?"
+
+Directive: Read source src-012 in {session_dir}.
+           Research context: "How do quantization methods affect model accuracy?"
 
 Model: Sonnet (needs comprehension and judgment about what matters)
 ```
 
-The supervisor receives ~1KB of structured summaries instead of ~60KB of full paper text.
+The supervisor receives ~100B manifest entries per agent instead of ~60KB of full paper text. Summaries are written to `notes/` on disk.
 
 #### Batch Download (supervisor-direct, no subagent)
 
@@ -182,7 +188,7 @@ This is both a rate limit guarantee and a simplicity constraint. No two subagent
 Examples of valid parallelism (multiple Bash or Agent tool calls in one response):
 - 3 **parallel Bash calls** searching Semantic Scholar, OpenAlex, and PubMed simultaneously (supervisor-direct, no subagent — see "Parallel Search" above)
 - 2 **parallel Bash calls** downloading from arXiv and PMC simultaneously
-- 2 **Agent calls** for reader subagents summarizing different batches of source files
+- N **parallel Agent calls** for reader subagents, one source per agent
 
 Everything else is sequential:
 - Multiple downloads from the same domain → sequential

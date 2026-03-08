@@ -38,7 +38,12 @@ def error_response(errors: list[str], partial_results: list | dict | None = None
 
     Envelope: {"status": "error", "results": ..., "errors": [...], "total_results": N, "error_code": ...}
 
-    Exits with code 0 if partial results exist, 1 if total failure.
+    Always exits with code 0. Error information is in the JSON envelope
+    ("status": "error", "errors": [...]) — the supervisor detects failures from
+    the structured output, not the exit code. Exit code 0 is critical because
+    Claude Code cancels all sibling tool calls when any parallel call returns
+    non-zero, so an API error from one provider would kill unrelated parallel
+    searches against other providers.
 
     Args:
         errors: List of error message strings.
@@ -62,7 +67,7 @@ def error_response(errors: list[str], partial_results: list | dict | None = None
     output = json.dumps(envelope, ensure_ascii=False)
     print(output)
 
-    sys.exit(0 if total > 0 else 1)
+    sys.exit(0)
 
 
 def log(message: str, level: str = "info") -> None:
