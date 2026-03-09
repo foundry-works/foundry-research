@@ -31,28 +31,30 @@
 - [ ] Smoke test: run on the cc-biz-class report's Bilt → AA claim and Etihad contradiction
 
 ## Step 4: SKILL.md — Clarification Step
-- [ ] Add assumption-surfacing guidance to clarification workflow section
-  - [ ] Identify 2-3 assumptions in the query
-  - [ ] Surface them to user before generating brief
-  - [ ] Include examples spanning use cases (product, academic, medical)
-- [ ] Keep it concise — this is guidance, not a rigid protocol
+- [x] Add assumption-surfacing guidance to clarification workflow section
+  - [x] Identify 2-3 assumptions in the query
+  - [x] Surface them to user before generating brief
+  - [x] Include examples spanning use cases (product, academic, medical, financial)
+- [x] Keep it concise — this is guidance, not a rigid protocol
 
 ## Step 5: SKILL.md — Applicability Research Pass
-- [ ] Add workflow step: after findings established, before synthesis
-  - [ ] Targeted searches for real-world feasibility of key findings
-  - [ ] Domain-agnostic framing with examples
-- [ ] Integrate into the existing workflow sequence (between gap resolution and synthesis)
+- [x] Add workflow step: after findings established, before synthesis
+  - [x] Targeted searches for real-world feasibility of key findings
+  - [x] Domain-agnostic framing with examples (product, academic, medical, financial, technical)
+- [x] Integrate into the existing workflow sequence (step 14, between gap resolution and synthesis)
 
 ## Step 6: SKILL.md — Synthesis Workflow Integration
-- [ ] Update synthesis section to use writer → reviewer → verifier flow
-  - [ ] Supervisor hands off to synthesis-writer (not writing report itself)
-  - [ ] Supervisor routes reviewer feedback to writer for revision
-  - [ ] Supervisor triggers verifier on draft, routes results to writer
-  - [ ] Supervisor delivers final report
-- [ ] Document the handoff format (what the supervisor passes to each agent)
+- [x] Update synthesis section to use writer → reviewer → verifier flow
+  - [x] Supervisor hands off to synthesis-writer (not writing report itself)
+  - [x] Supervisor routes reviewer feedback to writer for revision
+  - [x] Supervisor triggers verifier on draft, routes results to writer
+  - [x] Supervisor delivers final report
+- [x] Document the handoff format (what the supervisor passes to each agent)
+- [x] Update Delegation section with synthesis agent descriptions
+- [x] Replace "Theme-based synthesis" guidance with delegation guidance
 
 ## Step 7: Run `copy-to-skills.sh` and End-to-End Test
-- [ ] Run `./copy-to-skills.sh` to deploy to `.claude/`
+- [x] Run `./copy-to-skills.sh` to deploy to `.claude/`
 - [ ] Full end-to-end test with a new research query
 - [ ] Compare output quality against cc-biz-class baseline
 - [ ] Verify: does the clarification step surface assumptions?

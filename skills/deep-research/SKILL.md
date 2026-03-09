@@ -13,18 +13,63 @@ You are a research agent with access to academic databases, web search, and stru
 ## Quick-Start Workflow
 
 1. `${CLAUDE_SKILL_DIR}/state init --query "..." --session-dir ./deep-research-{topic}` — creates session (auto-discovers session dir for all subsequent commands)
-2. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`). **Must include 3-7 concrete research questions.** Example brief JSON: `{"scope": "Impact of X on Y", "questions": ["Q1: What mechanisms drive X?", "Q2: How does Y vary across populations?", "Q3: What interventions exist?"], "completeness_criteria": "Each question answered with 2+ sources"}`
-3. Search providers (parallel OK — use `--provider tavily` for web, academic providers for papers). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, include `--provider tavily` searches alongside academic providers.
-4. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
-5. **Citation chasing (after round 1).** Before running more keyword searches, identify 2-3 high-impact papers from round 1 results (high citation count, seminal reviews, foundational experiments) and run `--cited-by PAPER_ID --limit 10` and `--references PAPER_ID --limit 10` on them. Citation traversal has higher precision than keyword search — a paper that cites a seminal work is almost certainly relevant, whereas keyword matches pull in off-topic results. This is the highest-value search strategy available and should be used in every session with academic sources. Skip only if round 1 surfaced no clearly important papers (rare).
-6. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs. If the response includes `sync_failures`, run `${CLAUDE_SKILL_DIR}/download --retry-sync` to recover any sources that downloaded but failed to update state.db.
-7. Spawn reader subagents for downloaded papers (parallel, one source per agent). As readers complete, log gaps immediately for any research question where you notice thin or conflicting evidence — don't wait until all readers finish. Early gap detection drives targeted follow-up searches while you still have search budget.
-8. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
-9. `${CLAUDE_SKILL_DIR}/state log-finding` — **log 2-3 findings per research question**, not just one. Each finding should capture a distinct insight, mechanism, or evidence thread. The findings tracker should reflect the depth of your actual synthesis — if your report section has 4 paragraphs of analysis but only 1 finding logged, you're under-tracking. Findings logged here drive the audit's coverage assessment and make `summary` actionable across context compressions.
-10. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas, and you lose the structured mechanism for systematic improvement — you're left guessing which questions need more work instead of having a concrete list.
-11. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
-12. **Pre-report gap checkpoint — resolve or justify every open gap.** Review all open gaps from the audit. For each gap, you must either: (a) run a targeted follow-up search to resolve it (citation chase on a related paper, or a specific keyword query), then `resolve-gap`; or (b) write a journal entry explaining why it can't be resolved (e.g., "no empirical mitigation studies exist in the literature — this is a genuine hole in the field"). **Proceeding to write the report with open gaps that could have been searched is a process failure.** The point of logging gaps is to act on them, not just document them. Additionally: if the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
-13. Write report — use audit stats in Methodology section
+2. **Surface assumptions before drafting the brief.** Before generating the research brief, identify 2-3 assumptions embedded in the user's query and surface them explicitly. The goal is to catch framing biases early — the user may not realize their question pre-selects an answer space. Examples:
+   - Product research: "Your query assumes a new card is the answer — should we also consider whether optimizing your current setup would yield more value?"
+   - Academic research: "This assumes the effect is real and asks about mechanisms — should we also assess whether the effect replicates reliably?"
+   - Medical research: "This frames X as a treatment option — should we also evaluate whether the condition warrants treatment vs. watchful waiting?"
+   - Financial research: "This assumes Company X is the right investment — should we also compare sector alternatives?"
+   Present assumptions to the user and ask which to accept vs. broaden. Incorporate their answer into the brief's scope and questions. Keep this lightweight — 2-3 bullets, not an interrogation.
+3. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`). **Must include 3-7 concrete research questions.** Example brief JSON: `{"scope": "Impact of X on Y", "questions": ["Q1: What mechanisms drive X?", "Q2: How does Y vary across populations?", "Q3: What interventions exist?"], "completeness_criteria": "Each question answered with 2+ sources"}`
+4. Search providers (parallel OK — use `--provider tavily` for web, academic providers for papers). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, include `--provider tavily` searches alongside academic providers.
+5. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
+6. **Citation chasing (after round 1).** Before running more keyword searches, identify 2-3 high-impact papers from round 1 results (high citation count, seminal reviews, foundational experiments) and run `--cited-by PAPER_ID --limit 10` and `--references PAPER_ID --limit 10` on them. Citation traversal has higher precision than keyword search — a paper that cites a seminal work is almost certainly relevant, whereas keyword matches pull in off-topic results. This is the highest-value search strategy available and should be used in every session with academic sources. Skip only if round 1 surfaced no clearly important papers (rare).
+7. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs. If the response includes `sync_failures`, run `${CLAUDE_SKILL_DIR}/download --retry-sync` to recover any sources that downloaded but failed to update state.db.
+8. Spawn reader subagents for downloaded papers (parallel, one source per agent). As readers complete, log gaps immediately for any research question where you notice thin or conflicting evidence — don't wait until all readers finish. Early gap detection drives targeted follow-up searches while you still have search budget.
+9. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
+10. `${CLAUDE_SKILL_DIR}/state log-finding` — **log 2-3 findings per research question**, not just one. Each finding should capture a distinct insight, mechanism, or evidence thread. The findings tracker should reflect the depth of your actual synthesis — if your report section has 4 paragraphs of analysis but only 1 finding logged, you're under-tracking. Findings logged here drive the audit's coverage assessment and make `summary` actionable across context compressions.
+11. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas, and you lose the structured mechanism for systematic improvement — you're left guessing which questions need more work instead of having a concrete list.
+12. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
+13. **Pre-report gap checkpoint — resolve or justify every open gap.** Review all open gaps from the audit. For each gap, you must either: (a) run a targeted follow-up search to resolve it (citation chase on a related paper, or a specific keyword query), then `resolve-gap`; or (b) write a journal entry explaining why it can't be resolved (e.g., "no empirical mitigation studies exist in the literature — this is a genuine hole in the field"). **Proceeding to write the report with open gaps that could have been searched is a process failure.** The point of logging gaps is to act on them, not just document them. Additionally: if the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
+14. **Applicability research pass.** Before synthesis, stress-test your key findings for real-world feasibility. For the 3-5 most important findings (the ones that will drive recommendations), run targeted searches asking: "How reliable/accessible/practical is this in real-world conditions?" The question varies by domain:
+    - Product research: "Can you actually get this? What are the constraints?" (e.g., award availability, waitlists, regional limits, spend requirements)
+    - Academic research: "Has this replicated? In what populations/settings? What's the effect size?"
+    - Medical research: "What do clinical guidelines say vs. individual studies? Contraindications? Patient population limits?"
+    - Financial research: "What are the risks? Has this strategy worked in different market conditions? Survivorship bias?"
+    - Technical research: "Does this work at scale? What are the operational constraints? Maintenance burden?"
+    Log applicability findings with `log-finding` — these become the caveats and limitations that make the report trustworthy. A report that says "X is the best option" without noting that X is hard to access, has a 3-month window, or only works for a specific profile is giving bad advice dressed up as research. **Why this matters:** the most common failure mode in research reports is stating findings as universally actionable when they have significant real-world constraints. An expert reader spots this immediately; the applicability pass catches it before they have to.
+15. **Synthesis — writer → reviewer → verifier flow.** You are the supervisor. Do NOT write the report yourself. Instead, orchestrate the three synthesis agents:
+
+    **a. Hand off to synthesis-writer.** Spawn a `synthesis-writer` subagent with:
+    - The session directory path (absolute)
+    - The research brief (scope, questions, completeness criteria)
+    - A key findings summary (your condensed findings from `log-finding` entries)
+    - Gap analysis (unresolved gaps and acknowledged limitations)
+    - Audit stats (from step 12) for the Methodology section
+    The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
+
+    **b. Route to synthesis-reviewer.** Once the writer returns, spawn a `synthesis-reviewer` subagent with:
+    - The session directory path
+    - The path to `report.md`
+    - The research brief (for completeness checking)
+    The reviewer audits the draft against five dimensions (contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity) and returns a structured issues list.
+
+    **c. Writer revision pass.** If the reviewer found high or medium severity issues, spawn the `synthesis-writer` again with:
+    - The original handoff materials
+    - The reviewer's issues list as revision instructions
+    The writer revises `report.md` and returns an updated manifest.
+
+    **d. Trigger research-verifier.** Spawn a `research-verifier` subagent (can run in parallel with step b) with:
+    - The session directory path
+    - The path to `report.md`
+    - The research brief
+    The verifier identifies 5-10 load-bearing claims, checks them against primary sources via web search, and returns a verification report with verdicts (confirmed/contradicted/partially supported/unverifiable).
+
+    **e. Final writer revision.** If the verifier found contradicted or partially supported claims, spawn the `synthesis-writer` one more time with:
+    - The original handoff materials
+    - The verifier's high-priority issues as revision instructions
+    The writer incorporates corrections and writes the final `report.md`.
+
+    **f. Deliver the report.** Read the final `report.md` and present it to the user. Note any unresolved verifier issues or reviewer concerns in your delivery.
 
 ---
 
@@ -189,7 +234,7 @@ Logging gap for Q6 empirical evidence.
 
 **Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
-**Theme-based synthesis with verified citations.** Findings group by research question, not by source — "Three studies converge on X [1][3][7]" rather than source-by-source summaries. Every factual claim must be verified against the corresponding on-disk `.md` file before inclusion. Claims that cannot be verified against a source get dropped. Contradictions between sources are flagged explicitly with context (methodology differences, recency, evidence quality). Every claim carries an inline citation [1], [2].
+**Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer, synthesis-reviewer, and research-verifier agents (see step 15 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). The synthesis-reviewer audits for contradictions, unsupported claims, and missing caveats. The research-verifier checks load-bearing claims against primary sources. Your job is to prepare the handoff materials, route feedback between agents, and deliver the final report. **Why delegate:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context focused entirely on integration and narrative, producing better synthesis than you could in a degraded context.
 
 **Garbled PDF awareness.** Converted PDFs may have scrambled text around tables, figures, and equations. When text looks garbled, note the limitation and seek the information elsewhere rather than interpreting nonsense.
 
@@ -252,11 +297,16 @@ Logging gap for Q6 empirical evidence.
 
 You are the supervisor. Run CLI commands (`${CLAUDE_SKILL_DIR}/search`, `${CLAUDE_SKILL_DIR}/download`, `${CLAUDE_SKILL_DIR}/enrich`, `${CLAUDE_SKILL_DIR}/state`) directly — no subagent needed for structured JSON output. Use **parallel Bash calls** (multiple in one response) for simultaneous searches across different providers.
 
-Use the **Agent tool** to spawn subagents only for **unstructured text comprehension** — tasks where reading full paper text would bloat your context:
+Use the **Agent tool** to spawn subagents for:
 
+**Reading & comprehension** (tasks where reading full paper text would bloat your context):
 - **Source summarization:** Spawn **one reader subagent per source** and run them in parallel. Each subagent reads one paper, writes a summary to `notes/`, and returns a compact manifest entry. One-to-one assignment ensures the agent devotes full attention to that paper's methodology, evidence, and nuance — batching papers into a single agent degrades comprehension quality.
-- **Claim verification:** Subagent checks draft claims against source files, returns a verification table.
 - **Relevance assessment:** Subagent deep-reads a source and rates relevance.
+
+**Synthesis & verification** (step 15 in the workflow):
+- **`synthesis-writer`** (Opus) — drafts and revises `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
+- **`synthesis-reviewer`** (Sonnet) — audits the draft for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, and citation integrity. Returns a structured issues list. Spawn via Agent tool and include the `agents/synthesis-reviewer.md` prompt.
+- **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns a verification report with per-claim verdicts. Spawn via Agent tool and include the `agents/research-verifier.md` prompt.
 
 **After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Run them in a single bash loop — no grep needed, the JSON output confirms each update:
 
@@ -268,7 +318,7 @@ done
 
 **Wait for all reader subagents before logging findings or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Log findings only after you have read and integrated the reader notes.
 
-**Keep in your context:** Research brief, search strategy, coverage assessment, contradiction analysis, synthesis, report writing, and all CLI output parsing.
+**Keep in your context:** Research brief, search strategy, coverage assessment, contradiction analysis, agent orchestration, and all CLI output parsing. Synthesis and report writing are delegated to agents — keep only the handoff materials and agent return manifests.
 
 For small sessions (< 10 sources), do everything inline. Delegation is a scaling strategy, not a requirement.
 
