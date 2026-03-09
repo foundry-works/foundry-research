@@ -58,6 +58,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to-md", action="store_true", default=False, help="Convert PDFs to markdown")
     parser.add_argument("--parallel", type=int, default=1, help="Parallel downloads for batch mode")
 
+    # Recovery
+    parser.add_argument("--retry-sync", action="store_true", default=False,
+                        help="Re-sync sources that have on-disk files but pending status in state.db")
+
     # Metadata flags
     parser.add_argument("--type", default="academic", choices=["academic", "web", "reddit", "code"],
                         help="Source type")
@@ -71,11 +75,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _sync_to_state(session_dir: str, result: dict) -> None:
-    """Sync content_file and pdf_file paths to state.db after download."""
+def _sync_to_state(session_dir: str, result: dict) -> bool:
+    """Sync content_file and pdf_file paths to state.db after download.
+
+    Returns True if sync succeeded, False on any failure.
+    """
     source_id = result.get("source_id")
     if not source_id:
-        return
+        return False
 
     update = {}
     if result.get("content_file"):
@@ -88,7 +95,7 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
         update["quality"] = result["quality"]
 
     if not update:
-        return
+        return True  # nothing to sync is not a failure
 
     try:
         import subprocess
@@ -109,18 +116,85 @@ def _sync_to_state(session_dir: str, result: dict) -> None:
         ]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            # Check returncode first — non-zero means state.py crashed
+            if proc.returncode != 0:
+                log(f"_sync_to_state failed for {source_id}: process exited {proc.returncode}, "
+                    f"stderr={proc.stderr[:200]}", level="warn")
+                return False
             # Parse response — all commands exit 0, errors conveyed in JSON body
             try:
                 resp = json.loads(proc.stdout) if proc.stdout else {}
                 if resp.get("status") == "error":
                     errors = resp.get("errors", [])
                     log(f"_sync_to_state failed for {source_id}: {errors}", level="warn")
+                    return False
             except json.JSONDecodeError:
                 log(f"_sync_to_state got non-JSON response for {source_id}: {proc.stdout[:200]}", level="warn")
+                return False
         finally:
             os.unlink(tmp_path)
     except Exception as e:
         log(f"Failed to sync download to state: {e}", level="warn")
+        return False
+
+    return True
+
+
+def _handle_retry_sync(session_dir: str) -> None:
+    """Re-sync sources that have on-disk files but still show pending in state.db."""
+    import sqlite3
+
+    db_path = os.path.join(session_dir, "state.db")
+    if not os.path.exists(db_path):
+        error_response(["No state.db found"], error_code="no_state")
+        return
+
+    sources_dir = os.path.join(session_dir, "sources")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # Find sources still pending
+    rows = conn.execute(
+        "SELECT id FROM sources WHERE status = 'pending' OR status IS NULL"
+    ).fetchall()
+    conn.close()
+
+    synced = []
+    failed = []
+    skipped = []
+
+    for row in rows:
+        sid = row["id"]
+        # Check for on-disk files
+        md_file = os.path.join(sources_dir, f"{sid}.md")
+        pdf_file = os.path.join(sources_dir, f"{sid}.pdf")
+
+        result = {"source_id": sid}
+        has_file = False
+
+        if os.path.exists(md_file):
+            result["content_file"] = f"sources/{sid}.md"
+            has_file = True
+        if os.path.exists(pdf_file):
+            result["pdf_file"] = f"sources/{sid}.pdf"
+            result["pdf_downloaded"] = True
+            has_file = True
+
+        if not has_file:
+            skipped.append(sid)
+            continue
+
+        if _sync_to_state(session_dir, result):
+            synced.append(sid)
+        else:
+            failed.append(sid)
+
+    success_response({
+        "synced": synced,
+        "failed": failed,
+        "skipped": skipped,
+        "total_pending": len(rows),
+    })
 
 
 def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: dict) -> None:
@@ -239,6 +313,11 @@ def main() -> None:
     session_dir = get_session_dir(args)
     config = get_config(session_dir)
 
+    # Handle --retry-sync: re-sync sources with on-disk files but pending DB status
+    if args.retry_sync:
+        _handle_retry_sync(session_dir)
+        return
+
     # Sources directory
     sources_dir = os.path.join(session_dir, "sources")
     metadata_dir = os.path.join(sources_dir, "metadata")
@@ -257,17 +336,29 @@ def main() -> None:
             client.close()
 
     # Sync downloaded file paths to state.db (if session has state tracking)
+    sync_failures = []
     if os.path.exists(os.path.join(session_dir, "state.db")):
         if isinstance(result, list):
             for r in result:
-                _sync_to_state(session_dir, r)
+                if not _sync_to_state(session_dir, r):
+                    sid = r.get("source_id")
+                    if sid:
+                        sync_failures.append(sid)
         else:
-            _sync_to_state(session_dir, result)
+            if not _sync_to_state(session_dir, result):
+                sid = result.get("source_id")
+                if sid:
+                    sync_failures.append(sid)
 
     # Output result
+    extra = {}
+    if sync_failures:
+        extra["sync_failures"] = sync_failures
     if isinstance(result, list):
-        success_response(result, total_results=len(result))
+        success_response(result, total_results=len(result), **extra)
     else:
+        if sync_failures:
+            result["sync_failures"] = sync_failures
         success_response(result)
 
 

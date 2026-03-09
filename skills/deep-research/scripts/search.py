@@ -68,6 +68,10 @@ def main() -> None:
 
     provider = args.provider
 
+    # Treat empty/whitespace-only query the same as missing
+    if args.query is not None and args.query.strip() == "":
+        args.query = None
+
     # Validate that --query or an identifier flag is present
     if args.query is None and not _has_identifier_flag(provider, extra_args):
         id_flags = _IDENTIFIER_FLAGS.get(provider, set())
