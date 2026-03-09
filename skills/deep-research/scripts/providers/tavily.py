@@ -95,6 +95,7 @@ def _search(client, args, api_key: str) -> dict:
             "url": r.get("url", ""),
             "abstract": r.get("content", ""),
             "type": "web",
+            "provider": "tavily",
         }
         year = _parse_year(r.get("published_date"))
         if year:
@@ -149,6 +150,7 @@ def _extract(client, args, api_key: str) -> dict:
             "abstract": r.get("raw_content", "")[:500],
             "raw_content": r.get("raw_content", ""),
             "type": "web",
+            "provider": "tavily",
         })
 
     if failed:

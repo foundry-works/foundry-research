@@ -54,10 +54,11 @@
 
 ## Phase 3: Deploy & Smoke Test
 
-- [ ] Run `./copy-to-skills.sh` to deploy to `.claude/`
-- [ ] End-to-end: `state init` → `search --provider tavily --query "..."` → verify in `state summary`
-- [ ] Parallel test: run tavily + semantic_scholar searches in same batch → both succeed
-- [ ] Verify no regressions: existing providers still work (`search --provider semantic_scholar --query "test"`)
+- [x] Run `./copy-to-skills.sh` to deploy to `.claude/`
+- [x] End-to-end: `state init` → `search --provider tavily --query "..."` → verify in `state summary`
+- [x] Parallel test: run tavily + semantic_scholar searches in same batch → both succeed
+- [x] Verify no regressions: existing providers still work (`search --provider semantic_scholar --query "test"`)
+- [x] **Bugfix:** Added `"provider": "tavily"` to each source dict in search and extract results — without it, sources showed `provider: "unknown"` in state.db
 
 ---
 
