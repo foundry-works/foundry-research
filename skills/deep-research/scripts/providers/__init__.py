@@ -12,6 +12,7 @@ _REGISTRY: dict[str, str] = {
     "github": "providers.github",
     "reddit": "providers.reddit",
     "hn": "providers.hn",
+    "tavily": "providers.tavily",
     "yfinance": "providers.yfinance_provider",
     "edgar": "providers.edgar",
 }

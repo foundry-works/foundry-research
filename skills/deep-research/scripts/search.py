@@ -24,6 +24,7 @@ _IDENTIFIER_FLAGS = {
     "edgar": {"ticker", "accession"},
     "yfinance": {"ticker"},
     "arxiv": {"list_categories"},
+    "tavily": {"urls"},
 }
 
 
