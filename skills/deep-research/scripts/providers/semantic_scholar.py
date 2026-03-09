@@ -11,6 +11,8 @@ BASE_URL = "https://api.semanticscholar.org/graph/v1"
 RECS_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 
 PAPER_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,tldr,venue,journal"
+# Citations, references, and recommendations endpoints don't support tldr
+CITATION_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,venue,journal"
 AUTHOR_FIELDS = "authorId,name,paperCount,citationCount,hIndex"
 
 
@@ -94,7 +96,7 @@ def _keyword_search(client, args) -> dict:
 def _forward_citations(client, args) -> dict:
     paper_id = args.cited_by
     url = f"{BASE_URL}/paper/{paper_id}/citations"
-    params = {"fields": PAPER_FIELDS, "limit": args.limit, "offset": args.offset}
+    params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
 
     resp = client.get(url, params=params)
     if resp.status_code != 200:
@@ -123,7 +125,7 @@ def _forward_citations(client, args) -> dict:
 def _backward_references(client, args) -> dict:
     paper_id = args.references
     url = f"{BASE_URL}/paper/{paper_id}/references"
-    params = {"fields": PAPER_FIELDS, "limit": args.limit, "offset": args.offset}
+    params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
 
     resp = client.get(url, params=params)
     if resp.status_code != 200:
@@ -152,7 +154,7 @@ def _backward_references(client, args) -> dict:
 def _get_recommendations(client, args) -> dict:
     paper_id = args.recommendations
     url = f"{RECS_URL}/forpaper/{paper_id}"
-    params = {"fields": PAPER_FIELDS, "limit": args.limit}
+    params = {"fields": CITATION_FIELDS, "limit": args.limit}
 
     resp = client.get(url, params=params)
     if resp.status_code != 200:

@@ -16,7 +16,7 @@ The user provides a session directory path (e.g., `./deep-research-topic/`). All
 
 | File | Purpose |
 |------|---------|
-| `state.db` | SQLite database — searches, sources, findings, gaps, brief, stats |
+| `state.db` | SQLite database — searches, sources, findings, gaps, brief, metrics |
 | `report.md` | Final report (citation density, structure) |
 | `journal.md` | Reasoning trail |
 | `sources/metadata/*.json` | Per-source quality, retraction status |
@@ -44,9 +44,6 @@ sqlite3 SESSION_DIR/state.db "SELECT text, resolved FROM gaps"
 
 # Get research brief
 sqlite3 SESSION_DIR/state.db "SELECT content FROM brief LIMIT 1"
-
-# Get stats
-sqlite3 SESSION_DIR/state.db "SELECT key, value FROM stats"
 
 # Check table schema
 sqlite3 SESSION_DIR/state.db ".schema"
@@ -76,10 +73,10 @@ Use `Read` for report.md, journal.md, and metadata JSON files. Use `Glob` to cou
 ### 2. Source Quality (20%)
 
 **Metrics:**
-- **Citation distribution:** Are sources over-concentrated on one provider? Gini coefficient of provider distribution.
+- **Provider concentration:** Are sources over-concentrated on one provider? Query: `SELECT provider, count(*) FROM sources GROUP BY provider`. If any single provider accounts for >60% of sources, flag it — the bibliography is shaped by that provider's corpus biases. Score penalty: -1 for >60%, -2 for >75%.
 - **Recency:** Fraction of sources from the last 3 years vs. total.
 - **Download success rate:** Sources with `.md` files vs. total sources tracked.
-- **PDF quality:** Fraction of metadata files with `"quality": "degraded"`.
+- **PDF quality:** Check quality in state.db (`SELECT id, quality, status FROM sources`). Values are `"ok"`, `"abstract_only"`, `"degraded"`, `"mismatched"`, or NULL. NULL with status `"pending"` means never downloaded (expected). NULL with status `"downloaded"` may indicate a sync issue — cross-check against the metadata JSON file (`sources/metadata/src-NNN.json`, field `"quality"`). Don't report NULL pending sources as a quality problem.
 - **Metadata completeness:** Fraction of sources with enriched metadata (DOI, venue, authors).
 - **Retractions:** Any sources flagged as retracted? (instant score cap at 5 if retracted source is cited without noting retraction)
 
@@ -123,7 +120,7 @@ Use `Read` for report.md, journal.md, and metadata JSON files. Use `Glob` to cou
 ### 5. Process Efficiency (10%)
 
 **Metrics:**
-- **Search efficiency ratio:** Sources tracked vs. total search results returned. Very low ratio (<5%) suggests unfocused searching.
+- **Search efficiency ratio:** Sources ingested vs. total search results returned. Use `ingested_count` from the searches table (not `result_count`, which stores the API's total hit count — e.g., OpenAlex may report 4055 total hits but only 20 were ingested). Query: `SELECT provider, query, result_count, ingested_count FROM searches`. If `ingested_count` is NULL, fall back to counting sources linked to that search. Very low ratio (<5%) suggests unfocused searching, but note this metric is only meaningful when `ingested_count` is populated.
 - **State management usage:** Were `log-finding`, `log-gap`, `set-brief` actually used? Check for non-empty findings/gaps/brief in state.db.
 - **Journal usage:** Does journal.md exist and contain substantive reasoning (>500 chars), or is it empty/boilerplate?
 

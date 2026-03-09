@@ -151,7 +151,7 @@ def _log_search_to_state(args, result: dict) -> None:
             sys.executable, state_script, "log-search",
             "--provider", args.provider,
             "--query", args.query or "",
-            "--result-count", str(result.get("total_results", 0)),
+            "--result-count", str(ingested_count),
             "--ingested-count", str(ingested_count),
             "--session-dir", args.session_dir,
         ]

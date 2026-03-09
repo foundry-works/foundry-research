@@ -59,6 +59,11 @@ def search(args) -> dict:
         if args.mesh:
             return _mesh_search(client, args, api_key)
         if args.query:
+            if not args.query.strip():
+                return error_response(
+                    ["Query is required for PubMed keyword search"],
+                    error_code="missing_query",
+                )
             return _keyword_search(client, args, api_key)
         return error_response(
             ["No search mode specified. Use --query, --cited-by, --references, --related, --mesh, or --fetch-pmids."],
