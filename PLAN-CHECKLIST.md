@@ -1,72 +1,75 @@
-# Plan Checklist: Deep Research Skill Improvements (Round 3)
+# Plan Checklist: Tavily CLI Search Provider
 
-## Phase A: High-Impact Bug Fixes
+## Phase 1: Provider Implementation
 
-### 3.1 Fix `tldr` field in Semantic Scholar citation/reference endpoints
-**File:** `skills/deep-research/scripts/providers/semantic_scholar.py`
-- [x] Add `CITATION_FIELDS` constant (line ~14, same as `PAPER_FIELDS` minus `tldr`)
-- [x] Update `_forward_citations` (line 97) to use `CITATION_FIELDS`
-- [x] Update `_backward_references` (line 126) to use `CITATION_FIELDS`
-- [x] Update `_get_recommendations` (line 155) to use `CITATION_FIELDS`
-- [ ] **Verify:** `--cited-by <paper_id>` → HTTP 200 with results
-- [ ] **Verify:** `--references <paper_id>` → HTTP 200 with results
-- [ ] **Verify:** `--recommendations <paper_id>` → HTTP 200 with results
+### 1.1 Create `providers/tavily.py`
+**File:** `skills/deep-research/scripts/providers/tavily.py`
+- [ ] `add_arguments(parser)` — register all flags (`--search-depth`, `--topic`, `--include-domains`, `--exclude-domains`, `--urls`, `--extract-depth`, `--include-raw-content`)
+- [ ] `search(args)` dispatcher — route to `_search` or `_extract` based on `args.urls`
+- [ ] `_search(client, args)` — POST to `/search`, map results to source dicts with `title`/`url`/`abstract`/`type`
+- [ ] `_extract(client, args)` — POST to `/extract`, map results, report failures
+- [ ] Auth guard — check `TAVILY_API_KEY` env var, return `error_response` if missing
+- [ ] Cap `max_results` at 20 with warning log
+- [ ] Empty query guard — reject empty/whitespace `args.query` in search mode
 
-### 3.2 Reject empty queries in PubMed provider
-**File:** `skills/deep-research/scripts/providers/pubmed.py`
-- [x] Add empty/whitespace query guard in keyword search path
-- [x] Return `error_response(["Query is required..."], error_code="missing_query")`
-- [ ] **Verify:** `--query ""` → error response, not results
-- [ ] **Verify:** `--query "   "` → error response (whitespace-only)
-- [ ] **Verify:** normal `--query "uncanny valley"` still works
+### 1.2 Register provider
+**File:** `skills/deep-research/scripts/providers/__init__.py`
+- [ ] Add `"tavily": "providers.tavily"` to `_REGISTRY`
+
+### 1.3 Verify
+- [ ] `search --provider tavily --query "uncanny valley" --limit 5` → JSON with results, `status: ok`
+- [ ] `search --provider tavily --query "uncanny valley" --topic news --limit 5` → results with `published_date`
+- [ ] `search --provider tavily --urls https://en.wikipedia.org/wiki/Uncanny_valley` → extracted content
+- [ ] `search --provider tavily --query ""` → error response, not results
+- [ ] Without `TAVILY_API_KEY` set → clear auth error message
+- [ ] With active session: verify search logged in `state.db` searches table
+- [ ] With active session: verify sources auto-added to `state.db` sources table with `type: web`
 
 ---
 
-## Phase B: SKILL.md Gap Tracking
+## Phase 2: SKILL.md Updates
 
-### 3.3 Strengthen gap tracking enforcement
+### 2.1 Provider table
 **File:** `skills/deep-research/SKILL.md`
-- [x] Revise step 10 — add consequence/rationale for gap logging
-- [x] Add "gap-driven refinement" paragraph in "What Good Research Looks Like"
-- [x] Keep changes concise — explain the *why*, don't bloat
+- [ ] Add `tavily` row to provider table with description and key flags
+
+### 2.2 Quick-Start workflow
+- [ ] Merge steps 3-4 — remove "SEPARATE batch from academic" workaround
+- [ ] Web search is now just another `--provider tavily` call, safe to parallelize
+
+### 2.3 Native Tools table
+- [ ] Remove `Tavily search / WebSearch` row
+- [ ] Add note that WebSearch remains available as fallback
+
+### 2.4 Parallel search resilience
+- [ ] Simplify paragraph — CLI-based Tavily eliminates the mixed-batch problem
+- [ ] Keep general principle about exit 0 for CLI tools
+
+### 2.5 Provider Selection Guidance
+- [ ] Update `General technical` to reference `--provider tavily`
+- [ ] Update `When unsure` to reference `--provider tavily`
+- [ ] Update `Comparative questions` if it mentions Tavily/WebSearch
 
 ---
 
-## Phase C: Remaining Round 2 Bug Fixes (already implemented)
+## Phase 3: Deploy & Smoke Test
 
-### 1.1 Fix silent `_sync_to_state` failures
-**File:** `skills/deep-research/scripts/download.py`
-- [x] Parse subprocess stdout as JSON after `subprocess.run()`
-- [x] Check for `"status": "error"` in parsed response
-- [x] Log warning with source_id and error details on failure
-- [x] Handle `JSONDecodeError` gracefully (log and continue)
-
-### 1.2 Fix `download-pending` to check disk
-**File:** `skills/deep-research/scripts/state.py`
-- [x] After DB query, check if `sources/{id}.md` or `sources/{id}.pdf` exists on disk
-- [x] Exclude sources with existing on-disk content from pending list
-- [x] Log count of filtered sources
-
-### 1.4 Scale download timeout with batch size
-**File:** `skills/deep-research/scripts/state.py`
-- [x] Replace `timeout=600` with `max(600, len(batch) * 30)`
-- [x] Add `--timeout` flag to `download-pending` parser
-- [x] Log calculated timeout
+- [ ] Run `./copy-to-skills.sh` to deploy to `.claude/`
+- [ ] End-to-end: `state init` → `search --provider tavily --query "..."` → verify in `state summary`
+- [ ] Parallel test: run tavily + semantic_scholar searches in same batch → both succeed
+- [ ] Verify no regressions: existing providers still work (`search --provider semantic_scholar --query "test"`)
 
 ---
 
-## Applied (from prior rounds)
+## History (prior rounds, all complete)
 
 - [x] 1.3 Record ingested count in searches table (search.py)
 - [x] 2.1 Citation chasing guidance (SKILL.md)
 - [x] 2.2 Query refinement guidance (SKILL.md)
 - [x] 2.3 Journal.md guidance (SKILL.md)
-
----
-
-## Post-Implementation
-
-- [ ] Run `./copy-to-skills.sh` to deploy changes to `.claude/`
-- [ ] Smoke-test: `state init` → `search --provider semantic_scholar --cited-by <id>` → `download-pending`
-- [ ] Verify no regressions in normal keyword search
-- [ ] Re-read SKILL.md for internal consistency
+- [x] 3.1 Fix `tldr` field in Semantic Scholar citation endpoints
+- [x] 3.2 Reject empty queries in PubMed provider
+- [x] 3.3 Strengthen gap tracking enforcement in SKILL.md
+- [x] 1.1 Fix silent `_sync_to_state` failures in download.py
+- [x] 1.2 Fix `download-pending` to check disk
+- [x] 1.4 Scale download timeout with batch size

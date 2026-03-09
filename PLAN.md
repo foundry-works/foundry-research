@@ -1,115 +1,129 @@
-# Plan: Deep Research Skill Improvements (Round 3)
+# Plan: Tavily CLI Search Provider
 
-**Source:** `deep-research-uncanny-valley/REFLECTION.md` (session score: 6.8/10)
-**Supersedes:** Previous PLAN.md (round 2 — Phase 2 SKILL.md changes applied, Phase 1 bug fixes still open)
-**Goal:** Fix remaining infrastructure bugs and tighten SKILL.md where the agent still deviated despite existing guidance.
+**Source:** `deep-research-uncanny-valley/REFLECTION.md` finding: "Journal mentions Tavily but no Tavily searches appear in state.db — web searches aren't being logged, making them invisible to quality assessment."
 
----
-
-## Status of Prior Plan Items
-
-### Applied (Round 2, Phase 2)
-- 2.1 Citation chasing guidance — added to SKILL.md
-- 2.2 Query refinement guidance — expanded in SKILL.md
-- 2.3 Journal.md guidance — strengthened in SKILL.md
-
-### Still Open (Round 2, Phase 1)
-- 1.1 Fix `_sync_to_state` in download.py — **still broken** (confirmed: 1 source with NULL quality in reflection)
-- 1.2 Fix `download-pending` disk check — still open
-- 1.3 Record ingested count — **FIXED** in search.py (confirmed in MEMORY.md)
-- 1.4 Scale download timeout — still open
+**Supersedes:** Previous PLAN.md (round 3 items are complete or tracked in PLAN-CHECKLIST.md history)
 
 ---
 
-## New Items from Round 3 Reflection
+## Problem
 
-### 3.1 Fix `tldr` field bug in Semantic Scholar citation/reference endpoints
+Web searches via Tavily MCP or native WebSearch bypass the CLI `search` pipeline and don't get logged to state.db. This causes:
+- Web searches invisible to `audit`, `summary`, and provider diversity metrics
+- Agent needs a "SEPARATE batch from academic" workaround in SKILL.md (fragile, often ignored)
+- Provider diversity underreported — if 30% of research came from web sources, the audit doesn't know
 
-**Files:** `skills/deep-research/scripts/providers/semantic_scholar.py`
+## Solution
 
-**Problem:** `PAPER_FIELDS` (line 13) includes `tldr`, which is supported by the main `/paper/search` endpoint but causes HTTP 400 on `/paper/{id}/citations`, `/paper/{id}/references`, and the recommendations endpoint. This broke citation chasing entirely — the highest-precision search strategy available. The agent couldn't chase references from Kätsyri (437 cites) or Saygin (435 cites), forcing it into more keyword searches that returned 57% off-topic noise.
-
-**Why this is the highest-impact fix:** Citation chasing has near-zero noise because relevance is pre-filtered by citing/cited authors. A paper that cites Kätsyri (2015) is almost certainly about the uncanny valley; a keyword match for "uncanny valley cross-cultural" pulls in food science. Fixing this single bug addresses both the "citation chasing failed" finding and much of the "off-topic noise" finding from the reflection.
-
-**Fix:** Create a `CITATION_FIELDS` constant without `tldr`:
-```python
-CITATION_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,venue,journal"
-```
-Use it in:
-- `_forward_citations` (line 97) — `params = {"fields": CITATION_FIELDS, ...}`
-- `_backward_references` (line 126) — same
-- `_get_recommendations` (line 155) — same
-
-**Validation:** Run `--cited-by`, `--references`, and `--recommendations` against a known paper ID and confirm HTTP 200 with results.
-
-### 3.2 Reject empty queries in PubMed provider
-
-**File:** `skills/deep-research/scripts/providers/pubmed.py`
-
-**Problem:** A search with an empty query string was accepted and returned 20 essentially random recent papers. This is a silent failure — the agent believes it searched PubMed but got noise instead.
-
-**Fix:** In the keyword search path, check for empty/whitespace-only `args.query` before calling the API. Return:
-```python
-error_response(["Query is required for PubMed keyword search"], error_code="missing_query")
-```
-
-**Why this matters:** Prevents wasted download bandwidth and off-topic contamination. The reflection flagged one PubMed search with an empty query that returned 20 irrelevant results.
-
-**Validation:** `--query ""` and `--query "   "` should both return error responses.
-
-### 3.3 Strengthen gap tracking enforcement in SKILL.md
-
-**File:** `skills/deep-research/SKILL.md`
-
-**Problem:** Step 10 says to log gaps, line 196 says "You **must** call `log-gap`", but the agent logged zero gaps. The guidance exists but the agent skipped it because gap logging felt like bookkeeping rather than a research strategy. The *why* is missing — the agent doesn't understand that gaps drive targeted follow-up searches.
-
-**Fix:** Two changes:
-1. **Step 10 in Quick-Start Workflow:** Add a consequence — "gaps logged here drive targeted follow-up searches in the next round; an empty gaps table means the audit can't identify weak coverage areas."
-2. **New paragraph in "What Good Research Looks Like":** Explain the gap-driven refinement loop: log gap → targeted search for that specific gap → resolve gap. Frame it as a research strategy, not bookkeeping. Include a concrete example: "After reader agents flag that Q2 has only 1 supporting source, log-gap → search specifically for that subtopic → resolve-gap when coverage improves."
-
-**Why this matters:** Gap tracking is the mechanism for systematic coverage improvement. Without it, weak areas stay weak because the agent has no structured way to identify and address them.
+Add `tavily` as a CLI search provider. It hits the Tavily REST API directly, flows through the same `search.py` dispatch → auto-log search → auto-add sources pipeline as academic providers. No special handling, no MCP dependency.
 
 ---
 
-## Remaining Open Items from Round 2
+## API Reference
 
-### 1.1 Fix silent `_sync_to_state` failures in download.py
+**Tavily Search** — `POST https://api.tavily.com/search`
+- Auth: `Authorization: Bearer {TAVILY_API_KEY}`
+- Body (JSON): `query` (required), `search_depth` (basic|advanced), `max_results` (1-20, default 10), `topic` (general|news), `include_domains` (list), `exclude_domains` (list), `include_raw_content` (bool)
+- Response: `{ "query": str, "results": [...], "response_time": float }`
+- Result item: `{ "title": str, "url": str, "content": str, "score": float, "raw_content"?: str, "published_date"?: str }`
 
-(Unchanged from round 2 plan — still needs implementation)
-
-**File:** `scripts/download.py` — `_sync_to_state` function
-**Fix:** Parse JSON response from subprocess stdout, check for `"status": "error"`, log warnings on failure.
-
-### 1.2 Fix `download-pending` to check disk, not just DB
-
-(Unchanged from round 2 plan — still needs implementation)
-
-**File:** `scripts/state.py` — `cmd_download_pending`
-**Fix:** After DB query, filter out sources where `sources/{id}.md` or `sources/{id}.pdf` exists on disk.
-
-### 1.4 Scale `download-pending --auto-download` timeout with batch size
-
-(Unchanged from round 2 plan — still needs implementation)
-
-**File:** `scripts/state.py` — `_auto_download_pending`
-**Fix:** `max(600, len(batch) * 30)` seconds, with `--timeout` flag for manual override.
+**Tavily Extract** — `POST https://api.tavily.com/extract`
+- Body (JSON): `urls` (required, list of strings), `extract_depth` (basic|advanced)
+- Response: `{ "results": [...], "failed_results": [...] }`
+- Result item: `{ "url": str, "raw_content": str }`
 
 ---
 
-## Sequencing
+## Implementation
 
+### 1. New file: `skills/deep-research/scripts/providers/tavily.py`
+
+Follow the reddit.py/hn.py pattern:
+
+**`add_arguments(parser)`:**
+- `--search-depth` — `basic` (default) or `advanced` (deeper scraping, slower)
+- `--topic` — `general` (default) or `news` (enables `published_date`)
+- `--include-domains` — nargs="+", restrict to specific domains
+- `--exclude-domains` — nargs="+", exclude specific domains
+- `--urls` — nargs="+", switch to extract mode
+- `--extract-depth` — `basic` (default) or `advanced`, only used with `--urls`
+- `--include-raw-content` — include full page content in search results (off by default)
+
+**`search(args)` dispatch:**
 ```
-Phase A (high-impact bug fixes — do first):
-  3.1  Fix tldr field in Semantic Scholar citation endpoints
-  3.2  Reject empty PubMed queries
-
-Phase B (SKILL.md — quick):
-  3.3  Strengthen gap tracking enforcement
-
-Phase C (remaining round 2 bugs — independent of A/B):
-  1.1  Fix _sync_to_state error handling
-  1.2  Fix download-pending disk check
-  1.4  Scale download timeout
+if args.urls → _extract(client, args)
+elif args.query → _search(client, args)
+else → error_response("missing_query")
 ```
 
-Phases A, B, and C are independent and can be parallelized.
+**`_search(client, args)` → search mode:**
+- POST to `https://api.tavily.com/search`
+- Headers: `Authorization: Bearer {api_key}`, `Content-Type: application/json`
+- Map `args.limit` → `max_results` (cap at 20, Tavily's max)
+- Map results to source dicts:
+  ```python
+  {
+      "title": r["title"],
+      "url": r["url"],
+      "abstract": r["content"],  # Tavily's AI-extracted snippet
+      "type": "web",
+      "year": _parse_year(r.get("published_date")),  # news topic only
+  }
+  ```
+- Return via `success_response(results, total_results=len(results), provider="tavily", query=args.query)`
+
+**`_extract(client, args)` → extract mode:**
+- POST to `https://api.tavily.com/extract`
+- Return extracted content with titles derived from URLs
+- Map to source dicts with `type: "web"`
+- Include failed URLs in response envelope
+
+**Auth:** Read `TAVILY_API_KEY` from `os.environ`. Return `error_response(["TAVILY_API_KEY environment variable not set"], error_code="auth_missing")` if absent.
+
+**Rate limiting:** `{"api.tavily.com": 1.0}` — conservative default. Tavily allows 100 req/min on production keys, but we're typically I/O-bound on context processing, not API calls.
+
+**Error handling:** Tavily returns standard HTTP errors. Map 401 → `auth_failed`, 429 → `rate_limited`, 4xx/5xx → `api_error`. The `http_client.py` retry logic handles 429/500/502/503 automatically.
+
+### 2. Registry: `skills/deep-research/scripts/providers/__init__.py`
+
+Add one line: `"tavily": "providers.tavily"` to `_REGISTRY`.
+
+### 3. SKILL.md updates
+
+**Provider table** (line ~36): Add row:
+```
+| `tavily` | Web search, news, non-academic sources | `--search-depth`, `--topic`, `--include-domains`, `--exclude-domains`, `--urls` (extract mode) |
+```
+
+**Quick-Start step 3-4** (lines ~17-18): Merge into a single step. Remove the "SEPARATE batch from academic" workaround. Tavily now goes through CLI and is safe to parallelize with academic providers:
+```
+3. Search providers (parallel OK — use `--provider tavily` for web, academic providers for papers)
+```
+Remove old step 4 entirely.
+
+**Native Tools table** (line ~133): Remove the `Tavily search / WebSearch` row. Add a note: "WebSearch is available as a fallback if Tavily API key is not configured."
+
+**"Parallel search resilience" paragraph** (line ~155): Simplify — the warning about mixing CLI and web tool calls is no longer needed since Tavily is now CLI-based. Keep the general principle about exit codes.
+
+**Provider Selection Guidance** (line ~210): Update `When unsure` and `General technical` bullets to reference `--provider tavily` instead of "Tavily/WebSearch".
+
+---
+
+## Design Decisions
+
+**Why direct REST instead of tavily Python SDK?** The API is 2 endpoints. `http_client.py` already provides rate limiting, retries, and connection pooling. No new dependency.
+
+**Why include extract mode?** Tavily's AI-powered extraction is often higher quality than basic HTML scraping for complex pages. Having it as `--urls` keeps it in the same provider without a separate tool. The `download` tool's `--url --type web` is still available for non-Tavily extraction.
+
+**Why cap max_results at 20 instead of mapping to --limit directly?** Tavily's API hard-limits at 20. Passing a higher value returns an error. We silently cap and log a warning so the agent doesn't need to remember the limit.
+
+**Why not pass include_raw_content by default?** Raw content per result can be 10-50KB. With 20 results, that's up to 1MB of text loaded into the agent's context via the JSON response. The default `content` field (Tavily's AI-extracted snippet) is sufficient for triage. Full content should be fetched via `download` or `--include-raw-content` on targeted searches.
+
+---
+
+## What doesn't change
+
+- `search.py` — generic dispatch, auto-tracking already handle new providers
+- `state.py` — no schema changes; `type: "web"` already supported
+- `_shared/` — http_client, output work as-is
+- `download.py` — unchanged; web source download via `--url --type web` still works for full content
