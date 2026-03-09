@@ -14,17 +14,16 @@ You are a research agent with access to academic databases, web search, and stru
 
 1. `${CLAUDE_SKILL_DIR}/state init --query "..." --session-dir ./deep-research-{topic}` — creates session (auto-discovers session dir for all subsequent commands)
 2. Draft research brief → `${CLAUDE_SKILL_DIR}/state set-brief --from-json FILE` (or `--from-stdin`). **Must include 3-7 concrete research questions.** Example brief JSON: `{"scope": "Impact of X on Y", "questions": ["Q1: What mechanisms drive X?", "Q2: How does Y vary across populations?", "Q3: What interventions exist?"], "completeness_criteria": "Each question answered with 2+ sources"}`
-3. Search academic providers (parallel OK within academic). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, plan at least one web search round.
-4. Search web providers (Tavily/WebSearch — **SEPARATE batch from academic**)
-5. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
-6. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs
-6b. **Post-download quality check:** Run `${CLAUDE_SKILL_DIR}/state sources` and spot-check that quality values are populated (not all 0.0). If the bulk download didn't sync quality back to state.db, check individual metadata files (`sources/metadata/src-NNN.json`) for the `quality` field and manually `${CLAUDE_SKILL_DIR}/state set-quality --id src-NNN --quality 0.0` for any degraded sources. This prevents citing garbled PDFs as deeply-read sources.
-7. Spawn reader subagents for downloaded papers (parallel, one source per agent)
-8. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`
-9. `${CLAUDE_SKILL_DIR}/state log-finding` — **log 2-3 findings per research question**, not just one. Each finding should capture a distinct insight, mechanism, or evidence thread. The findings tracker should reflect the depth of your actual synthesis — if your report section has 4 paragraphs of analysis but only 1 finding logged, you're under-tracking. Findings logged here drive the audit's coverage assessment and make `summary` actionable across context compressions.
-10. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas, and you lose the structured mechanism for systematic improvement — you're left guessing which questions need more work instead of having a concrete list.
-11. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
-12. Write report — use audit stats in Methodology section
+3. Search providers (parallel OK — use `--provider tavily` for web, academic providers for papers). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, include `--provider tavily` searches alongside academic providers.
+4. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
+5. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download` — download all sources with DOIs
+5b. **Post-download quality check:** Run `${CLAUDE_SKILL_DIR}/state sources` and spot-check that quality values are populated (not all 0.0). If the bulk download didn't sync quality back to state.db, check individual metadata files (`sources/metadata/src-NNN.json`) for the `quality` field and manually `${CLAUDE_SKILL_DIR}/state set-quality --id src-NNN --quality 0.0` for any degraded sources. This prevents citing garbled PDFs as deeply-read sources.
+6. Spawn reader subagents for downloaded papers (parallel, one source per agent)
+7. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`
+8. `${CLAUDE_SKILL_DIR}/state log-finding` — **log 2-3 findings per research question**, not just one. Each finding should capture a distinct insight, mechanism, or evidence thread. The findings tracker should reflect the depth of your actual synthesis — if your report section has 4 paragraphs of analysis but only 1 finding logged, you're under-tracking. Findings logged here drive the audit's coverage assessment and make `summary` actionable across context compressions.
+9. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas, and you lose the structured mechanism for systematic improvement — you're left guessing which questions need more work instead of having a concrete list.
+10. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
+11. Write report — use audit stats in Methodology section
 
 ---
 
@@ -41,6 +40,7 @@ You are a research agent with access to academic databases, web search, and stru
 | `biorxiv` | Bio/med preprints (bioRxiv + medRxiv) | `--server`, `--days`, `--category`, `--list-categories` |
 | `github` | Repos, code, implementations | `--type`, `--min-stars`, `--repo` |
 | `reddit` | Community discussion, experiences | `--subreddits`, `--post-url` |
+| `tavily` | Web search, news, non-academic sources | `--search-depth`, `--topic`, `--include-domains`, `--exclude-domains`, `--urls` (extract mode) |
 | `hn` | Technical commentary | `--story-id`, `--tags` |
 | `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
 | `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
@@ -130,9 +130,10 @@ audit --strict                    # exit non-zero if warnings found
 
 | Tool | Use for |
 |------|---------|
-| Tavily search / `WebSearch` | Web search (Tavily preferred; WebSearch as fallback) |
 | `Read` | Source files, notes, journal, metadata |
 | `Write` / `Edit` | journal.md, notes/, report.md |
+
+> **Note:** `WebSearch` is available as a fallback if `TAVILY_API_KEY` is not configured. Prefer `--provider tavily` for web searches — it flows through the CLI pipeline and gets logged to state.db automatically.
 
 ---
 
@@ -152,7 +153,7 @@ audit --strict                    # exit non-zero if warnings found
 
 **CLI output format.** All CLI commands (`state`, `search`, `download`, `enrich`) exit 0 and return a JSON envelope: `{"status": "ok", "results": {...}}` on success, `{"status": "error", "errors": [...]}` on failure. Never grep for plain-text strings like "SUCCESS" or "FAILED" — parse the JSON `"status"` field instead. When running batch loops, just call each command directly; the JSON output is self-describing and doesn't need grep-based validation.
 
-**Parallel search resilience.** **Never mix CLI searches (`${CLAUDE_SKILL_DIR}/search`) with web tool calls (Tavily/WebSearch) in the same parallel batch.** Claude Code cancels all sibling tool calls when any parallel call returns non-zero. CLI searches always exit 0 (errors are in the JSON envelope), so they are safe to parallelize with each other. But Tavily/WebSearch failures can still cancel siblings, so keep them in a separate response block.
+**Parallel search resilience.** All CLI searches (`${CLAUDE_SKILL_DIR}/search`) exit 0 with errors in the JSON envelope, so they are safe to parallelize — including `--provider tavily` alongside academic providers. Run as many parallel searches as needed in a single response block.
 
 **Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `${CLAUDE_SKILL_DIR}/enrich` fills venue, authors, and retraction status for key papers.
 
@@ -207,8 +208,8 @@ Logging gap for Q6 empirical evidence.
 - **Any academic topic** — arXiv covers far more than just CS and physics. It spans 20 groups including mathematics, statistics, economics, quantitative finance, quantitative biology, electrical engineering, and all physics subdisciplines. Use `--list-categories` to discover the right category codes for your topic, then `--categories` to filter.
 - **CS / ML / AI** — arXiv + Semantic Scholar; add OpenAlex for breadth
 - **Cross-cutting** (e.g., "ML for drug safety") — start broad (Semantic Scholar + PubMed), narrow based on results
-- **General technical** — Tavily/WebSearch + GitHub; Reddit/HN for community perspective
-- **When unsure** — search at least 3 providers including one web source (Tavily/WebSearch). Many topics have significant non-academic coverage that academic-only searches miss.
+- **General technical** — `--provider tavily` + GitHub; Reddit/HN for community perspective
+- **When unsure** — search at least 3 providers including one web source (`--provider tavily`). Many topics have significant non-academic coverage that academic-only searches miss.
 - **Need implementations / benchmarks** — GitHub
 - **Latest preprints** — arXiv (broad academic), bioRxiv (bio/med)
 - **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort

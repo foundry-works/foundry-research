@@ -31,24 +31,24 @@
 
 ### 2.1 Provider table
 **File:** `skills/deep-research/SKILL.md`
-- [ ] Add `tavily` row to provider table with description and key flags
+- [x] Add `tavily` row to provider table with description and key flags
 
 ### 2.2 Quick-Start workflow
-- [ ] Merge steps 3-4 — remove "SEPARATE batch from academic" workaround
-- [ ] Web search is now just another `--provider tavily` call, safe to parallelize
+- [x] Merge steps 3-4 — remove "SEPARATE batch from academic" workaround
+- [x] Web search is now just another `--provider tavily` call, safe to parallelize
 
 ### 2.3 Native Tools table
-- [ ] Remove `Tavily search / WebSearch` row
-- [ ] Add note that WebSearch remains available as fallback
+- [x] Remove `Tavily search / WebSearch` row
+- [x] Add note that WebSearch remains available as fallback
 
 ### 2.4 Parallel search resilience
-- [ ] Simplify paragraph — CLI-based Tavily eliminates the mixed-batch problem
-- [ ] Keep general principle about exit 0 for CLI tools
+- [x] Simplify paragraph — CLI-based Tavily eliminates the mixed-batch problem
+- [x] Keep general principle about exit 0 for CLI tools
 
 ### 2.5 Provider Selection Guidance
-- [ ] Update `General technical` to reference `--provider tavily`
-- [ ] Update `When unsure` to reference `--provider tavily`
-- [ ] Update `Comparative questions` if it mentions Tavily/WebSearch
+- [x] Update `General technical` to reference `--provider tavily`
+- [x] Update `When unsure` to reference `--provider tavily`
+- [x] Update `Comparative questions` if it mentions Tavily/WebSearch (N/A — doesn't mention it)
 
 ---
 
