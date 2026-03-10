@@ -917,66 +917,124 @@ def cmd_download_pending(args):
 
 
 def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None) -> None:
-    """Auto-download all pending sources by calling download.py --from-json."""
+    """Auto-download all pending sources with fallback across identifier types.
+
+    Runs up to 3 passes: DOI cascade first, then pdf_url for failures, then url.
+    Each pass only includes sources that still lack on-disk content, so successful
+    downloads from earlier passes aren't retried.
+    """
     import subprocess
     import tempfile
 
-    # Build batch list — prefer DOI, then pdf_url, then url
-    batch = []
-    for item in pending:
-        entry = {"source_id": item["source_id"]}
-        if item.get("doi"):
-            entry["doi"] = item["doi"]
-        elif item.get("pdf_url"):
-            entry["pdf_url"] = item["pdf_url"]
-        elif item.get("url"):
-            entry["url"] = item["url"]
-            entry["type"] = "web"
-        else:
-            log(f"Skipping {item['source_id']} — no DOI, URL, or PDF URL", level="warn")
-            continue
-        batch.append(entry)
+    sources_dir = os.path.join(session_dir, "sources")
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    download_script = os.path.join(scripts_dir, "download.py")
 
-    if not batch:
+    # Build per-source identifier lists for fallback ordering
+    # Each source gets a list of (identifier_type, entry_dict) to try in order
+    source_attempts: dict[str, list[tuple[str, dict]]] = {}
+    for item in pending:
+        sid = item["source_id"]
+        attempts = []
+        if item.get("doi"):
+            attempts.append(("doi", {"source_id": sid, "doi": item["doi"]}))
+        if item.get("pdf_url"):
+            attempts.append(("pdf_url", {"source_id": sid, "pdf_url": item["pdf_url"]}))
+        if item.get("url"):
+            attempts.append(("url", {"source_id": sid, "url": item["url"], "type": "web"}))
+        if not attempts:
+            log(f"Skipping {sid} — no DOI, URL, or PDF URL", level="warn")
+            continue
+        source_attempts[sid] = attempts
+
+    if not source_attempts:
         success_response({"downloaded": 0, "message": "No downloadable sources found"})
         return
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
-        json.dump(batch, tf)
-        tmp_path = tf.name
+    all_results = []
+    remaining = set(source_attempts.keys())
+    max_pass = max(len(v) for v in source_attempts.values())
 
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    download_script = os.path.join(scripts_dir, "download.py")
-    cmd = [
-        sys.executable, download_script,
-        "--from-json", tmp_path,
-        "--to-md",
-        "--session-dir", session_dir,
-        "--parallel", str(parallel),
-    ]
+    for pass_idx in range(max_pass):
+        if not remaining:
+            break
 
-    timeout = timeout_override if timeout_override is not None else max(600, len(batch) * 30)
-    log(f"Downloading {len(batch)} sources (parallel={parallel}, timeout: {timeout}s)...")
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
-        os.unlink(tmp_path)
+        # Build batch for this pass: take the next untried identifier for each remaining source
+        batch = []
+        for sid in list(remaining):
+            attempts = source_attempts[sid]
+            if pass_idx < len(attempts):
+                batch.append(attempts[pass_idx][1])
 
-        if result.returncode == 0:
-            try:
-                output = json.loads(result.stdout.decode())
-                success_response(output)
-                return
-            except json.JSONDecodeError:
-                pass
-        stderr_text = result.stderr.decode()[-500:] if result.stderr else ""
-        error_response([f"Download subprocess failed (exit {result.returncode}): {stderr_text}"])
-    except subprocess.TimeoutExpired:
-        os.unlink(tmp_path)
-        error_response([f"Download timed out after {timeout} seconds"])
-    except Exception as e:
-        if os.path.exists(tmp_path):
+        if not batch:
+            break
+
+        id_type = source_attempts[next(iter(remaining))][pass_idx][0] if batch else "?"
+        if pass_idx > 0:
+            log(f"Fallback pass {pass_idx + 1}: retrying {len(batch)} sources via {id_type}")
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
+            json.dump(batch, tf)
+            tmp_path = tf.name
+
+        cmd = [
+            sys.executable, download_script,
+            "--from-json", tmp_path,
+            "--to-md",
+            "--session-dir", session_dir,
+            "--parallel", str(parallel),
+        ]
+
+        timeout = timeout_override if timeout_override is not None else max(600, len(batch) * 30)
+        log(f"Downloading {len(batch)} sources (parallel={parallel}, timeout: {timeout}s)...")
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout)
             os.unlink(tmp_path)
-        error_response([f"Download failed: {e}"])
+
+            if result.returncode == 0:
+                try:
+                    output = json.loads(result.stdout.decode())
+                    # Collect results from this pass
+                    if isinstance(output, dict) and "results" in output:
+                        pass_results = output["results"]
+                    elif isinstance(output, list):
+                        pass_results = output
+                    else:
+                        pass_results = []
+                    all_results.extend(pass_results if isinstance(pass_results, list) else [pass_results])
+                except json.JSONDecodeError:
+                    pass
+            else:
+                stderr_text = result.stderr.decode()[-500:] if result.stderr else ""
+                log(f"Download pass {pass_idx + 1} failed (exit {result.returncode}): {stderr_text}", level="warn")
+        except subprocess.TimeoutExpired:
+            os.unlink(tmp_path)
+            log(f"Download pass {pass_idx + 1} timed out after {timeout}s", level="warn")
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            log(f"Download pass {pass_idx + 1} failed: {e}", level="warn")
+
+        # Check which sources now have files on disk — remove them from remaining
+        newly_resolved = set()
+        for sid in remaining:
+            on_disk = any(
+                os.path.exists(os.path.join(sources_dir, f"{sid}{ext}"))
+                for ext in (".md", ".pdf")
+            )
+            if on_disk:
+                newly_resolved.add(sid)
+        remaining -= newly_resolved
+
+        if newly_resolved:
+            log(f"Pass {pass_idx + 1}: {len(newly_resolved)} sources downloaded, {len(remaining)} still pending")
+
+    success_response({
+        "downloaded": len(source_attempts) - len(remaining),
+        "failed": len(remaining),
+        "failed_sources": sorted(remaining),
+        "total": len(source_attempts),
+    })
 
 
 # ---------------------------------------------------------------------------
