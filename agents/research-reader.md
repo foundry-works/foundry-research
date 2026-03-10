@@ -21,9 +21,9 @@ A directive from the supervisor containing:
 ## How to read the source
 
 1. Read `sources/metadata/{source_id}.json` first for structured metadata (title, authors, abstract, venue, year, citation count, quality)
-2. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
-3. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
-4. For degraded quality sources (check metadata), note limitations and rely primarily on the abstract
+2. **Check the `quality` field before proceeding.** If `quality` is `"mismatched"` or `"degraded"`, note this prominently in your summary and do not treat the content as authoritative for the stated paper. For mismatched sources, the on-disk content likely belongs to a different paper than the metadata describes — flag this so the supervisor knows the source can't be cited for its intended purpose. For degraded sources, rely primarily on the abstract from metadata.
+3. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
+4. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
 
 ## File paths
 

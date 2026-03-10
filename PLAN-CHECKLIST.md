@@ -25,25 +25,25 @@ Track implementation progress for each item in PLAN.md.
 
 ## Tier 2: Medium impact, medium effort
 
-- [ ] **4. Gap resolution guidance**
-  - [ ] Strengthen SKILL.md step 13: minimum 2 searches per gap
-  - [ ] Add: "gap resolved after 1 search is suspicious"
-  - [ ] Add: journal entry for unresolvable gaps must cite specific failed strategies
-  - [ ] _(Optional)_ Add `state gap-search-plan` command
+- [x] **4. Gap resolution guidance**
+  - [x] Strengthen SKILL.md step 14: minimum 2 searches per gap
+  - [x] Add: "gap resolved after 1 search is suspicious"
+  - [x] Add: journal entry for unresolvable gaps must cite specific failed strategies
+  - [x] Add `state gap-search-plan` command
 
-- [ ] **5. Citation chasing guidance**
-  - [ ] Add SKILL.md guidance: prefer `--references` for foundational papers
-  - [ ] Add SKILL.md guidance: `--cited-by` returns recency-biased results for high-citation papers
-  - [ ] _(Optional)_ Add `--min-citations N` filter to `semantic_scholar.py` `--cited-by` mode
+- [x] **5. Citation chasing guidance**
+  - [x] Add SKILL.md guidance: prefer `--references` for foundational papers
+  - [x] Add SKILL.md guidance: `--cited-by` returns recency-biased results for high-citation papers
+  - [x] `--min-citations N` filter already existed in `semantic_scholar.py`; added to SKILL.md provider table and citation chasing guidance
 
-- [ ] **6. Reader allocation guidance**
-  - [ ] Add SKILL.md triage step after downloads: rank by citation count + title relevance
-  - [ ] Add: check `quality` field before spawning readers (skip mismatched/degraded)
-  - [ ] Update `agents/research-reader.md`: check source quality metadata before reading
+- [x] **6. Reader allocation guidance**
+  - [x] Add SKILL.md triage step after downloads (new step 8): rank by citation count + title relevance
+  - [x] Add: check `quality` field before spawning readers (skip mismatched/degraded)
+  - [x] Update `agents/research-reader.md`: check source quality metadata before reading
 
-- [ ] **7. Synthesis handoff**
-  - [ ] Update SKILL.md step 15a: include raw `state summary` findings array in writer handoff
-  - [ ] Add: writer should see structured findings with source IDs, not just narrative
+- [x] **7. Synthesis handoff**
+  - [x] Update SKILL.md step 16a: include raw `state summary` findings array in writer handoff
+  - [x] Add: writer should see both structured findings with source IDs AND narrative summary
 
 ---
 
@@ -69,4 +69,4 @@ Track implementation progress for each item in PLAN.md.
 ## Verify only (no new code)
 
 - [ ] **Content mismatch detection** — confirm `download.py:756-770` sets `quality: "mismatched"` correctly
-- [ ] **Reader quality check** — add quality gate to `agents/research-reader.md`
+- [x] **Reader quality check** — add quality gate to `agents/research-reader.md`

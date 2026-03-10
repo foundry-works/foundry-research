@@ -551,6 +551,101 @@ def cmd_resolve_gap(args):
     success_response({"id": args.gap_id, "status": "resolved"})
 
 
+def cmd_gap_search_plan(args):
+    """Generate suggested search queries for each open gap based on gap text, question, and existing sources."""
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    # Load open gaps
+    gaps = [dict(r) for r in conn.execute(
+        "SELECT * FROM gaps WHERE session_id = ? AND status = 'open' ORDER BY id", (sid,)
+    ).fetchall()]
+
+    if not gaps:
+        conn.close()
+        return success_response({"gaps": [], "message": "No open gaps found"})
+
+    # Load existing searches to avoid suggesting duplicates
+    existing_searches = conn.execute(
+        "SELECT provider, query FROM searches WHERE session_id = ?", (sid,)
+    ).fetchall()
+    existing_queries = {(r["provider"], r["query"].lower()) for r in existing_searches}
+
+    # Load sources with high citation counts for citation chase suggestions
+    sources = conn.execute(
+        "SELECT id, title, citation_count, provider FROM sources WHERE session_id = ? AND citation_count > 0 ORDER BY citation_count DESC LIMIT 50",
+        (sid,)
+    ).fetchall()
+
+    conn.close()
+
+    plans = []
+    for gap in gaps:
+        gap_text = gap["text"]
+        gap_question = gap.get("question", "")
+
+        # Extract key terms from gap text (words 4+ chars, excluding common words)
+        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
+                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
+                      "after", "before", "which", "their", "there", "where", "when", "what",
+                      "coverage", "insufficient", "sources", "evidence", "research", "needs"}
+        gap_terms = [w.strip(".,;:()\"'") for w in gap_text.lower().split()
+                     if len(w.strip(".,;:()\"'")) >= 4 and w.strip(".,;:()\"'") not in stop_words]
+
+        # Extract terms from the associated question too
+        q_terms = []
+        if gap_question:
+            q_terms = [w.strip(".,;:()\"'") for w in gap_question.lower().split()
+                       if len(w.strip(".,;:()\"'")) >= 4 and w.strip(".,;:()\"'") not in stop_words]
+
+        all_terms = list(dict.fromkeys(gap_terms + q_terms))  # dedupe, preserve order
+
+        suggested_searches = []
+
+        # Suggestion 1: keyword search using gap + question terms
+        if len(all_terms) >= 2:
+            keyword_query = " ".join(all_terms[:5])
+            suggested_searches.append({
+                "type": "keyword",
+                "query": keyword_query,
+                "providers": ["semantic_scholar", "pubmed", "openalex"],
+                "rationale": f"Keyword search using terms from gap text and question"
+            })
+
+        # Suggestion 2: find most-cited source related to this gap for citation chase
+        gap_relevant_sources = []
+        for s in sources:
+            title_lower = (s["title"] or "").lower()
+            if any(t in title_lower for t in all_terms[:3]):
+                gap_relevant_sources.append(dict(s))
+        if gap_relevant_sources:
+            best = gap_relevant_sources[0]
+            suggested_searches.append({
+                "type": "citation_chase",
+                "source_id": best["id"],
+                "source_title": best["title"],
+                "citation_count": best["citation_count"],
+                "rationale": f"Citation chase on most-cited relevant source ({best['citation_count']} citations)"
+            })
+
+        # Mark which suggestions are already covered by existing searches
+        for s in suggested_searches:
+            if s["type"] == "keyword":
+                s["already_searched"] = any(
+                    s["query"].lower() in eq for _, eq in existing_queries
+                )
+
+        plans.append({
+            "gap_id": gap["id"],
+            "gap_text": gap_text,
+            "question": gap_question,
+            "key_terms": all_terms[:8],
+            "suggested_searches": suggested_searches,
+        })
+
+    success_response({"gaps": plans, "total_open": len(plans)})
+
+
 def cmd_searches(args):
     conn = _connect(args.session_dir, readonly=True)
     sid = _get_session_id(conn)
@@ -1431,6 +1526,10 @@ def main():
     p.add_argument("--gap-id", required=True)
     p.add_argument("--session-dir", **_sd)
 
+    # gap-search-plan
+    p = sub.add_parser("gap-search-plan")
+    p.add_argument("--session-dir", **_sd)
+
     # searches
     p = sub.add_parser("searches")
     p.add_argument("--session-dir", **_sd)
@@ -1550,6 +1649,7 @@ def main():
         "log-finding": cmd_log_finding,
         "log-gap": cmd_log_gap,
         "resolve-gap": cmd_resolve_gap,
+        "gap-search-plan": cmd_gap_search_plan,
         "searches": cmd_searches,
         "sources": cmd_sources,
         "get-source": cmd_get_source,
