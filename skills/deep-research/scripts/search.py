@@ -148,6 +148,9 @@ def main() -> None:
     # Auto-add sources to session state
     _add_sources_to_state(args, result)
 
+    # Auto-append structured journal entry
+    _append_journal_entry(args, result, search_mode)
+
 
 def _detect_search_mode(provider: str, args) -> str:
     """Detect the search mode from provider-specific flags."""
@@ -255,6 +258,49 @@ def _add_sources_to_state(args, result: dict) -> None:
                 os.unlink(tmp_path)
     except Exception as e:
         log(f"Failed to auto-add sources to state: {e}", level="warn")
+
+
+def _append_journal_entry(args, result: dict, search_mode: str) -> None:
+    """Auto-append a structured journal entry to journal.md after each search."""
+    try:
+        journal_path = os.path.join(args.session_dir, "journal.md")
+        if not os.path.exists(journal_path):
+            return
+
+        provider = args.provider
+        query = args.query or "(identifier-based)"
+        results_list = result.get("results", {})
+        if isinstance(results_list, dict):
+            results_list = results_list.get("results", [])
+        if not isinstance(results_list, list):
+            results_list = []
+
+        count = len(results_list)
+
+        # Extract top 3 result titles
+        top_titles = []
+        for r in results_list[:3]:
+            if isinstance(r, dict):
+                title = r.get("title", "")
+                if title:
+                    top_titles.append(title[:80])
+
+        # Format entry
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        entry = f"\n## Search: {provider} ({search_mode}) — {timestamp}\n"
+        entry += f"**Query:** {query}\n"
+        entry += f"**Results:** {count}\n"
+        if top_titles:
+            entry += "**Top results:**\n"
+            for t in top_titles:
+                entry += f"- {t}\n"
+        entry += "\n"
+
+        with open(journal_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+    except Exception as e:
+        log(f"Failed to append journal entry: {e}", level="debug")
 
 
 if __name__ == "__main__":

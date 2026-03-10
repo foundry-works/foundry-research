@@ -1214,6 +1214,7 @@ def cmd_audit(args):
     downloaded = []
     with_notes = []
     degraded = []
+    mismatched = []
     no_content = []
     abstract_only = []
 
@@ -1248,6 +1249,8 @@ def cmd_audit(args):
         if isinstance(quality, str):
             if quality == "degraded":
                 degraded.append(sid_val)
+            elif quality == "mismatched":
+                mismatched.append(sid_val)
             elif quality == "abstract_only":
                 abstract_only.append(sid_val)
         elif isinstance(quality, (int, float)) and quality < 0.5:
@@ -1309,6 +1312,8 @@ def cmd_audit(args):
     warnings = []
     for sid_val in degraded:
         warnings.append(f"{sid_val} has degraded PDF quality — do not claim deep reading")
+    for sid_val in mismatched:
+        warnings.append(f"{sid_val} has mismatched content — downloaded PDF may be wrong paper")
     for sq in sparse_questions:
         warnings.append(f'"{sq["question"]}" has insufficient coverage ({sq["finding_count"]} findings)')
     if no_content:
@@ -1322,6 +1327,7 @@ def cmd_audit(args):
     log(f"Sources downloaded:  {total_downloaded}  ({', '.join(downloaded[:10])}{'...' if len(downloaded) > 10 else ''})")
     log(f"Sources with notes:  {deep_reads}  ({', '.join(with_notes[:10])}{'...' if len(with_notes) > 10 else ''})")
     log(f"Degraded quality:    {len(degraded)}  ({', '.join(degraded)})" if degraded else "Degraded quality:    0")
+    log(f"Mismatched content:  {len(mismatched)}  ({', '.join(mismatched)})" if mismatched else "Mismatched content:  0")
     log(f"Abstract only:       {len(abstract_only)}  ({', '.join(abstract_only)})" if abstract_only else "Abstract only:       0")
     log(f"Findings logged:     {len(findings)}")
     log(f"Open gaps:           {len(gaps)}")
@@ -1347,6 +1353,7 @@ def cmd_audit(args):
         "sources_with_notes": deep_reads,
         "notes_ids": with_notes,
         "degraded_quality": degraded,
+        "mismatched_content": mismatched,
         "abstract_only": abstract_only,
         "no_content": no_content,
         "findings_count": len(findings),
@@ -1370,6 +1377,344 @@ def cmd_audit(args):
         )
     else:
         success_response(audit_result)
+
+
+# ---------------------------------------------------------------------------
+# triage
+# ---------------------------------------------------------------------------
+
+def cmd_triage(args):
+    """Rank sources by citation count × title-keyword-relevance to brief questions.
+
+    Outputs sources in priority tiers (high/medium/low) to help the agent decide
+    which sources to download and read. Sources with quality issues are flagged.
+    """
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    # Load brief questions for relevance scoring
+    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
+    question_terms: list[str] = []
+    if brief_row:
+        questions = json.loads(brief_row["questions"])
+        # Extract keywords from all questions
+        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
+                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
+                      "after", "before", "which", "their", "there", "where", "when", "what",
+                      "should", "would", "could", "will", "best", "many", "much"}
+        for q in questions:
+            q_text = q if isinstance(q, str) else q.get("text", str(q))
+            for w in q_text.lower().split():
+                w = w.strip(".,;:()\"'?!")
+                if len(w) >= 4 and w not in stop_words:
+                    question_terms.append(w)
+        question_terms = list(dict.fromkeys(question_terms))  # dedupe, preserve order
+
+    # Load all sources
+    sources = [dict(r) for r in conn.execute(
+        "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
+        "content_file, pdf_file, is_read, quality, status "
+        "FROM sources WHERE session_id = ? ORDER BY id", (sid,)
+    ).fetchall()]
+    conn.close()
+
+    # Score each source
+    import math
+    scored = []
+    for s in sources:
+        title = (s.get("title") or "").lower()
+
+        # Title keyword relevance: count how many brief-question keywords appear in title
+        keyword_hits = sum(1 for t in question_terms if t in title) if question_terms else 0
+        # Normalize to 0-1 range (cap at 5 hits)
+        relevance = min(keyword_hits / 5.0, 1.0) if question_terms else 0.5
+
+        # Citation score: log-scale to avoid extreme skew from mega-cited papers
+        cite_count = s.get("citation_count") or 0
+        cite_score = math.log1p(cite_count)  # log(1 + citations)
+
+        # Combined score: citation_score × (0.5 + relevance)
+        # The 0.5 base ensures even 0-relevance papers with high citations get some score
+        score = cite_score * (0.5 + relevance)
+
+        # Check on-disk status
+        sources_dir = os.path.join(args.session_dir, "sources")
+        has_content = False
+        if s.get("content_file"):
+            has_content = os.path.exists(os.path.join(args.session_dir, s["content_file"]))
+        if not has_content:
+            for ext in (".md", ".pdf"):
+                if os.path.exists(os.path.join(sources_dir, f"{s['id']}{ext}")):
+                    has_content = True
+                    break
+
+        quality = s.get("quality")
+        quality_flag = None
+        if isinstance(quality, str) and quality in ("mismatched", "degraded", "empty"):
+            quality_flag = quality
+        elif isinstance(quality, (int, float)) and quality < 0.5:
+            quality_flag = "low_score"
+
+        scored.append({
+            "id": s["id"],
+            "title": s.get("title", ""),
+            "citation_count": cite_count,
+            "keyword_hits": keyword_hits,
+            "score": round(score, 2),
+            "has_content": has_content,
+            "is_read": bool(s.get("is_read")),
+            "quality_flag": quality_flag,
+            "doi": s.get("doi"),
+            "type": s.get("type", "academic"),
+        })
+
+    # Sort by score descending
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    # Assign priority tiers
+    top_n = getattr(args, "top", 25)
+    for i, item in enumerate(scored):
+        if item["quality_flag"]:
+            item["priority"] = "skip"
+        elif i < top_n // 2:
+            item["priority"] = "high"
+        elif i < top_n:
+            item["priority"] = "medium"
+        else:
+            item["priority"] = "low"
+
+    # Summary stats
+    high = [s for s in scored if s["priority"] == "high"]
+    medium = [s for s in scored if s["priority"] == "medium"]
+    skip = [s for s in scored if s["priority"] == "skip"]
+
+    success_response({
+        "sources": scored,
+        "summary": {
+            "total": len(scored),
+            "high_priority": len(high),
+            "medium_priority": len(medium),
+            "skip_quality": len(skip),
+            "brief_keywords_used": len(question_terms),
+        },
+        "top_sources": [s["id"] for s in scored if s["priority"] in ("high", "medium")],
+    })
+
+
+# ---------------------------------------------------------------------------
+# recover-failed
+# ---------------------------------------------------------------------------
+
+def cmd_recover_failed(args):
+    """Identify high-priority failed downloads and retry via alternative channels.
+
+    Finds sources that failed download (have no on-disk content) with either
+    high citation count or high title relevance, then attempts recovery via:
+    1. CORE search by title (institutional repository versions)
+    2. Tavily search for "title pdf" (preprint servers, author pages)
+    3. DOI landing page as web source (at least get abstract + visible text)
+    """
+    import subprocess
+
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    # Load brief questions for relevance scoring
+    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
+    question_terms: list[str] = []
+    if brief_row:
+        questions = json.loads(brief_row["questions"])
+        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
+                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
+                      "after", "before", "which", "their", "there", "where", "when", "what",
+                      "should", "would", "could", "will", "best", "many", "much"}
+        for q in questions:
+            q_text = q if isinstance(q, str) else q.get("text", str(q))
+            for w in q_text.lower().split():
+                w = w.strip(".,;:()\"'?!")
+                if len(w) >= 4 and w not in stop_words:
+                    question_terms.append(w)
+        question_terms = list(dict.fromkeys(question_terms))
+
+    # Find sources without on-disk content
+    rows = conn.execute(
+        """SELECT id, title, doi, url, pdf_url, citation_count, type
+           FROM sources WHERE session_id = ?
+           AND content_file IS NULL AND pdf_file IS NULL
+           ORDER BY citation_count DESC NULLS LAST""",
+        (sid,)
+    ).fetchall()
+    conn.close()
+
+    sources_dir = os.path.join(args.session_dir, "sources")
+    failed = []
+    for r in rows:
+        sid_val = r["id"]
+        on_disk = any(
+            os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}"))
+            for ext in (".md", ".pdf")
+        )
+        if on_disk:
+            continue
+
+        title = (r["title"] or "").lower()
+        cite_count = r["citation_count"] or 0
+        keyword_hits = sum(1 for t in question_terms if t in title) if question_terms else 0
+
+        # High-priority: citation_count > threshold OR high title relevance
+        min_citations = getattr(args, "min_citations", 50)
+        is_high_priority = cite_count >= min_citations or keyword_hits >= 2
+
+        if is_high_priority:
+            failed.append({
+                "source_id": sid_val,
+                "title": r["title"],
+                "doi": r["doi"],
+                "url": r["url"],
+                "citation_count": cite_count,
+                "keyword_hits": keyword_hits,
+            })
+
+    if not failed:
+        success_response({"recovered": 0, "message": "No high-priority failed sources found"})
+        return
+
+    log(f"Found {len(failed)} high-priority failed sources for recovery")
+
+    scripts_dir = os.path.dirname(os.path.abspath(__file__))
+    search_script = os.path.join(scripts_dir, "search.py")
+    download_script = os.path.join(scripts_dir, "download.py")
+
+    recovered = []
+    still_failed = []
+
+    for item in failed:
+        sid_val = item["source_id"]
+        title = item["title"] or ""
+        doi = item.get("doi")
+
+        # Check if recovered by a previous pass in this loop
+        if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+            recovered.append(sid_val)
+            continue
+
+        # Strategy 1: CORE search by title
+        success = False
+        if title:
+            try:
+                cmd = [
+                    sys.executable, search_script,
+                    "--provider", "core",
+                    "--query", title[:200],
+                    "--limit", "3",
+                    "--session-dir", args.session_dir,
+                ]
+                proc = subprocess.run(cmd, capture_output=True, timeout=30)
+                if proc.returncode == 0:
+                    try:
+                        result = json.loads(proc.stdout.decode())
+                        results = result.get("results", {})
+                        if isinstance(results, dict):
+                            results = results.get("results", [])
+                        # Look for a result with a download_url or pdf_url
+                        for r in (results if isinstance(results, list) else []):
+                            pdf_url = r.get("pdf_url") or r.get("download_url")
+                            if pdf_url:
+                                # Try downloading this PDF
+                                dl_cmd = [
+                                    sys.executable, download_script,
+                                    "--pdf-url", pdf_url,
+                                    "--source-id", sid_val,
+                                    "--to-md",
+                                    "--session-dir", args.session_dir,
+                                ]
+                                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
+                                if dl_proc.returncode == 0:
+                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                                        log(f"Recovered {sid_val} via CORE")
+                                        recovered.append(sid_val)
+                                        success = True
+                                        break
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            except (subprocess.TimeoutExpired, Exception) as e:
+                log(f"CORE recovery failed for {sid_val}: {e}", level="debug")
+
+        if success:
+            continue
+
+        # Strategy 2: Tavily search for "title pdf"
+        if title:
+            try:
+                cmd = [
+                    sys.executable, search_script,
+                    "--provider", "tavily",
+                    "--query", f'"{title[:150]}" pdf',
+                    "--limit", "3",
+                    "--session-dir", args.session_dir,
+                ]
+                proc = subprocess.run(cmd, capture_output=True, timeout=30)
+                if proc.returncode == 0:
+                    try:
+                        result = json.loads(proc.stdout.decode())
+                        results = result.get("results", {})
+                        if isinstance(results, dict):
+                            results = results.get("results", [])
+                        for r in (results if isinstance(results, list) else []):
+                            url = r.get("url", "")
+                            if url and url.lower().endswith(".pdf"):
+                                dl_cmd = [
+                                    sys.executable, download_script,
+                                    "--pdf-url", url,
+                                    "--source-id", sid_val,
+                                    "--to-md",
+                                    "--session-dir", args.session_dir,
+                                ]
+                                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
+                                if dl_proc.returncode == 0:
+                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                                        log(f"Recovered {sid_val} via Tavily PDF search")
+                                        recovered.append(sid_val)
+                                        success = True
+                                        break
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            except (subprocess.TimeoutExpired, Exception) as e:
+                log(f"Tavily recovery failed for {sid_val}: {e}", level="debug")
+
+        if success:
+            continue
+
+        # Strategy 3: DOI landing page as web source
+        if doi:
+            try:
+                doi_url = f"https://doi.org/{doi}"
+                dl_cmd = [
+                    sys.executable, download_script,
+                    "--url", doi_url,
+                    "--source-id", sid_val,
+                    "--type", "web",
+                    "--session-dir", args.session_dir,
+                ]
+                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
+                if dl_proc.returncode == 0:
+                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                        log(f"Recovered {sid_val} via DOI landing page")
+                        recovered.append(sid_val)
+                        success = True
+            except (subprocess.TimeoutExpired, Exception) as e:
+                log(f"DOI landing page recovery failed for {sid_val}: {e}", level="debug")
+
+        if not success:
+            still_failed.append(sid_val)
+
+    success_response({
+        "recovered": len(recovered),
+        "recovered_sources": recovered,
+        "still_failed": len(still_failed),
+        "still_failed_sources": still_failed,
+        "attempted": len(failed),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -1628,6 +1973,16 @@ def main():
     p.add_argument("--strict", action="store_true", help="Exit non-zero if audit finds warnings")
     p.add_argument("--session-dir", **_sd)
 
+    # triage
+    p = sub.add_parser("triage")
+    p.add_argument("--top", type=int, default=25, help="Number of sources to mark as high+medium priority (default 25)")
+    p.add_argument("--session-dir", **_sd)
+
+    # recover-failed
+    p = sub.add_parser("recover-failed")
+    p.add_argument("--min-citations", type=int, default=50, help="Minimum citations to consider high-priority (default 50)")
+    p.add_argument("--session-dir", **_sd)
+
     args = parser.parse_args()
 
     if args.quiet:
@@ -1667,6 +2022,8 @@ def main():
         "get-metric": cmd_get_metric,
         "download-pending": cmd_download_pending,
         "audit": cmd_audit,
+        "triage": cmd_triage,
+        "recover-failed": cmd_recover_failed,
     }
 
     commands[args.command](args)

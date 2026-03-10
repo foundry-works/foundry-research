@@ -49,24 +49,25 @@ Track implementation progress for each item in PLAN.md.
 
 ## Tier 3: Nice-to-have / longer-term
 
-- [ ] **8. Metadata triage step**
-  - [ ] Design scoring heuristic (citation count × title keyword relevance)
-  - [ ] _(Optional)_ Add `state triage` command
-  - [ ] Add SKILL.md triage step between search and download
+- [x] **8. Metadata triage step**
+  - [x] Design scoring heuristic (citation count × title keyword relevance)
+  - [x] Add `state triage` command — ranks sources by log(1+citations) × keyword relevance to brief questions, assigns priority tiers
+  - [x] Add SKILL.md triage step between search and download (new step 7)
 
-- [ ] **9. Failed source recovery**
-  - [ ] Design `download --recover-high-priority` flag
-  - [ ] Implement CORE title search fallback
-  - [ ] Implement Tavily "title pdf" fallback
-  - [ ] Implement DOI landing page web download fallback
+- [x] **9. Failed source recovery**
+  - [x] Add `state recover-failed` command (in state.py, not download.py — uses search + download scripts as subprocesses)
+  - [x] Implement CORE title search fallback
+  - [x] Implement Tavily "title pdf" fallback
+  - [x] Implement DOI landing page web download fallback
+  - [x] Add SKILL.md guidance after download step
 
-- [ ] **10. Structured search journaling**
-  - [ ] Add SKILL.md journal template for search rounds
-  - [ ] _(Optional)_ Auto-append structured journal entries in `search.py`
+- [x] **10. Structured search journaling**
+  - [x] Add SKILL.md journal template for search rounds
+  - [x] Auto-append structured journal entries in `search.py` (provider, query, count, top 3 titles)
 
 ---
 
 ## Verify only (no new code)
 
-- [ ] **Content mismatch detection** — confirm `download.py:756-770` sets `quality: "mismatched"` correctly
+- [x] **Content mismatch detection** — confirmed `download.py:755-770` sets `quality: "mismatched"` correctly; added `mismatched` tracking to audit output
 - [x] **Reader quality check** — add quality gate to `agents/research-reader.md`
