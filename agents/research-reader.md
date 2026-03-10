@@ -42,6 +42,16 @@ Manifest format:
 
 This keeps the supervisor's context clean. The supervisor reads notes/ files as needed.
 
+## Quantitative fact-checking
+
+For key quantitative claims — sample sizes, effect sizes, p-values, percentages — cross-check by reading the Methods section directly. Do not rely on abstract or results-section summaries alone, as these often report derived numbers (total data points, pooled samples) that differ from the actual participant count or primary measure.
+
+**Red flags to check:** Numbers that are suspiciously round (e.g., exactly 500 participants), unusually large for the study type (e.g., 680 participants in a lab-based perception study), or that appear only in one place without corroboration elsewhere in the paper.
+
+If you find numbers that seem inflated, inconsistent between sections, or that you cannot verify from the Methods section, add a `## Claims to Verify` section at the end of your note listing each uncertain claim with the specific text and your concern. This lets downstream agents prioritize fact-checking on the most fragile numbers rather than discovering errors late in the pipeline.
+
+**Why this matters:** A 5x inflation in participant count that propagates through findings, the draft report, and into the final output is only caught by the verifier — the last line of defense. Catching it at the reader stage is cheaper and more reliable.
+
 ## Error handling
 
 - NEVER fabricate content. If a file is unreadable, garbled, or empty, say so explicitly.

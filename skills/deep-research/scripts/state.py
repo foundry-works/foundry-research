@@ -1497,7 +1497,10 @@ def cmd_triage(args):
             "skip_quality": len(skip),
             "brief_keywords_used": len(question_terms),
         },
-        "top_sources": [s["id"] for s in scored if s["priority"] in ("high", "medium")],
+        "top_sources": [
+            {"id": s["id"], "title": s["title"], "citation_count": s["citation_count"], "tier": s["priority"], "score": s["score"]}
+            for s in scored if s["priority"] in ("high", "medium")
+        ],
     })
 
 

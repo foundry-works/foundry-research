@@ -111,15 +111,26 @@ def _forward_citations(client, args) -> dict:
     raw_papers = [item["citingPaper"] for item in raw_items if item.get("citingPaper")]
     papers = _normalize_papers(raw_papers, args.min_citations)
 
-    return success_response(
-        papers,
-        total_results=total,
-        provider="semantic_scholar",
-        query=args.query,
-        has_more=total > args.offset + args.limit,
-        mode="citations",
-        paper_id=paper_id,
-    )
+    # Warn when min_citations filtering removed all results from a highly-cited paper
+    warnings = []
+    if not papers and total > 0 and args.min_citations is not None:
+        warnings.append(
+            f"--cited-by returned {total} raw citations but 0 passed --min-citations {args.min_citations} filter. "
+            f"Retry without --min-citations or try --provider openalex --cited-by {paper_id}."
+        )
+        log(warnings[0], level="warn")
+
+    extra = {
+        "provider": "semantic_scholar",
+        "query": args.query,
+        "has_more": total > args.offset + args.limit,
+        "mode": "citations",
+        "paper_id": paper_id,
+    }
+    if warnings:
+        extra["warnings"] = warnings
+
+    return success_response(papers, total_results=total, **extra)
 
 
 def _backward_references(client, args) -> dict:
