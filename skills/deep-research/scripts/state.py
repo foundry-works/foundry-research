@@ -931,15 +931,23 @@ def cmd_download_pending(args):
         log(f"{skipped_on_disk} sources already on disk, skipping")
     log(f"Found {len(pending)} sources without on-disk content")
 
+    batch_size = getattr(args, "batch_size", None)
+    total_pending = len(pending)
+
     if args.auto_download and pending:
+        # Apply batch-size limit: process only the first N, caller loops until remaining=0
+        if batch_size and batch_size < len(pending):
+            log(f"Batch size {batch_size}: processing first {batch_size} of {len(pending)} pending")
+            pending = pending[:batch_size]
+
         timeout_override = getattr(args, "timeout", None)
-        _auto_download_pending(args.session_dir, pending, args.parallel, timeout_override)
+        _auto_download_pending(args.session_dir, pending, args.parallel, timeout_override, total_pending)
         return
 
-    success_response(pending, total_results=len(pending))
+    success_response(pending, total_results=total_pending)
 
 
-def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None) -> None:
+def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None, total_pending: int | None = None) -> None:
     """Auto-download all pending sources with fallback across identifier types.
 
     Runs up to 3 passes: DOI cascade first, then pdf_url for failures, then url.
@@ -1008,7 +1016,7 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
             "--parallel", str(parallel),
         ]
 
-        timeout = timeout_override if timeout_override is not None else max(600, len(batch) * 30)
+        timeout = timeout_override if timeout_override is not None else min(480, max(300, len(batch) * 30))
         log(f"Downloading {len(batch)} sources (parallel={parallel}, timeout: {timeout}s)...")
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -1052,11 +1060,14 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
         if newly_resolved:
             log(f"Pass {pass_idx + 1}: {len(newly_resolved)} sources downloaded, {len(remaining)} still pending")
 
+    downloaded = len(source_attempts) - len(remaining)
+    remaining_pending = (total_pending - downloaded) if total_pending is not None else len(remaining)
     success_response({
-        "downloaded": len(source_attempts) - len(remaining),
+        "downloaded": downloaded,
         "failed": len(remaining),
         "failed_sources": sorted(remaining),
-        "total": len(source_attempts),
+        "batch_size": len(source_attempts),
+        "remaining": remaining_pending,
     })
 
 
@@ -1501,8 +1512,9 @@ def main():
     # download-pending
     p = sub.add_parser("download-pending")
     p.add_argument("--auto-download", action="store_true", help="Immediately download all pending sources")
+    p.add_argument("--batch-size", type=int, default=15, help="Max sources per batch (default 15). Caller loops until remaining=0.")
     p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
-    p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: max(600, batch_size * 30))")
+    p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: min(480, max(300, batch*30)))")
     p.add_argument("--session-dir", **_sd)
 
     # audit
