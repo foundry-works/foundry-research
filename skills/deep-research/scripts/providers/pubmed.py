@@ -47,6 +47,11 @@ def search(args) -> dict:
     rps = 10.0 if api_key else 3.0
     client = create_session(session_dir, rate_limits={"eutils.ncbi.nlm.nih.gov": rps})
 
+    # Auto-enable fetch when a session is active — bare PMIDs (no title/abstract)
+    # get silently dropped by state tracking, causing silent data loss.
+    if args.session_dir and not args.fetch:
+        args.fetch = True
+
     try:
         if args.fetch_pmids:
             return _fetch_pmids(client, args.fetch_pmids, api_key)

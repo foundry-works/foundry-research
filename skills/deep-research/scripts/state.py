@@ -1000,7 +1000,14 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
         if not batch:
             break
 
-        id_type = source_attempts[next(iter(remaining))][pass_idx][0] if batch else "?"
+        # Determine identifier type from the first batch entry's actual attempt
+        # (can't use arbitrary remaining source — it may have fewer attempts than pass_idx)
+        id_type = "?"
+        for sid in remaining:
+            attempts = source_attempts[sid]
+            if pass_idx < len(attempts):
+                id_type = attempts[pass_idx][0]
+                break
         if pass_idx > 0:
             log(f"Fallback pass {pass_idx + 1}: retrying {len(batch)} sources via {id_type}")
 

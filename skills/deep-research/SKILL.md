@@ -262,7 +262,7 @@ Logging gap for Q6 empirical evidence.
 - **When unsure** — search at least 3 providers including one web source (`--provider tavily`). Many topics have significant non-academic coverage that academic-only searches miss.
 - **Need implementations / benchmarks** — GitHub
 - **Latest preprints** — arXiv (broad academic), bioRxiv (bio/med)
-- **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort; Crossref with `--sort is-referenced-by-count`
+- **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort; Crossref with `--sort is-referenced-by-count --subject <field>` (always pair citation sort with `--subject` to avoid cross-discipline contamination — without it, top results are highly-cited papers from unrelated fields)
 - **Community opinions** — Reddit + HN
 - **Comparative questions** (e.g., "X vs Y") — combine academic providers with Reddit/HN for practitioner perspective
 - **Company fundamentals** — yfinance (profile + financials); EDGAR for SEC filings and XBRL data

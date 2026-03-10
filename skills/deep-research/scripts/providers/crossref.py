@@ -107,6 +107,11 @@ def _keyword_search(http, args, config: dict) -> dict:
     if sort:
         params["sort"] = sort
         params["order"] = getattr(args, "order", "desc")
+        # Warn when citation sort is used without subject — returns highly-cited
+        # papers from unrelated fields (physics, management) instead of the target discipline.
+        if sort == "is-referenced-by-count" and not getattr(args, "subject", None):
+            log("WARNING: --sort is-referenced-by-count without --subject returns cross-discipline noise. "
+                "Add --subject to constrain results to the target field.", level="warn")
 
     url = f"{BASE_URL}/works"
     log(f"Crossref search: query={query!r}, limit={limit}, offset={offset}")

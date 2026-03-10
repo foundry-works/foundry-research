@@ -6,20 +6,20 @@ Track implementation progress for each item in PLAN.md.
 
 ## Tier 1: High impact, low effort
 
-- [ ] **1. PubMed auto-fetch metadata**
-  - [ ] Change `pubmed.py` `_keyword_search` to auto-fetch when session is active
-  - [ ] Change `pubmed.py` `_mesh_search` to auto-fetch when session is active
-  - [ ] Verify `_efetch_papers` output includes title/abstract/DOI so `_add_sources_to_state` picks them up
+- [x] **1. PubMed auto-fetch metadata**
+  - [x] Change `pubmed.py` `_keyword_search` to auto-fetch when session is active
+  - [x] Change `pubmed.py` `_mesh_search` to auto-fetch when session is active
+  - [x] Verify `_efetch_papers` output includes title/abstract/DOI so `_add_sources_to_state` picks them up
   - [ ] Test: PubMed keyword search with active session → sources appear in state.db with titles
 
-- [ ] **2. Crossref sort warning**
-  - [ ] Add warning log in `crossref.py` when `--sort is-referenced-by-count` used without `--subject`
-  - [ ] Add SKILL.md note: pair citation sort with `--subject` filter
+- [x] **2. Crossref sort warning**
+  - [x] Add warning log in `crossref.py` when `--sort is-referenced-by-count` used without `--subject`
+  - [x] Add SKILL.md note: pair citation sort with `--subject` filter
 
-- [ ] **3. Download batch IndexError guard**
-  - [ ] Find the IndexError-prone code path in `state.py` download-pending handler
-  - [ ] Add empty-list guard before indexing
-  - [ ] Review batch loop for edge cases (all sources fail, list exhausted mid-iteration)
+- [x] **3. Download batch IndexError guard**
+  - [x] Find the IndexError-prone code path in `state.py` download-pending handler
+  - [x] Add empty-list guard before indexing
+  - [x] Review batch loop for edge cases (all sources fail, list exhausted mid-iteration)
 
 ---
 
