@@ -24,6 +24,8 @@ _IDENTIFIER_FLAGS = {
     "edgar": {"ticker", "accession"},
     "yfinance": {"ticker"},
     "arxiv": {"list_categories"},
+    "crossref": {"doi"},
+    "core": {"core_id"},
     "tavily": {"urls"},
 }
 
@@ -137,14 +139,44 @@ def main() -> None:
     if not args.session_dir:
         return
 
+    # Detect search mode from provider-specific flags
+    search_mode = _detect_search_mode(provider, args)
+
     # Log search to session state
-    _log_search_to_state(args, result)
+    _log_search_to_state(args, result, search_mode)
 
     # Auto-add sources to session state
     _add_sources_to_state(args, result)
 
 
-def _log_search_to_state(args, result: dict) -> None:
+def _detect_search_mode(provider: str, args) -> str:
+    """Detect the search mode from provider-specific flags."""
+    id_flags = _IDENTIFIER_FLAGS.get(provider, set())
+    for flag in id_flags:
+        val = getattr(args, flag, None)
+        if val is not None and val is not False:
+            # Map flag names to canonical search modes
+            mode_map = {
+                "cited_by": "cited_by",
+                "references": "references",
+                "recommendations": "recommendations",
+                "author": "author",
+                "post_url": "browse",
+                "post_id": "browse",
+                "browse": "browse",
+                "story_id": "browse",
+                "fetch_pmids": "fetch",
+                "list_categories": "browse",
+                "doi": "fetch",
+                "core_id": "fetch",
+                "urls": "fetch",
+                "accession": "fetch",
+            }
+            return mode_map.get(flag, "keyword")
+    return "keyword"
+
+
+def _log_search_to_state(args, result: dict, search_mode: str) -> None:
     """Log the search to session state via state.py."""
     try:
         import subprocess
@@ -156,13 +188,14 @@ def _log_search_to_state(args, result: dict) -> None:
             sys.executable, state_script, "log-search",
             "--provider", args.provider,
             "--query", args.query or "",
+            "--search-mode", search_mode,
             "--result-count", str(ingested_count),
             "--ingested-count", str(ingested_count),
             "--session-dir", args.session_dir,
         ]
         proc = subprocess.run(cmd, capture_output=True, timeout=5)
         if proc.returncode == 0:
-            log(f"Search logged to state (provider={args.provider})")
+            log(f"Search logged to state (provider={args.provider}, mode={search_mode})")
         else:
             stderr = proc.stderr.decode("utf-8", errors="replace").strip()
             log(f"log-search returned non-zero: {stderr}", level="warn")

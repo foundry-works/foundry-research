@@ -86,6 +86,8 @@ You are a research agent with access to academic databases, web search, and stru
 | `reddit` | Community discussion, experiences | `--subreddits`, `--post-url` |
 | `tavily` | Web search, news, non-academic sources | `--search-depth`, `--topic`, `--include-domains`, `--exclude-domains`, `--urls` (extract mode) |
 | `hn` | Technical commentary | `--story-id`, `--tags` |
+| `crossref` | Humanities, social science, publisher metadata, DOI lookup | `--year-range`, `--type`, `--sort`, `--subject`, `--issn`, `--doi` |
+| `core` | Open-access full texts, institutional repositories | `--year-range`, `--sort`, `--core-id` |
 | `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
 | `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
 
@@ -251,12 +253,15 @@ Logging gap for Q6 empirical evidence.
 - **Biomedical / clinical** — PubMed + bioRxiv; add Semantic Scholar for citation context
 - **Any academic topic** — arXiv covers far more than just CS and physics. It spans 20 groups including mathematics, statistics, economics, quantitative finance, quantitative biology, electrical engineering, and all physics subdisciplines. Use `--list-categories` to discover the right category codes for your topic, then `--categories` to filter.
 - **CS / ML / AI** — arXiv + Semantic Scholar; add OpenAlex for breadth
+- **Psychology / cognitive science** — PubMed + Semantic Scholar; add OpenAlex for interdisciplinary breadth. PubMed indexes psychology journals that Semantic Scholar underrepresents; OpenAlex catches education, design, and applied-psych venues.
+- **Humanities / social science / law** — Crossref + OpenAlex; add Semantic Scholar for citation context. Crossref has the broadest publisher coverage across disciplines, including journals that Semantic Scholar and OpenAlex underindex.
 - **Cross-cutting** (e.g., "ML for drug safety") — start broad (Semantic Scholar + PubMed), narrow based on results
+- **Improving download rates** — After search rounds, if many sources are paywalled, run the same queries through CORE (`--provider core`). CORE indexes 46M+ hosted full texts from institutional repositories — papers that failed DOI cascade download may have open-access versions in CORE.
 - **General technical** — `--provider tavily` + GitHub; Reddit/HN for community perspective
 - **When unsure** — search at least 3 providers including one web source (`--provider tavily`). Many topics have significant non-academic coverage that academic-only searches miss.
 - **Need implementations / benchmarks** — GitHub
 - **Latest preprints** — arXiv (broad academic), bioRxiv (bio/med)
-- **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort
+- **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort; Crossref with `--sort is-referenced-by-count`
 - **Community opinions** — Reddit + HN
 - **Comparative questions** (e.g., "X vs Y") — combine academic providers with Reddit/HN for practitioner perspective
 - **Company fundamentals** — yfinance (profile + financials); EDGAR for SEC filings and XBRL data

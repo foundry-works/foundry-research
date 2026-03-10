@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS searches (
     session_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     query TEXT NOT NULL,
+    search_mode TEXT NOT NULL DEFAULT 'keyword',
     result_count INTEGER NOT NULL,
     ingested_count INTEGER,
     timestamp TEXT NOT NULL,
@@ -133,13 +134,34 @@ def _connect(session_dir: str, readonly: bool = False) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=20000")
-    # Migrate: add ingested_count column to searches (for existing DBs)
-    if not readonly:
+    # Migrate: add columns to searches (for existing DBs)
+    if readonly:
+        # Open a brief writable connection for migrations, then close it
+        rw_uri = f"file:{db_path}"
         try:
-            conn.execute("ALTER TABLE searches ADD COLUMN ingested_count INTEGER")
-            conn.commit()
-        except sqlite3.OperationalError:
-            pass  # column already exists
+            rw_conn = sqlite3.connect(rw_uri, uri=True)
+            for col, defn in [
+                ("ingested_count", "INTEGER"),
+                ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+            ]:
+                try:
+                    rw_conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
+                    rw_conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+            rw_conn.close()
+        except Exception:
+            pass  # DB may not exist yet or truly readonly filesystem
+    else:
+        for col, defn in [
+            ("ingested_count", "INTEGER"),
+            ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
     return conn
 
 
@@ -359,10 +381,11 @@ def cmd_log_search(args):
     search_id = _next_id(conn, "searches", "search", sid)
 
     ingested_count = getattr(args, "ingested_count", None)
+    search_mode = getattr(args, "search_mode", "keyword") or "keyword"
     try:
         conn.execute(
-            "INSERT INTO searches (id, session_id, provider, query, result_count, ingested_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (search_id, sid, args.provider, args.query, args.result_count, ingested_count, _now())
+            "INSERT INTO searches (id, session_id, provider, query, search_mode, result_count, ingested_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (search_id, sid, args.provider, args.query, search_mode, args.result_count, ingested_count, _now())
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -372,7 +395,7 @@ def cmd_log_search(args):
 
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": search_id, "provider": args.provider, "query": args.query})
+    success_response({"id": search_id, "provider": args.provider, "query": args.query, "search_mode": search_mode})
 
 
 def cmd_add_source(args):
@@ -533,7 +556,7 @@ def cmd_searches(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        "SELECT id, provider, query, result_count, ingested_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
+        "SELECT id, provider, query, search_mode, result_count, ingested_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
         (sid,)
     ).fetchall()
     conn.close()
@@ -1337,6 +1360,9 @@ def main():
     p = sub.add_parser("log-search")
     p.add_argument("--provider", required=True)
     p.add_argument("--query", required=True)
+    p.add_argument("--search-mode", default="keyword",
+                   choices=["keyword", "cited_by", "references", "recommendations", "author", "browse", "fetch"],
+                   help="Search mode (default: keyword)")
     p.add_argument("--result-count", type=int, required=True)
     p.add_argument("--ingested-count", type=int, default=None, help="Actual number of results ingested")
     p.add_argument("--session-dir", **_sd)

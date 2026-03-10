@@ -13,6 +13,7 @@ _ENV_KEYS = {
     "github_token": "GITHUB_TOKEN",
     "annas_secret_key": "ANNAS_SECRET_KEY",
     "sec_edgar_email": "SEC_EDGAR_EMAIL",
+    "core_api_key": "CORE_API_KEY",
 }
 
 # All known config keys with None defaults
@@ -24,6 +25,7 @@ _DEFAULT_CONFIG: dict[str, str | None] = {
     "github_token": None,
     "annas_secret_key": None,
     "sec_edgar_email": None,
+    "core_api_key": None,
 }
 
 # Global config file path

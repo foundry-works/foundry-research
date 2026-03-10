@@ -15,6 +15,8 @@ _REGISTRY: dict[str, str] = {
     "tavily": "providers.tavily",
     "yfinance": "providers.yfinance_provider",
     "edgar": "providers.edgar",
+    "crossref": "providers.crossref",
+    "core": "providers.core",
 }
 
 
