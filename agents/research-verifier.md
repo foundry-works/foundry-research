@@ -35,14 +35,14 @@ For each claim, check the cited source(s) via `notes/` and `sources/metadata/`:
 
 ### Step 3: Verify against primary sources
 
-For claims resting on secondary sources (or where the primary source would add confidence):
+For each claim, try **local sources first, then the web**. The session already has downloaded full-text files and reader notes — these are faster and more reliable than web search for verifying claims against academic papers.
 
-1. **Search** for the primary/authoritative source using WebSearch
-2. **Fetch** the source content using WebFetch
-3. **Compare** what the primary source says against what the report claims
-4. If the primary source confirms, note the confirmation and the URL
-5. If the primary source contradicts, note the contradiction with specifics
-6. If no primary source can be found, note it as unverifiable
+1. **Check local sources.** If the claim cites a specific source (e.g., src-042), read `sources/src-042.md` (or use the `.toc` file + offset/limit for long papers) and `notes/src-042.md` to verify the claim against the actual text. This catches misquotations, exaggerated findings, and context-stripping that web search can't detect — you're comparing the report's claim against the same document the writer used.
+2. **Search the web** when: the cited source has no local file (paywalled/degraded), the claim needs corroboration beyond its cited source, or the claim has no citation at all. Use WebSearch + WebFetch to find primary/authoritative sources.
+3. **Compare** what the source (local or web) actually says against what the report claims.
+4. If the primary source confirms, note the confirmation and the source (local path or URL).
+5. If the primary source contradicts, note the contradiction with specifics.
+6. If no primary source can be found locally or via web, note it as unverifiable.
 
 Focus your search effort proportionally: high-stakes claims (recommendations, quantitative assertions, "best" claims) deserve more verification effort than supporting details.
 
