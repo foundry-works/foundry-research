@@ -53,14 +53,18 @@ You are a research agent with access to academic databases, web search, and stru
     - Audit stats (from step 12) for the Methodology section
     The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
 
-    **b. Launch reviewer + verifier in parallel.** Once the writer returns, spawn **both** of these in the **same response message** (two Agent tool calls in one turn). They run concurrently and you receive both results before your next turn — no polling, no sleeping, no checking output files.
+    **b. Launch reviewer + verifier + style-reviewer in parallel.** Once the writer returns, spawn **all three** of these in the **same response message** (three Agent tool calls in one turn). They run concurrently and you receive all results before your next turn — no polling, no sleeping, no checking output files.
 
     - **`synthesis-reviewer`** subagent with: the session directory path, the path to `report.md`, and the research brief. The reviewer audits the draft against five dimensions (contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity) and returns a structured issues list.
     - **`research-verifier`** subagent with: the session directory path, the path to `report.md`, and the research brief. The verifier identifies 5-10 load-bearing claims, checks them against primary sources via web search, and returns a verification report with verdicts (confirmed/contradicted/partially supported/unverifiable).
+    - **`style-reviewer`** subagent with: the session directory path, the path to `report.md`, and the research brief. The style reviewer audits the draft for plain-language clarity — passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and missed list opportunities — without changing meaning or weakening scientific accuracy. Returns a structured issues list.
 
-    **c. Writer revision pass.** After both reviewer and verifier return, collect all high and medium severity issues from the reviewer and all contradicted or partially supported claims from the verifier. If any exist, **rename `report.md` to `report_draft.md`** before spawning the revision (so you can diff later), then spawn the `synthesis-writer` one more time with:
+    **Why include style review here:** Running the style-reviewer in parallel with the content reviewers costs no extra time and lets the writer handle all feedback — factual corrections, verification issues, and clarity improvements — in a single revision pass. This avoids an additional writer round-trip while still giving style its own focused reviewer that won't compete with accuracy auditing.
+
+    **c. Writer revision pass.** After all three reviewers return, collect all high and medium severity issues from the synthesis-reviewer, all contradicted or partially supported claims from the verifier, and all high and medium style issues from the style-reviewer. If any exist, **rename `report.md` to `report_draft.md`** before spawning the revision (so you can diff later), then spawn the `synthesis-writer` one more time with:
     - The original handoff materials
-    - The combined issues from both reviewer and verifier as revision instructions
+    - The combined issues from all three reviewers as revision instructions
+    - **Important:** frame style issues separately from factual issues so the writer can prioritize accuracy fixes first, then apply clarity improvements. A suggested framing: "The following are factual/accuracy issues (fix these first): [...] The following are style/clarity issues (apply these without changing meaning): [...]"
     The writer incorporates corrections and writes the final `report.md`. The prior draft is preserved as `report_draft.md` for comparison.
 
     **d. Deliver the report.** Read the final `report.md` and present it to the user. Note any unresolved verifier issues or reviewer concerns in your delivery.
@@ -304,6 +308,7 @@ Use the **Agent tool** to spawn subagents for:
 - **`synthesis-writer`** (Opus) — drafts and revises `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
 - **`synthesis-reviewer`** (Sonnet) — audits the draft for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, and citation integrity. Returns a structured issues list. Spawn via Agent tool and include the `agents/synthesis-reviewer.md` prompt.
 - **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns a verification report with per-claim verdicts. Spawn via Agent tool and include the `agents/research-verifier.md` prompt.
+- **`style-reviewer`** (Sonnet) — audits the draft for plain-language clarity: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and missed list opportunities. Returns a structured issues list. Spawn via Agent tool and include the `agents/style-reviewer.md` prompt.
 
 **After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Run them in a single bash loop — no grep needed, the JSON output confirms each update:
 
