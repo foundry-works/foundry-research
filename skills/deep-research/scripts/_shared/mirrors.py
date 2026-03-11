@@ -41,9 +41,12 @@ _MIRROR_PATTERNS = {
     "scihub": r"sci-hub\.([a-z]{2,6})",
 }
 
-# Session-level mirror cache
+# Session-level mirror cache: service -> (mirror, cached_at)
 _mirror_cache: dict[str, tuple[str | None, float]] = {}
 _MIRROR_CACHE_TTL = 3600  # 1 hour
+_NEGATIVE_CACHE_TTL = 300  # 5 minutes — shorter for "no mirror found" results
+_PROBE_COOLDOWN = 60  # skip HEAD probe if mirror was verified within this window
+_last_probe_ok: dict[str, float] = {}  # service -> last successful probe timestamp
 
 # Disk-backed cache for cross-process persistence
 _MIRROR_CACHE_FILE = os.path.join(tempfile.gettempdir(), "deep-research-mirror-cache.json")
@@ -105,23 +108,39 @@ def _find_working_mirror(service: str, client) -> str | None:
     """Find a working mirror, using in-memory then disk cache before discovery."""
     now = time.time()
 
+    def _probe_with_cooldown(mirror: str) -> bool:
+        """Probe a mirror, skipping the HEAD request if recently verified."""
+        last_ok = _last_probe_ok.get(service, 0)
+        if now - last_ok < _PROBE_COOLDOWN:
+            return True
+        if _probe_mirror(mirror, client):
+            _last_probe_ok[service] = now
+            return True
+        return False
+
     # 1. Check in-memory cache
     if service in _mirror_cache:
         cached_mirror, cached_at = _mirror_cache[service]
-        if now - cached_at < _MIRROR_CACHE_TTL:
-            if _probe_mirror(cached_mirror, client):
+        ttl = _NEGATIVE_CACHE_TTL if cached_mirror is None else _MIRROR_CACHE_TTL
+        if now - cached_at < ttl:
+            if cached_mirror is None:
+                return None
+            if _probe_with_cooldown(cached_mirror):
                 return cached_mirror
             log(f"Cached {service} mirror {cached_mirror} failed probe, re-discovering", level="warn")
-            del _mirror_cache[service]
+        del _mirror_cache[service]
 
     # 2. Check disk cache
     disk_cache = _load_disk_cache()
     if service in disk_cache:
         entry = disk_cache[service]
         cached_at = entry.get("cached_at", 0)
-        if now - cached_at < _MIRROR_CACHE_TTL:
-            mirror = entry.get("mirror")
-            if _probe_mirror(mirror, client):
+        mirror = entry.get("mirror")
+        ttl = _NEGATIVE_CACHE_TTL if mirror is None else _MIRROR_CACHE_TTL
+        if now - cached_at < ttl:
+            if mirror is None:
+                return None
+            if _probe_with_cooldown(mirror):
                 _mirror_cache[service] = (mirror, cached_at)
                 return mirror
             log(f"Disk-cached {service} mirror {mirror} failed probe, re-discovering", level="warn")
@@ -200,9 +219,9 @@ def _annas_search_doi(doi: str, mirror: str, client) -> str | None:
 
 def _annas_download_api(md5: str, secret_key: str, mirror: str, dest: str, client) -> bool:
     """Download via Anna's Archive JSON API (requires API key)."""
-    url = f"https://{mirror}/dyn/api/fast_download.json?md5={md5}&key={secret_key}"
+    url = f"https://{mirror}/dyn/api/fast_download.json?md5={md5}"
     try:
-        resp = client.get(url, timeout=(15, 15))
+        resp = client.get(url, timeout=(15, 15), headers={"Authorization": f"Bearer {secret_key}"})
         if resp.status_code != 200:
             return False
 
@@ -216,11 +235,11 @@ def _annas_download_api(md5: str, secret_key: str, mirror: str, dest: str, clien
             log(f"Anna's Archive API download successful: {dest}")
             return True
 
-        if os.path.exists(dest):
-            os.unlink(dest)
+        # download_pdf already cleans up partial files on failure
         return False
     except Exception as e:
         log(f"Anna's Archive API download failed: {e}", level="warn")
+        # Clean up only if file exists (e.g. error before download_pdf ran)
         if os.path.exists(dest):
             os.unlink(dest)
         return False
@@ -245,9 +264,9 @@ def _annas_download_scrape(md5: str, mirror: str, dest: str, client) -> bool:
                 if dl_result["success"]:
                     log(f"Anna's Archive scrape download successful: {dest}")
                     return True
-                if os.path.exists(dest):
-                    os.unlink(dest)
+                # download_pdf already cleans up partial files on failure
             except Exception:
+                # Clean up only if file exists (e.g. error before download_pdf ran)
                 if os.path.exists(dest):
                     os.unlink(dest)
                 continue

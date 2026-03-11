@@ -456,6 +456,7 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
 
 
 _MAX_WEB_SIZE = 10 * 1024 * 1024  # 10MB cap on web page downloads
+_MAX_WEB_STREAM_SECONDS = 120  # wall-clock cap on web page streaming
 
 
 def _download_web(url: str, source_id: str, client, sources_dir: str,
@@ -463,29 +464,36 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
     """Download web page and extract readable content."""
     log(f"Downloading web content: {url}")
     try:
-        resp = client.get(url, stream=True)
-        if resp.status_code != 200:
-            result["errors"].append(f"HTTP {resp.status_code} for {url}")
-            return
-
-        # Check Content-Length before reading body to avoid OOM on huge pages
+        resp = client.get(url, stream=True, timeout=(15, _MAX_WEB_STREAM_SECONDS))
         try:
-            cl = int(resp.headers.get("Content-Length", 0))
-        except (ValueError, TypeError):
-            cl = 0
-        if cl > _MAX_WEB_SIZE:
-            result["errors"].append(f"Web page too large ({cl} bytes, limit {_MAX_WEB_SIZE})")
-            return
-
-        # Stream with size cap
-        chunks = []
-        size = 0
-        for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
-            size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-            if size > _MAX_WEB_SIZE:
-                result["errors"].append(f"Web page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB during download")
+            if resp.status_code != 200:
+                result["errors"].append(f"HTTP {resp.status_code} for {url}")
                 return
-            chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+
+            # Check Content-Length before reading body to avoid OOM on huge pages
+            try:
+                cl = int(resp.headers.get("Content-Length", 0))
+            except (ValueError, TypeError):
+                cl = 0
+            if cl > _MAX_WEB_SIZE:
+                result["errors"].append(f"Web page too large ({cl} bytes, limit {_MAX_WEB_SIZE})")
+                return
+
+            # Stream with size cap and wall-clock timeout
+            chunks = []
+            size = 0
+            stream_start = time.monotonic()
+            for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
+                size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                if size > _MAX_WEB_SIZE:
+                    result["errors"].append(f"Web page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB during download")
+                    return
+                if time.monotonic() - stream_start > _MAX_WEB_STREAM_SECONDS:
+                    result["errors"].append(f"Web page streaming exceeded {_MAX_WEB_STREAM_SECONDS}s wall-clock limit")
+                    return
+                chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+        finally:
+            resp.close()
         html = "".join(chunks)
         content = extract_readable_content(html)
         if not content:
@@ -733,7 +741,6 @@ def _resolve_arxiv_for_doi(doi: str, _client) -> str | None:
     """Check if a DOI has an arXiv preprint via OpenAlex external IDs or DOI prefix."""
     # arXiv DOIs start with 10.48550/arXiv.
     if doi.lower().startswith("10.48550/arxiv."):
-        arxiv_id = doi.split(".", 2)[-1] if doi.count(".") >= 3 else None
         # Extract properly: 10.48550/arXiv.YYMM.NNNNN
         parts = doi.split("/", 1)
         if len(parts) == 2:
@@ -923,26 +930,55 @@ def _lookup_source_id_from_state(session_dir: str, doi: str | None,
 _source_id_lock = threading.Lock()
 
 
+_PENDING_STALENESS = 3600  # 1 hour — stale placeholders are cleaned up
+
+
 def _generate_source_id(sources_dir: str) -> str:
     """Generate the next sequential source ID (src-001, src-002, etc.).
 
     Thread-safe: uses a lock so parallel batch workers cannot collide.
+    Cleans up stale .pending placeholders from previous failed runs.
     """
     with _source_id_lock:
         existing = set()
+        max_n = 0
         metadata_dir = os.path.join(sources_dir, "metadata")
         if os.path.isdir(metadata_dir):
             for name in os.listdir(metadata_dir):
                 if name.startswith("src-") and name.endswith(".json"):
-                    existing.add(name[:-5])  # strip .json
+                    sid = name[:-5]  # strip .json
+                    existing.add(sid)
+                    try:
+                        max_n = max(max_n, int(sid.split("-")[1]))
+                    except (IndexError, ValueError):
+                        pass
 
         # Also check source files directly
         if os.path.isdir(sources_dir):
+            now = time.time()
             for name in os.listdir(sources_dir):
                 if name.startswith("src-") and "." in name:
-                    existing.add(name.rsplit(".", 1)[0])
+                    base = name.rsplit(".", 1)[0]
+                    ext = name.rsplit(".", 1)[1]
 
-        n = 1
+                    # Clean up stale .pending placeholders
+                    if ext == "pending":
+                        path = os.path.join(sources_dir, name)
+                        try:
+                            if now - os.path.getmtime(path) > _PENDING_STALENESS:
+                                os.unlink(path)
+                                continue
+                        except OSError:
+                            pass
+
+                    existing.add(base)
+                    try:
+                        max_n = max(max_n, int(base.split("-")[1]))
+                    except (IndexError, ValueError):
+                        pass
+
+        # Start search from max_n+1 instead of 1 to avoid linear scan
+        n = max_n + 1
         while f"src-{n:03d}" in existing:
             n += 1
 
@@ -1125,13 +1161,20 @@ def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str
     from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
     results: list[dict | None] = [None] * len(items)
+    batch_total_timeout = max(600, len(items) * 60)
 
-    def _download_one(index: int, item: dict) -> tuple[int, dict]:
+    def _download_one(index: int, item: dict, cancel: threading.Event) -> tuple[int, dict]:
         client = create_session(session_dir)
         try:
+            if cancel.is_set():
+                return index, _timeout_result(item, "Cancelled (batch timeout)")
+            item_start = time.monotonic()
             log(f"Batch download {index + 1}/{len(items)} (parallel)")
             batch_args = _make_batch_args(item, args.to_md)
             result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config)
+            elapsed = time.monotonic() - item_start
+            if elapsed > _BATCH_ITEM_TIMEOUT:
+                log(f"Batch item {index + 1} took {elapsed:.0f}s (>{_BATCH_ITEM_TIMEOUT}s limit)", level="warn")
             return index, result
         except Exception as e:
             return index, {
@@ -1145,25 +1188,50 @@ def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str
         finally:
             client.close()
 
+    cancel_events: dict[int, threading.Event] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_download_one, i, item): i for i, item in enumerate(items)}
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                idx, result = future.result(timeout=_BATCH_ITEM_TIMEOUT)
-            except TimeoutError:
-                result = {
-                    "source_id": items[idx].get("source_id"),
-                    "doi": items[idx].get("doi"),
-                    "errors": [f"Download timed out after {_BATCH_ITEM_TIMEOUT}s"],
-                    "pdf_downloaded": False,
-                    "content_file": None,
-                    "pdf_file": None,
-                }
-                log(f"Batch item {idx + 1} timed out after {_BATCH_ITEM_TIMEOUT}s", level="warn")
-            results[idx] = result
+        futures = {}
+        for i, item in enumerate(items):
+            ev = threading.Event()
+            cancel_events[i] = ev
+            futures[executor.submit(_download_one, i, item, ev)] = i
+
+        try:
+            for future in as_completed(futures, timeout=batch_total_timeout):
+                idx = futures[future]
+                try:
+                    # Wait up to per-item timeout for the result; the thread
+                    # runs autonomously so this just caps how long we block.
+                    idx, result = future.result(timeout=_BATCH_ITEM_TIMEOUT)
+                except TimeoutError:
+                    cancel_events[idx].set()
+                    result = _timeout_result(items[idx], f"Download timed out after {_BATCH_ITEM_TIMEOUT}s")
+                    log(f"Batch item {idx + 1} timed out after {_BATCH_ITEM_TIMEOUT}s", level="warn")
+                results[idx] = result
+        except TimeoutError:
+            # Batch-level timeout from as_completed
+            log(f"Batch total timeout ({batch_total_timeout}s) exceeded", level="warn")
+
+    # Check for items that never completed due to batch timeout
+    for i, r in enumerate(results):
+        if r is None:
+            cancel_events[i].set()
+            results[i] = _timeout_result(items[i], f"Batch total timeout ({batch_total_timeout}s) exceeded")
+            log(f"Batch item {i + 1} did not complete within batch timeout", level="warn")
 
     return [r for r in results if r is not None]
+
+
+def _timeout_result(item: dict, reason: str) -> dict:
+    """Build a standard error result for timed-out or cancelled items."""
+    return {
+        "source_id": item.get("source_id"),
+        "doi": item.get("doi"),
+        "errors": [reason],
+        "pdf_downloaded": False,
+        "content_file": None,
+        "pdf_file": None,
+    }
 
 
 if __name__ == "__main__":

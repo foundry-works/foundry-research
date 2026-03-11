@@ -40,6 +40,21 @@ _ACADEMIC_SECTIONS = {
 # pymupdf4llm subprocess timeout (seconds)
 _PYMUPDF_TIMEOUT = 60
 
+# Memory limit for PDF conversion subprocesses (2 GB)
+_SUBPROCESS_MEM_LIMIT = 2 * 1024 * 1024 * 1024
+
+
+def _make_mem_limiter():
+    """Return a preexec_fn that caps subprocess RSS, or None if unsupported."""
+    try:
+        import resource
+        def _limit():
+            resource.setrlimit(resource.RLIMIT_AS, (_SUBPROCESS_MEM_LIMIT, _SUBPROCESS_MEM_LIMIT))
+        return _limit
+    except (ImportError, AttributeError):
+        # Windows or missing RLIMIT_AS
+        return None
+
 # PDF magic bytes
 _PDF_MAGIC = b"%PDF"
 
@@ -76,30 +91,33 @@ def download_pdf(
     """
     try:
         resp = client.get(url, timeout=(15, timeout), stream=True)
-        if resp.status_code != 200:
-            return {"success": False, "size_bytes": 0, "errors": [f"HTTP {resp.status_code}"]}
+        try:
+            if resp.status_code != 200:
+                return {"success": False, "size_bytes": 0, "errors": [f"HTTP {resp.status_code}"]}
 
-        # Check Content-Length if available
-        content_length = resp.headers.get("Content-Length")
-        if content_length:
-            try:
-                cl_bytes = int(content_length)
-            except (ValueError, TypeError):
-                cl_bytes = 0
-            if cl_bytes > max_size_mb * 1024 * 1024:
-                return {"success": False, "size_bytes": 0, "errors": [f"PDF too large: {cl_bytes} bytes (limit {max_size_mb}MB)"]}
+            # Check Content-Length if available
+            content_length = resp.headers.get("Content-Length")
+            if content_length:
+                try:
+                    cl_bytes = int(content_length)
+                except (ValueError, TypeError):
+                    cl_bytes = 0
+                if cl_bytes > max_size_mb * 1024 * 1024:
+                    return {"success": False, "size_bytes": 0, "errors": [f"PDF too large: {cl_bytes} bytes (limit {max_size_mb}MB)"]}
 
-        # Stream to file
-        Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
-        size = 0
-        oversize = False
-        with open(dest_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=64 * 1024):
-                size += len(chunk)
-                if size > max_size_mb * 1024 * 1024:
-                    oversize = True
-                    break
-                f.write(chunk)
+            # Stream to file
+            Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+            size = 0
+            oversize = False
+            with open(dest_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    size += len(chunk)
+                    if size > max_size_mb * 1024 * 1024:
+                        oversize = True
+                        break
+                    f.write(chunk)
+        finally:
+            resp.close()
 
         if oversize:
             os.unlink(dest_path)
@@ -304,6 +322,7 @@ def _run_pymupdf4llm(pdf_path: str, timeout: int) -> str | None:
             [sys.executable, "-c", script, pdf_path],
             capture_output=True,
             timeout=timeout,
+            preexec_fn=_make_mem_limiter(),
         )
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
@@ -319,26 +338,38 @@ def _run_pymupdf4llm(pdf_path: str, timeout: int) -> str | None:
 _MAX_PYPDF_PAGES = 500  # cap to prevent OOM on huge documents
 
 
-def _run_pypdf(pdf_path: str) -> str | None:
-    """Extract raw text from PDF using pypdf (capped at _MAX_PYPDF_PAGES pages)."""
+def _run_pypdf(pdf_path: str, timeout: int = _PYMUPDF_TIMEOUT) -> str | None:
+    """Extract raw text from PDF using pypdf in a subprocess with timeout.
+
+    Runs in a subprocess for memory isolation and timeout enforcement,
+    matching the pattern used by _run_pymupdf4llm.
+    """
+    script = (
+        "import sys; from pypdf import PdfReader; "
+        f"reader = PdfReader(sys.argv[1]); "
+        f"limit = min(len(reader.pages), {_MAX_PYPDF_PAGES}); "
+        "pages = [p.extract_text() or '' for p in reader.pages[:limit]]; "
+        "text = '\\n\\n'.join(p for p in pages if p); "
+        "sys.stdout.buffer.write(text.encode('utf-8'))"
+    )
     try:
-        from pypdf import PdfReader
-    except ImportError:
-        log("pypdf not installed, cannot fall back", level="error")
+        result = subprocess.run(
+            [sys.executable, "-c", script, pdf_path],
+            capture_output=True,
+            timeout=timeout,
+            preexec_fn=_make_mem_limiter(),
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            if "No module named" in stderr:
+                log("pypdf not installed, cannot fall back", level="error")
+            else:
+                log(f"pypdf subprocess failed: {stderr}", level="warn")
+            return None
+        text = result.stdout.decode("utf-8", errors="replace")
+        return text if text.strip() else None
+    except subprocess.TimeoutExpired:
+        log(f"pypdf timed out after {timeout}s for {pdf_path}", level="warn")
         return None
-
-    reader = PdfReader(pdf_path)
-    total = len(reader.pages)
-    limit = min(total, _MAX_PYPDF_PAGES)
-    if total > _MAX_PYPDF_PAGES:
-        log(f"pypdf: truncating extraction to {_MAX_PYPDF_PAGES}/{total} pages", level="warn")
-
-    pages = []
-    for page in reader.pages[:limit]:
-        text = page.extract_text()
-        if text:
-            pages.append(text)
-
-    return "\n\n".join(pages) if pages else None
 
 
