@@ -81,8 +81,13 @@ def download_pdf(
 
         # Check Content-Length if available
         content_length = resp.headers.get("Content-Length")
-        if content_length and int(content_length) > max_size_mb * 1024 * 1024:
-            return {"success": False, "size_bytes": 0, "errors": [f"PDF too large: {int(content_length)} bytes (limit {max_size_mb}MB)"]}
+        if content_length:
+            try:
+                cl_bytes = int(content_length)
+            except (ValueError, TypeError):
+                cl_bytes = 0
+            if cl_bytes > max_size_mb * 1024 * 1024:
+                return {"success": False, "size_bytes": 0, "errors": [f"PDF too large: {cl_bytes} bytes (limit {max_size_mb}MB)"]}
 
         # Stream to file
         Path(dest_path).parent.mkdir(parents=True, exist_ok=True)

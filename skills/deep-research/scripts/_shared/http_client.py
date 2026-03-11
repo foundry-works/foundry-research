@@ -17,7 +17,7 @@ _READ_TIMEOUT = 30
 _DEFAULT_UA = "deep-research/1.0 (academic research tool; +https://github.com/anthropics/claude-code)"
 
 # Status codes that trigger retry with backoff
-_RETRY_CODES = {429, 500, 502, 503}
+_RETRY_CODES = {429, 500, 502, 503, 504}
 
 
 def create_session(

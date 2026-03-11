@@ -27,7 +27,7 @@ from _shared.metadata import (  # noqa: E402
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
-from _shared.pdf_utils import download_pdf, pdf_to_markdown, validate_pdf  # noqa: E402
+from _shared.pdf_utils import download_pdf, pdf_to_markdown  # noqa: E402
 from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
 
 # arXiv download constraints
@@ -455,17 +455,38 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     return result
 
 
+_MAX_WEB_SIZE = 10 * 1024 * 1024  # 10MB cap on web page downloads
+
+
 def _download_web(url: str, source_id: str, client, sources_dir: str,
                   meta: dict, result: dict) -> None:
     """Download web page and extract readable content."""
     log(f"Downloading web content: {url}")
     try:
-        resp = client.get(url)
+        resp = client.get(url, stream=True)
         if resp.status_code != 200:
             result["errors"].append(f"HTTP {resp.status_code} for {url}")
             return
 
-        html = resp.text
+        # Check Content-Length before reading body to avoid OOM on huge pages
+        try:
+            cl = int(resp.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            cl = 0
+        if cl > _MAX_WEB_SIZE:
+            result["errors"].append(f"Web page too large ({cl} bytes, limit {_MAX_WEB_SIZE})")
+            return
+
+        # Stream with size cap
+        chunks = []
+        size = 0
+        for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
+            size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+            if size > _MAX_WEB_SIZE:
+                result["errors"].append(f"Web page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB during download")
+                return
+            chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+        html = "".join(chunks)
         content = extract_readable_content(html)
         if not content:
             result["errors"].append("No readable content extracted")
@@ -518,67 +539,53 @@ def _download_direct_pdf(url: str, source_id: str, client, sources_dir: str,
 
 def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
                     to_md: bool, result: dict) -> None:
-    """Download PDF from arXiv with CAPTCHA detection."""
+    """Download PDF from arXiv with CAPTCHA detection.
+
+    Uses download_pdf for streaming with size limits. HttpClient handles
+    retries on 429/500/502/503/504 internally, so no outer retry loop needed.
+    """
     pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
     pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
 
     log(f"Downloading arXiv PDF: {arxiv_id}")
     time.sleep(_ARXIV_DELAY)
 
-    for attempt in range(3):
-        try:
-            resp = client.get(pdf_url, timeout=(15, 60))
-            if resp.status_code in (502, 503, 504):
-                wait = max(_ARXIV_DELAY, 2 ** attempt)
-                log(f"arXiv returned {resp.status_code}, retrying in {wait}s", level="warn")
-                time.sleep(wait)
-                continue
-            if resp.status_code != 200:
-                result["errors"].append(f"arXiv HTTP {resp.status_code}")
-                result["source_used"] = "arxiv"
-                result["sources_tried"].append("arxiv")
-                return
+    result["sources_tried"].append("arxiv")
+    result["source_used"] = "arxiv"
 
-            content = resp.content
+    dl_result = download_pdf(pdf_url, pdf_path, client, timeout=60)
 
-            # CAPTCHA detection
-            if len(content) < _CAPTCHA_SIZE_THRESHOLD:
-                head = content[:1024].lower()
-                if any(marker in head for marker in _CAPTCHA_MARKERS):
-                    log(f"CAPTCHA detected for arXiv {arxiv_id}", level="warn")
-                    result["errors"].append("arXiv CAPTCHA detected")
-                    result["source_used"] = "arxiv"
-                    result["sources_tried"].append("arxiv")
-                    return
+    if not dl_result["success"]:
+        # Check if the error was an HTML/CAPTCHA response (download_pdf detects this)
+        errors = dl_result.get("errors", [])
+        if any("HTML instead of PDF" in e for e in errors):
+            log(f"CAPTCHA or HTML response detected for arXiv {arxiv_id}", level="warn")
+            result["errors"].append("arXiv CAPTCHA detected")
+        else:
+            result["errors"].extend(errors)
+        return
 
-            Path(pdf_path).write_bytes(content)
-
-            if not validate_pdf(pdf_path):
-                os.unlink(pdf_path)
-                result["errors"].append("arXiv returned invalid PDF")
-                result["sources_tried"].append("arxiv")
-                return
-
-            result["pdf_file"] = f"sources/{source_id}.pdf"
-            result["pdf_size_bytes"] = len(content)
-            result["pdf_downloaded"] = True
-            result["source_used"] = "arxiv"
-            result["sources_tried"].append("arxiv")
-
-            if to_md:
-                _convert_and_record(pdf_path, source_id, sources_dir, result,
-                            title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
-            else:
-                result["quality"] = "ok"
+    # Post-download CAPTCHA check: small files that passed PDF magic but are suspicious
+    file_size = dl_result["size_bytes"]
+    if file_size < _CAPTCHA_SIZE_THRESHOLD:
+        with open(pdf_path, "rb") as f:
+            head = f.read(1024).lower()
+        if any(marker in head for marker in _CAPTCHA_MARKERS):
+            log(f"CAPTCHA detected for arXiv {arxiv_id}", level="warn")
+            os.unlink(pdf_path)
+            result["errors"].append("arXiv CAPTCHA detected")
             return
 
-        except Exception as e:
-            if attempt == 2:
-                result["errors"].append(f"arXiv download failed: {e}")
-                result["sources_tried"].append("arxiv")
+    result["pdf_file"] = f"sources/{source_id}.pdf"
+    result["pdf_size_bytes"] = file_size
+    result["pdf_downloaded"] = True
 
-    result["source_used"] = "arxiv"
+    if to_md:
+        _convert_and_record(pdf_path, source_id, sources_dir, result,
+                    title=result.get("_expected_title", ""),
+                    authors=result.get("_expected_authors"))
+    else:
+        result["quality"] = "ok"
 
 
 def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
@@ -1109,10 +1116,13 @@ def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
     return results
 
 
+_BATCH_ITEM_TIMEOUT = 300  # 5 minutes max per item in parallel batch
+
+
 def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str,
                            metadata_dir: str, config: dict, max_workers: int) -> list:
     """Download batch items in parallel using ThreadPoolExecutor."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
     results: list[dict | None] = [None] * len(items)
 
@@ -1138,7 +1148,19 @@ def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_download_one, i, item): i for i, item in enumerate(items)}
         for future in as_completed(futures):
-            idx, result = future.result()
+            idx = futures[future]
+            try:
+                idx, result = future.result(timeout=_BATCH_ITEM_TIMEOUT)
+            except TimeoutError:
+                result = {
+                    "source_id": items[idx].get("source_id"),
+                    "doi": items[idx].get("doi"),
+                    "errors": [f"Download timed out after {_BATCH_ITEM_TIMEOUT}s"],
+                    "pdf_downloaded": False,
+                    "content_file": None,
+                    "pdf_file": None,
+                }
+                log(f"Batch item {idx + 1} timed out after {_BATCH_ITEM_TIMEOUT}s", level="warn")
             results[idx] = result
 
     return [r for r in results if r is not None]
