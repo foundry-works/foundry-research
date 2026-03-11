@@ -31,10 +31,6 @@ _UA_DEFAULT = "deep-research/1.0 (academic research tool)"
 # Semantic Scholar fields to request (matches providers/semantic_scholar.py)
 _S2_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,venue,journal,isRetracted"
 
-# Wall-clock cap for the entire OpenCitations enrichment pass (seconds)
-_OC_BATCH_TIMEOUT = 120
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Enrich DOIs with bibliographic metadata (Crossref → OpenAlex → Semantic Scholar cascade).",
@@ -77,9 +73,6 @@ def main() -> None:
 
     if args.quiet:
         set_quiet(True)
-
-    global _OC_BATCH_TIMEOUT
-    _OC_BATCH_TIMEOUT = args.timeout
 
     # Resolve session dir (optional for enrich — only used for rate limiter)
     from _shared.config import _discover_session_dir_from_marker
@@ -151,7 +144,7 @@ def main() -> None:
 
     # OpenCitations enrichment pass (additive — runs after metadata cascade)
     if args.citation_data and results:
-        _enrich_with_opencitations(results, session_dir, errors)
+        _enrich_with_opencitations(results, session_dir, errors, timeout=args.timeout)
 
     # Always include errors in response — even on partial success
     if results:
@@ -448,7 +441,8 @@ def _safe_int(val, default: int = 0) -> int:
         return default
 
 
-def _enrich_with_opencitations(results: list[dict], session_dir: str, errors: list[str]) -> None:
+def _enrich_with_opencitations(results: list[dict], session_dir: str, errors: list[str],
+                               timeout: int = 120) -> None:
     """Add OpenCitations citation/reference counts to enrichment results.
 
     If OpenCitations fails for a DOI, the cascade result's cited_by_count is preserved —
@@ -459,13 +453,13 @@ def _enrich_with_opencitations(results: list[dict], session_dir: str, errors: li
         rate_limits={"api.opencitations.net": 2.5},
     )
     oc_base = "https://api.opencitations.net/index/v2"
-    deadline = time.monotonic() + _OC_BATCH_TIMEOUT
+    deadline = time.monotonic() + timeout
 
     try:
         for item in results:
             if time.monotonic() > deadline:
-                log(f"OpenCitations batch timeout ({_OC_BATCH_TIMEOUT}s) — skipping remaining DOIs", level="warn")
-                errors.append(f"OpenCitations pass timed out after {_OC_BATCH_TIMEOUT}s")
+                log(f"OpenCitations batch timeout ({timeout}s) — skipping remaining DOIs", level="warn")
+                errors.append(f"OpenCitations pass timed out after {timeout}s")
                 break
 
             doi = item.get("doi", "")

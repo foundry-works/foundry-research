@@ -245,4 +245,5 @@ def _handle_error(resp) -> dict:
         body = "(unreadable)"
 
     log(f"DBLP API error {status}: {body}", level="error")
-    return error_response([f"DBLP API returned {status}: {body}"], error_code=f"http_{status}")
+    error_code = "not_found" if status == 404 else "auth_failed" if status in (401, 403) else "api_error"
+    return error_response([f"DBLP API returned {status}: {body}"], error_code=error_code)

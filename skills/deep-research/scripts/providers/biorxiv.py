@@ -72,8 +72,6 @@ def search(args) -> dict:
 
 def _list_categories(args) -> dict:
     """Fetch available categories by sampling recent papers from bioRxiv and/or medRxiv."""
-    import requests
-
     server = getattr(args, "server", "both")
     servers = _resolve_servers(server)
 
@@ -81,24 +79,30 @@ def _list_categories(args) -> dict:
     start = end - timedelta(days=90)
     date_range = f"{start.isoformat()}/{end.isoformat()}"
 
+    session_dir = getattr(args, "session_dir", None) or ""
+    client = create_session(session_dir, rate_limits={"api.biorxiv.org": 5.0})
+
     result: dict[str, list[str]] = {}
 
-    for srv in servers:
-        url = f"{BASE_URL}/details/{srv}/{date_range}/0"
-        log(f"Fetching {srv} categories from recent papers...")
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            cats: set[str] = set()
-            for item in data.get("collection", []):
-                cat = item.get("category", "")
-                if cat:
-                    cats.add(cat)
-            result[srv] = sorted(cats)
-        except Exception as e:
-            log(f"Failed to fetch {srv} categories: {e}", level="error")
-            result[srv] = []
+    try:
+        for srv in servers:
+            url = f"{BASE_URL}/details/{srv}/{date_range}/0"
+            log(f"Fetching {srv} categories from recent papers...")
+            try:
+                resp = client.get(url, timeout=(15, 30))
+                resp.raise_for_status()
+                data = resp.json()
+                cats: set[str] = set()
+                for item in data.get("collection", []):
+                    cat = item.get("category", "")
+                    if cat:
+                        cats.add(cat)
+                result[srv] = sorted(cats)
+            except Exception as e:
+                log(f"Failed to fetch {srv} categories: {e}", level="error")
+                result[srv] = []
+    finally:
+        client.close()
 
     return success_response(result)
 

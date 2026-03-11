@@ -253,6 +253,40 @@ def _check_duplicate(conn: sqlite3.Connection, session_id: str,
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Common stop words shared across term extraction. Context-specific extras
+# can be passed via the extra_stop parameter.
+_STOP_WORDS = frozenset({
+    "this", "that", "with", "from", "have", "been", "only", "about", "more",
+    "than", "some", "into", "also", "very", "just", "most", "does", "each",
+    "after", "before", "which", "their", "there", "where", "when", "what",
+    "should", "would", "could", "will", "best", "many", "much",
+})
+
+_STRIP_CHARS = ".,;:()\"'?!"
+
+
+def _extract_terms(texts: list[str], extra_stop: set[str] | None = None) -> list[str]:
+    """Extract keywords (4+ chars, stop-filtered) from free text. Deduped, order preserved."""
+    stop = _STOP_WORDS | extra_stop if extra_stop else _STOP_WORDS
+    terms: list[str] = []
+    for text in texts:
+        for w in text.lower().split():
+            w = w.strip(_STRIP_CHARS)
+            if len(w) >= 4 and w not in stop:
+                terms.append(w)
+    return list(dict.fromkeys(terms))
+
+
+def _extract_question_terms(questions: list) -> list[str]:
+    """Extract keywords from research questions (str or {text: str} dicts)."""
+    texts = [q if isinstance(q, str) else q.get("text", str(q)) for q in questions]
+    return _extract_terms(texts)
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -584,21 +618,10 @@ def cmd_gap_search_plan(args):
         gap_text = gap["text"]
         gap_question = gap.get("question", "")
 
-        # Extract key terms from gap text (words 4+ chars, excluding common words)
-        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
-                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
-                      "after", "before", "which", "their", "there", "where", "when", "what",
-                      "coverage", "insufficient", "sources", "evidence", "research", "needs"}
-        gap_terms = [w.strip(".,;:()\"'") for w in gap_text.lower().split()
-                     if len(w.strip(".,;:()\"'")) >= 4 and w.strip(".,;:()\"'") not in stop_words]
-
-        # Extract terms from the associated question too
-        q_terms = []
-        if gap_question:
-            q_terms = [w.strip(".,;:()\"'") for w in gap_question.lower().split()
-                       if len(w.strip(".,;:()\"'")) >= 4 and w.strip(".,;:()\"'") not in stop_words]
-
-        all_terms = list(dict.fromkeys(gap_terms + q_terms))  # dedupe, preserve order
+        # Extract key terms from gap text and associated question
+        gap_extra = {"coverage", "insufficient", "sources", "evidence", "research", "needs"}
+        texts = [gap_text] + ([gap_question] if gap_question else [])
+        all_terms = _extract_terms(texts, extra_stop=gap_extra)
 
         suggested_searches = []
 
@@ -1394,21 +1417,7 @@ def cmd_triage(args):
 
     # Load brief questions for relevance scoring
     brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
-    question_terms: list[str] = []
-    if brief_row:
-        questions = json.loads(brief_row["questions"])
-        # Extract keywords from all questions
-        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
-                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
-                      "after", "before", "which", "their", "there", "where", "when", "what",
-                      "should", "would", "could", "will", "best", "many", "much"}
-        for q in questions:
-            q_text = q if isinstance(q, str) else q.get("text", str(q))
-            for w in q_text.lower().split():
-                w = w.strip(".,;:()\"'?!")
-                if len(w) >= 4 and w not in stop_words:
-                    question_terms.append(w)
-        question_terms = list(dict.fromkeys(question_terms))  # dedupe, preserve order
+    question_terms = _extract_question_terms(json.loads(brief_row["questions"])) if brief_row else []
 
     # Load all sources
     sources = [dict(r) for r in conn.execute(
@@ -1524,20 +1533,7 @@ def cmd_recover_failed(args):
 
     # Load brief questions for relevance scoring
     brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
-    question_terms: list[str] = []
-    if brief_row:
-        questions = json.loads(brief_row["questions"])
-        stop_words = {"this", "that", "with", "from", "have", "been", "only", "about", "more",
-                      "than", "some", "into", "also", "very", "just", "most", "does", "each",
-                      "after", "before", "which", "their", "there", "where", "when", "what",
-                      "should", "would", "could", "will", "best", "many", "much"}
-        for q in questions:
-            q_text = q if isinstance(q, str) else q.get("text", str(q))
-            for w in q_text.lower().split():
-                w = w.strip(".,;:()\"'?!")
-                if len(w) >= 4 and w not in stop_words:
-                    question_terms.append(w)
-        question_terms = list(dict.fromkeys(question_terms))
+    question_terms = _extract_question_terms(json.loads(brief_row["questions"])) if brief_row else []
 
     # Find sources without on-disk content
     rows = conn.execute(

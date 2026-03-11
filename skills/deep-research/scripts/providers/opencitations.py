@@ -266,4 +266,5 @@ def _handle_error(resp, doi: str) -> dict:
         body = "(unreadable)"
 
     log(f"OpenCitations API error {status}: {body}", level="error")
-    return error_response([f"OpenCitations API returned {status}: {body}"], error_code=f"http_{status}")
+    error_code = "auth_failed" if status in (401, 403) else "api_error"
+    return error_response([f"OpenCitations API returned {status}: {body}"], error_code=error_code)

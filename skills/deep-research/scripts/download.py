@@ -26,7 +26,7 @@ from _shared.metadata import (  # noqa: E402
     write_source_metadata,
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
-from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
+from _shared.output import error_response, log, log_subprocess_failure, set_quiet, success_response  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown  # noqa: E402
 from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
 
@@ -119,8 +119,7 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             # Check returncode first — non-zero means state.py crashed
             if proc.returncode != 0:
-                log(f"_sync_to_state failed for {source_id}: process exited {proc.returncode}, "
-                    f"stderr={proc.stderr[:200]}", level="warn")
+                log_subprocess_failure(f"_sync_to_state({source_id})", proc)
                 return False
             # Parse response — all commands exit 0, errors conveyed in JSON body
             try:
@@ -244,7 +243,7 @@ def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: di
             if proc.returncode == 0:
                 log(f"Auto-created web source in state.db for {url} → {source_id}")
             else:
-                log(f"Failed to auto-create web source: {proc.stderr}", level="warn")
+                log_subprocess_failure("auto-create web source", proc)
         finally:
             os.unlink(tmp_path)
     except Exception as e:

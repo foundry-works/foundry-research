@@ -3,6 +3,18 @@
 import json
 import sys
 
+# ---------------------------------------------------------------------------
+# Canonical error codes — use these in error_response(error_code=...) calls.
+# Providers should map HTTP status codes to one of these rather than using
+# raw "http_NNN" strings, so callers can handle errors uniformly.
+# ---------------------------------------------------------------------------
+ERR_API = "api_error"            # Generic API/HTTP failure (5xx, unexpected status)
+ERR_RATE_LIMITED = "rate_limited"  # 429 or provider-specific throttling
+ERR_NOT_FOUND = "not_found"       # 404 or resource does not exist
+ERR_AUTH_FAILED = "auth_failed"   # 401/403 or invalid API key
+ERR_AUTH_MISSING = "auth_missing" # No API key configured
+ERR_MISSING_QUERY = "missing_query"  # Required search query not provided
+
 # Global quiet mode flag — suppresses stderr log output when True
 _quiet = False
 
@@ -68,6 +80,18 @@ def error_response(errors: list[str], partial_results: list | dict | None = None
     print(output)
 
     sys.exit(0)
+
+
+def log_subprocess_failure(name: str, proc, level: str = "warn", max_stderr: int = 500) -> None:
+    """Log a subprocess failure with exit code and truncated stderr.
+
+    Handles both text mode (proc.stderr is str) and binary mode (bytes).
+    """
+    stderr = proc.stderr
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    stderr = stderr.strip()[:max_stderr]
+    log(f"{name} failed (exit {proc.returncode}): {stderr}", level=level)
 
 
 def log(message: str, level: str = "info") -> None:

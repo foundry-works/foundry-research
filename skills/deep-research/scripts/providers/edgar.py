@@ -47,6 +47,7 @@ def add_arguments(parser):
 
 def search(args) -> dict:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="edgar_")
+    # SEC official limit: 10 req/s per IP (sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)
     rate_limits = {"efts.sec.gov": 10.0, "data.sec.gov": 10.0, "www.sec.gov": 10.0}
     client = create_session(session_dir, rate_limits=rate_limits)
     client.session.headers.update({"User-Agent": _get_user_agent(session_dir)})

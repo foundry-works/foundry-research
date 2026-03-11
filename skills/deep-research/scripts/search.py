@@ -11,7 +11,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _shared.config import _discover_session_dir_from_marker  # noqa: E402
-from _shared.output import error_response, log, set_quiet  # noqa: E402
+from _shared.output import error_response, log, log_subprocess_failure, set_quiet  # noqa: E402
 from providers import available_providers, get_provider  # noqa: E402
 
 # Flags that substitute for --query (provider -> set of flag dest names)
@@ -203,8 +203,7 @@ def _log_search_to_state(args, result: dict, search_mode: str) -> None:
         if proc.returncode == 0:
             log(f"Search logged to state (provider={args.provider}, mode={search_mode})")
         else:
-            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-            log(f"log-search returned non-zero: {stderr}", level="warn")
+            log_subprocess_failure("log-search", proc)
     except Exception as e:
         log(f"Failed to log search to state: {e}", level="warn")
 
@@ -254,8 +253,7 @@ def _add_sources_to_state(args, result: dict) -> None:
                 except (json.JSONDecodeError, TypeError):
                     log("Sources sent to state (could not parse response)")
             else:
-                stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-                log(f"add-sources returned non-zero: {stderr}", level="warn")
+                log_subprocess_failure("add-sources", proc)
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
