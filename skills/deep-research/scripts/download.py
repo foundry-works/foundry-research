@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,7 +28,7 @@ from _shared.metadata import (  # noqa: E402
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown, validate_pdf  # noqa: E402
-from _shared.quality import check_content_mismatch  # noqa: E402
+from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
 
 # arXiv download constraints
 _ARXIV_DELAY = 3.0  # seconds between arXiv downloads (ToS)
@@ -263,12 +264,14 @@ def _resolve_source_id(session_dir: str, source_id: str) -> dict:
         raise SystemExit(1)
 
     conn = _sqlite3.connect(db_path)
-    conn.row_factory = _sqlite3.Row
-    row = conn.execute(
-        "SELECT doi, url, pdf_url, title, authors, year, venue, type FROM sources WHERE id = ?",
-        (source_id,)
-    ).fetchone()
-    conn.close()
+    try:
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT doi, url, pdf_url, title, authors, year, venue, type FROM sources WHERE id = ?",
+            (source_id,)
+        ).fetchone()
+    finally:
+        conn.close()
 
     if not row:
         error_response([f"Source {source_id} not found in state.db"], error_code="source_not_found")
@@ -444,7 +447,7 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     # Auto-enrich from Crossref if DOI available and metadata is sparse
     doi = meta.get("doi")
     if doi and _metadata_needs_enrichment(meta):
-        _auto_enrich_crossref(doi, source_id, _session_dir, metadata_dir)
+        _auto_enrich_crossref(doi, source_id, client, metadata_dir)
 
     # Prominently log the assigned source ID
     log(f">>> Assigned source ID: {source_id}")
@@ -472,14 +475,19 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
         md_path = os.path.join(sources_dir, f"{source_id}.md")
         Path(md_path).write_text(content, encoding="utf-8")
 
+        # Quality check — catch paywall stubs, cookie banners, etc.
+        qa = assess_quality(content)
+
         result["content_file"] = f"sources/{source_id}.md"
         result["content_length"] = len(content)
         result["source_used"] = "web"
-        result["quality"] = "ok"
+        result["quality"] = qa["quality"]
+        if qa["quality"] != "ok":
+            result["quality_details"] = qa["quality_details"]
 
         meta["url"] = url
         meta["type"] = "web"
-        log(f"Saved web content: {md_path} ({len(content)} chars)")
+        log(f"Saved web content: {md_path} ({len(content)} chars, quality={qa['quality']})")
 
     except Exception as e:
         result["errors"].append(f"Web download failed: {e}")
@@ -521,7 +529,7 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
         try:
             resp = client.get(pdf_url, timeout=(15, 60))
             if resp.status_code in (502, 503, 504):
-                wait = 2 ** attempt
+                wait = max(_ARXIV_DELAY, 2 ** attempt)
                 log(f"arXiv returned {resp.status_code}, retrying in {wait}s", level="warn")
                 time.sleep(wait)
                 continue
@@ -799,37 +807,32 @@ def _metadata_needs_enrichment(meta: dict) -> bool:
     )
 
 
-def _auto_enrich_crossref(doi: str, source_id: str, session_dir: str, metadata_dir: str) -> None:
+def _auto_enrich_crossref(doi: str, source_id: str, client, metadata_dir: str) -> None:
     """Auto-enrich metadata from Crossref after download. Best-effort, never fails the download."""
     try:
-        client = create_session(session_dir)
-        try:
-            # Reuse enrich.py's Crossref fetching logic inline
-            url = f"https://api.crossref.org/works/{doi}"
-            resp = client.get(url, timeout=(15, 15))
-            if resp.status_code != 200:
-                log(f"Crossref enrichment skipped: HTTP {resp.status_code} for {doi}", level="debug")
-                return
+        url = f"https://api.crossref.org/works/{doi}"
+        resp = client.get(url, timeout=(15, 15))
+        if resp.status_code != 200:
+            log(f"Crossref enrichment skipped: HTTP {resp.status_code} for {doi}", level="debug")
+            return
 
-            data = resp.json()
-            message = data.get("message")
-            if not message:
-                return
+        data = resp.json()
+        message = data.get("message")
+        if not message:
+            return
 
-            # Normalize through the standard pipeline
-            normalized = normalize_paper(message, "crossref")
-            normalized["id"] = source_id
+        # Normalize through the standard pipeline
+        normalized = normalize_paper(message, "crossref")
+        normalized["id"] = source_id
 
-            # Read existing metadata and merge
-            existing = read_source_metadata(metadata_dir, source_id)
-            if not existing:
-                existing = {"id": source_id}
+        # Read existing metadata and merge
+        existing = read_source_metadata(metadata_dir, source_id)
+        if not existing:
+            existing = {"id": source_id}
 
-            merged = merge_metadata(existing, normalized)
-            write_source_metadata(metadata_dir, source_id, merged)
-            log(f"Auto-enriched {source_id} from Crossref (doi: {doi})")
-        finally:
-            client.close()
+        merged = merge_metadata(existing, normalized)
+        write_source_metadata(metadata_dir, source_id, merged)
+        log(f"Auto-enriched {source_id} from Crossref (doi: {doi})")
     except Exception as e:
         log(f"Auto-enrichment failed for {source_id}: {e}", level="debug")
 
@@ -881,54 +884,66 @@ def _lookup_source_id_from_state(session_dir: str, doi: str | None,
         from _shared.doi_utils import canonicalize_url as _canon_url
 
         conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        try:
+            conn.row_factory = sqlite3.Row
 
-        # Tier 1: DOI match
-        if doi:
-            row = conn.execute(
-                "SELECT id FROM sources WHERE doi = ?",
-                (normalize_doi(doi),)
-            ).fetchone()
-            if row:
-                conn.close()
-                return row["id"]
+            # Tier 1: DOI match
+            if doi:
+                row = conn.execute(
+                    "SELECT id FROM sources WHERE doi = ?",
+                    (normalize_doi(doi),)
+                ).fetchone()
+                if row:
+                    return row["id"]
 
-        # Tier 2: URL match
-        if url:
-            canon = _canon_url(url)
-            row = conn.execute(
-                "SELECT id FROM sources WHERE url = ?",
-                (canon,)
-            ).fetchone()
-            if row:
-                conn.close()
-                return row["id"]
+            # Tier 2: URL match
+            if url:
+                canon = _canon_url(url)
+                row = conn.execute(
+                    "SELECT id FROM sources WHERE url = ?",
+                    (canon,)
+                ).fetchone()
+                if row:
+                    return row["id"]
 
-        conn.close()
-        return None
+            return None
+        finally:
+            conn.close()
     except Exception:
         return None
 
 
+_source_id_lock = threading.Lock()
+
+
 def _generate_source_id(sources_dir: str) -> str:
-    """Generate the next sequential source ID (src-001, src-002, etc.)."""
-    existing = set()
-    metadata_dir = os.path.join(sources_dir, "metadata")
-    if os.path.isdir(metadata_dir):
-        for name in os.listdir(metadata_dir):
-            if name.startswith("src-") and name.endswith(".json"):
-                existing.add(name[:-5])  # strip .json
+    """Generate the next sequential source ID (src-001, src-002, etc.).
 
-    # Also check source files directly
-    if os.path.isdir(sources_dir):
-        for name in os.listdir(sources_dir):
-            if name.startswith("src-") and "." in name:
-                existing.add(name.rsplit(".", 1)[0])
+    Thread-safe: uses a lock so parallel batch workers cannot collide.
+    """
+    with _source_id_lock:
+        existing = set()
+        metadata_dir = os.path.join(sources_dir, "metadata")
+        if os.path.isdir(metadata_dir):
+            for name in os.listdir(metadata_dir):
+                if name.startswith("src-") and name.endswith(".json"):
+                    existing.add(name[:-5])  # strip .json
 
-    n = 1
-    while f"src-{n:03d}" in existing:
-        n += 1
-    return f"src-{n:03d}"
+        # Also check source files directly
+        if os.path.isdir(sources_dir):
+            for name in os.listdir(sources_dir):
+                if name.startswith("src-") and "." in name:
+                    existing.add(name.rsplit(".", 1)[0])
+
+        n = 1
+        while f"src-{n:03d}" in existing:
+            n += 1
+
+        # Create a placeholder file to reserve this ID before releasing the lock
+        placeholder = os.path.join(sources_dir, f"src-{n:03d}.pending")
+        Path(placeholder).touch()
+
+        return f"src-{n:03d}"
 
 
 def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: str) -> list:

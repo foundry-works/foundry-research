@@ -77,6 +77,10 @@ class HttpClient:
         """Send a GET request with rate limiting and retries."""
         return self._request("GET", url, **kwargs)
 
+    def head(self, url: str, **kwargs) -> requests.Response:
+        """Send a HEAD request with rate limiting and retries."""
+        return self._request("HEAD", url, **kwargs)
+
     def post(self, url: str, **kwargs) -> requests.Response:
         """Send a POST request with rate limiting and retries."""
         return self._request("POST", url, **kwargs)

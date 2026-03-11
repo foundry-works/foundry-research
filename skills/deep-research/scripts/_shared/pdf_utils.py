@@ -87,14 +87,18 @@ def download_pdf(
         # Stream to file
         Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
         size = 0
+        oversize = False
         with open(dest_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=64 * 1024):
                 size += len(chunk)
                 if size > max_size_mb * 1024 * 1024:
-                    f.close()
-                    os.unlink(dest_path)
-                    return {"success": False, "size_bytes": size, "errors": [f"PDF exceeded {max_size_mb}MB during download"]}
+                    oversize = True
+                    break
                 f.write(chunk)
+
+        if oversize:
+            os.unlink(dest_path)
+            return {"success": False, "size_bytes": size, "errors": [f"PDF exceeded {max_size_mb}MB during download"]}
 
         # Validate the downloaded file
         if not validate_pdf(dest_path):
@@ -307,8 +311,11 @@ def _run_pymupdf4llm(pdf_path: str, timeout: int) -> str | None:
         return None
 
 
+_MAX_PYPDF_PAGES = 500  # cap to prevent OOM on huge documents
+
+
 def _run_pypdf(pdf_path: str) -> str | None:
-    """Extract raw text from PDF using pypdf."""
+    """Extract raw text from PDF using pypdf (capped at _MAX_PYPDF_PAGES pages)."""
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -316,8 +323,13 @@ def _run_pypdf(pdf_path: str) -> str | None:
         return None
 
     reader = PdfReader(pdf_path)
+    total = len(reader.pages)
+    limit = min(total, _MAX_PYPDF_PAGES)
+    if total > _MAX_PYPDF_PAGES:
+        log(f"pypdf: truncating extraction to {_MAX_PYPDF_PAGES}/{total} pages", level="warn")
+
     pages = []
-    for page in reader.pages:
+    for page in reader.pages[:limit]:
         text = page.extract_text()
         if text:
             pages.append(text)

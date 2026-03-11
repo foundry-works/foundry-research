@@ -95,7 +95,7 @@ def _probe_mirror(mirror: str | None, client) -> bool:
     if not mirror:
         return False
     try:
-        resp = client.get(f"https://{mirror}", timeout=(5, 5), allow_redirects=True)
+        resp = client.head(f"https://{mirror}", timeout=(5, 5), allow_redirects=True)
         return resp.status_code < 500
     except Exception:
         return False
