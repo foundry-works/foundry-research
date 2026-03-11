@@ -79,21 +79,26 @@ class RateLimiter:
         Refills tokens based on elapsed time, then consumes one token.
         If no tokens available, sleeps until one is refilled.
         Also respects backoff_until from previous 429/503 responses.
+
+        Uses BEGIN IMMEDIATE + single UPDATE to atomically check-and-decrement
+        tokens, preventing concurrent processes from double-consuming.
         """
         while True:
             conn = self._get_conn()
             self._ensure_bucket(conn, domain)
 
             now = time.time()
+
+            # Check backoff first (read-only, no race concern)
             row = conn.execute(
-                "SELECT tokens, max_tokens, refill_rate, last_refill, backoff_until FROM rate_limits WHERE domain = ?",
+                "SELECT refill_rate, backoff_until FROM rate_limits WHERE domain = ?",
                 (domain,),
             ).fetchone()
 
             if row is None:
                 return  # shouldn't happen after ensure_bucket
 
-            tokens, max_tokens, refill_rate, last_refill, backoff_until = row
+            refill_rate, backoff_until = row
 
             # Respect backoff from 429/503
             if now < backoff_until:
@@ -103,23 +108,29 @@ class RateLimiter:
                 time.sleep(wait_time)
                 continue
 
-            # Refill tokens based on elapsed time
-            elapsed = now - last_refill
-            tokens = min(max_tokens, tokens + elapsed * refill_rate)
+            # Atomic token refill + consume: commit any implicit transaction first,
+            # then BEGIN IMMEDIATE to take a write lock so no other process can
+            # read stale tokens between our refill calculation and the decrement.
+            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """UPDATE rate_limits
+                   SET tokens = MIN(max_tokens, tokens + (? - last_refill) * refill_rate) - 1.0,
+                       last_refill = ?
+                   WHERE domain = ?
+                     AND MIN(max_tokens, tokens + (? - last_refill) * refill_rate) >= 1.0""",
+                (now, now, domain, now),
+            )
+            changed = conn.execute("SELECT changes()").fetchone()[0]
+            conn.commit()
 
-            if tokens >= 1.0:
-                # Consume a token
-                conn.execute(
-                    "UPDATE rate_limits SET tokens = ?, last_refill = ? WHERE domain = ?",
-                    (tokens - 1.0, now, domain),
-                )
-                conn.commit()
+            if changed:
                 return
-            # Wait for a token to refill
-            wait_time = (1.0 - tokens) / refill_rate
+
+            # Not enough tokens — estimate wait time
+            wait_time = 1.0 / refill_rate
             # Add jitter (±20%)
             wait_time *= 0.8 + random.random() * 0.4
-            conn.commit()
             time.sleep(wait_time)
 
     def backoff(self, domain: str) -> None:

@@ -25,7 +25,7 @@ OAI_PMH_URL = "https://export.arxiv.org/oai2?verb=ListSets"
 OAI_NS = {"oai": "http://www.openarchives.org/OAI/2.0/"}
 
 
-def _fetch_categories() -> list[dict]:
+def _fetch_categories(client) -> list[dict]:
     """Fetch the full arXiv category taxonomy from the OAI-PMH endpoint.
 
     OAI-PMH setSpec uses colon-delimited hierarchy:
@@ -36,10 +36,9 @@ def _fetch_categories() -> list[dict]:
                   "physics:astro-ph:CO"  -> leaf, arXiv code = "astro-ph.CO"
                   "physics:physics:acc-ph" -> leaf, arXiv code = "physics.acc-ph"
     """
-    import requests
-
-    resp = requests.get(OAI_PMH_URL, timeout=15)
-    resp.raise_for_status()
+    resp = client.get(OAI_PMH_URL)
+    if resp.status_code != 200:
+        raise RuntimeError(f"OAI-PMH returned {resp.status_code}: {resp.text[:200]}")
     root = ET.fromstring(resp.text)
 
     # Parse all entries into (parts, name) tuples
@@ -101,15 +100,17 @@ def add_arguments(parser):
 
 
 def search(args) -> dict:
+    session_dir = args.session_dir or tempfile.mkdtemp(prefix="arxiv_")
+    client = create_session(session_dir, rate_limits={"export.arxiv.org": 1.0})
+
     if args.list_categories:
         try:
-            taxonomy = _fetch_categories()
+            taxonomy = _fetch_categories(client)
             return success_response(taxonomy)
         except Exception as e:
             return error_response([f"Failed to fetch arXiv taxonomy: {e}"], error_code="api_error")
-
-    session_dir = args.session_dir or tempfile.mkdtemp(prefix="arxiv_")
-    client = create_session(session_dir, rate_limits={"export.arxiv.org": 1.0})
+        finally:
+            client.close()
 
     try:
         query = _build_query(args)

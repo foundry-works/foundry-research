@@ -12,6 +12,10 @@ BASE_URL = "https://api.openalex.org"
 # Polite-pool email used when no API key is configured
 _DEFAULT_MAILTO = "deep-research-tool@users.noreply.github.com"
 
+# Cap cursor pagination to avoid unbounded API calls on large --offset values.
+# 10 pages × 200 per_page = 2000 results — beyond this, relevance degrades anyway.
+_MAX_CURSOR_PAGES = 10
+
 
 def add_arguments(parser) -> None:
     """Register OpenAlex-specific CLI flags."""
@@ -84,6 +88,12 @@ def search(args) -> dict:
         items_to_skip = offset % limit if limit > 0 else 0
 
         # Advance through pages to reach the requested offset
+        if pages_to_skip >= _MAX_CURSOR_PAGES:
+            log(f"OpenAlex: offset {offset} requires {pages_to_skip} pages of cursor pagination "
+                f"(max {_MAX_CURSOR_PAGES}). Capping.", level="warn")
+            pages_to_skip = _MAX_CURSOR_PAGES - 1
+            items_to_skip = 0
+
         for page_num in range(pages_to_skip + 1):
             url = f"{BASE_URL}/works"
             log(f"OpenAlex request: page {page_num + 1}, cursor={params.get('cursor', '*')[:20]}...")
