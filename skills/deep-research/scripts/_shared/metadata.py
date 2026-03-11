@@ -82,6 +82,8 @@ def normalize_paper(raw: dict, provider: str) -> dict:
         paper = _normalize_biorxiv(paper, raw)
     elif provider == "opencitations":
         paper = _normalize_opencitations(paper, raw)
+    elif provider == "dblp":
+        paper = _normalize_dblp(paper, raw)
     else:
         # Generic: copy matching fields directly
         for key in PAPER_SCHEMA:
@@ -217,6 +219,47 @@ def _normalize_biorxiv(paper: dict, raw: dict) -> dict:
     paper["peer_reviewed"] = False  # bioRxiv is preprints
     if paper.get("authors"):
         paper["authors"] = [_reformat_author(a) for a in paper["authors"]]
+    return paper
+
+
+def _normalize_dblp(paper: dict, raw: dict) -> dict:
+    """Normalize DBLP API response to unified schema.
+
+    DBLP fields: title, authors (dict or list), venue, year (str), doi, ee, url, pages, type, key.
+    Authors come as {"author": [{"text": "Name"}, ...]} or {"author": {"text": "Name"}} or a plain list.
+    """
+    paper["title"] = (raw.get("title", "") or "").rstrip(".")
+    paper["venue"] = raw.get("venue", "") or ""
+    paper["year"] = _parse_year(raw.get("year"))
+    paper["doi"] = raw.get("doi", "") or ""
+    paper["url"] = raw.get("ee", "") or raw.get("url", "") or ""
+    paper["pages"] = raw.get("pages", "") or ""
+    paper["type"] = "academic"
+
+    # Construct DOI-based URL if we have a DOI but no ee
+    if paper["doi"] and not paper["url"]:
+        paper["url"] = f"https://doi.org/{paper['doi']}"
+
+    # Authors — DBLP has multiple formats
+    authors_raw = raw.get("authors", {})
+    if isinstance(authors_raw, dict):
+        author_list = authors_raw.get("author", [])
+        if isinstance(author_list, dict):
+            author_list = [author_list]
+        paper["authors"] = [
+            _reformat_author(a.get("text", "") if isinstance(a, dict) else str(a))
+            for a in author_list
+            if (a.get("text", "") if isinstance(a, dict) else a)
+        ]
+    elif isinstance(authors_raw, list):
+        # Already a plain list of strings (as produced by the dblp-api library)
+        paper["authors"] = [_reformat_author(a) for a in authors_raw if a]
+    else:
+        paper["authors"] = []
+
+    # DBLP access field
+    paper["is_open_access"] = raw.get("access", "") == "open"
+
     return paper
 
 

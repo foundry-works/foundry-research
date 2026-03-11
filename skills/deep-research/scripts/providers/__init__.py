@@ -18,6 +18,7 @@ _REGISTRY: dict[str, str] = {
     "crossref": "providers.crossref",
     "core": "providers.core",
     "opencitations": "providers.opencitations",
+    "dblp": "providers.dblp",
 }
 
 
