@@ -131,11 +131,16 @@ class TestEmptyResults:
 # ---------------------------------------------------------------------------
 
 class TestAPIErrorEnvelope:
-    def test_total_failure_exits_1(self):
-        """Total failure (no partial results) exits with code 1."""
+    def test_total_failure_exits_0(self):
+        """Total failure exits with code 0 — errors are in the JSON envelope, not the exit code.
+
+        Exit 0 is critical because Claude Code cancels all sibling parallel tool calls
+        when any call returns non-zero, so an API error from one provider would kill
+        unrelated parallel searches against other providers.
+        """
         with pytest.raises(SystemExit) as exc_info:
             error_response(["API returned 500"])
-        assert exc_info.value.code == 1
+        assert exc_info.value.code == 0
 
     def test_partial_success_exits_0(self):
         """Partial results present → exits with code 0."""

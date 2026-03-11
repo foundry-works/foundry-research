@@ -323,6 +323,7 @@ class TestArxiv:
             days=None,
             download=None,
             to_md=False,
+            list_categories=None,
         )
         result = _parse_output(arxiv.search(args))
 
@@ -353,6 +354,7 @@ class TestArxiv:
             days=None,
             download=None,
             to_md=False,
+            list_categories=None,
         )
 
         with pytest.raises(SystemExit):
@@ -377,6 +379,7 @@ class TestArxiv:
             days=None,
             download=None,
             to_md=False,
+            list_categories=None,
         )
         result = _parse_output(arxiv.search(args))
 
@@ -444,8 +447,10 @@ class TestPubMed:
         })
         client.get.return_value = esearch_response
 
+        # session_dir=None prevents auto-fetch (pubmed auto-enables fetch when session_dir is set)
         args = _base_args(
             query="test",
+            session_dir=None,
             cited_by=None,
             references=None,
             related=None,

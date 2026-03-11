@@ -10,7 +10,7 @@ import pytest
 
 from _shared.config import get_config, get_session_dir, _GLOBAL_CONFIG_PATH, _DEFAULT_CONFIG, _ENV_KEYS
 from _shared.html_extract import html_to_text, extract_readable_content, strip_jats_xml
-from _shared.pdf_utils import validate_pdf, download_pdf, generate_toc, _check_quality
+from _shared.pdf_utils import validate_pdf, download_pdf, generate_toc
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +102,9 @@ class TestConfig:
         assert result == str(session_path.resolve())
         assert (session_path / "sources" / "metadata").is_dir()
 
-    def test_get_session_dir_missing_exits(self):
-        """Missing session_dir arg and no env var causes SystemExit."""
+    @patch("_shared.config._discover_session_dir_from_marker", return_value=None)
+    def test_get_session_dir_missing_exits(self, mock_discover):
+        """Missing session_dir arg, no env var, and no marker file causes SystemExit."""
         args = SimpleNamespace()  # No session_dir attribute
 
         with patch.dict(os.environ, {}, clear=False):
