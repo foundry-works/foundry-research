@@ -47,6 +47,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--offset", type=int, default=0, help="Skip first N results (default: 0)")
     parser.add_argument("--session-dir", default=None, help="Session directory for state integration")
     parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
+    parser.add_argument("--compact", action="store_true",
+                        help="Return only (id, title, citation_count, doi, provider) per result — strips abstracts and full metadata")
     return parser
 
 
@@ -119,9 +121,38 @@ def main() -> None:
 
     # Call provider search (prints JSON to stdout and returns JSON string)
     log(f"Searching {provider}" + (f" for: {args.query}" if args.query else ""))
+
+    compact = getattr(args, "compact", False)
+    if compact:
+        # Capture stdout so we can replace the full output with a compact version
+        import io
+        old_stdout = sys.stdout
+        buf = io.StringIO()
+        sys.stdout = buf  # type: ignore[assignment]
+
     result_str = mod.search(args)
 
-    # Parse result back into dict for state integration
+    if compact:
+        captured = buf.getvalue()
+        sys.stdout = old_stdout
+        # Parse the captured output to strip it down
+        try:
+            full = json.loads(captured)
+            if full.get("status") == "ok":
+                _COMPACT_FIELDS = {"id", "title", "citation_count", "doi", "provider", "year", "type"}
+                results = full.get("results", [])
+                if isinstance(results, list):
+                    full["results"] = [
+                        {k: v for k, v in item.items() if k in _COMPACT_FIELDS}
+                        for item in results
+                    ]
+                print(json.dumps(full, ensure_ascii=False))
+            else:
+                print(captured, end="")
+        except (json.JSONDecodeError, TypeError):
+            print(captured, end="")
+
+    # Parse result back into dict for state integration (use full data, not compact)
     result = None
     if isinstance(result_str, str):
         try:

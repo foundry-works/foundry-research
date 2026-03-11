@@ -22,64 +22,49 @@ You are a research agent with access to academic databases, web search, and stru
 3. **Delegate brief writing to the brief-writer agent.** Spawn a `brief-writer` subagent (Opus) with the user's query, assumption surfacing results, and session directory path. The agent generates 3-7 research questions including at least one tradeoffs question (what would experts argue about?) and one adversarial question (what's wrong with the obvious answer?). It writes `brief.json` to the session directory. After it returns, load the brief: `${CLAUDE_SKILL_DIR}/state set-brief --from-json brief.json`.
 
    **Why delegate:** The brief is the highest-leverage artifact in the pipeline — everything downstream (searches, source triage, reading priority, synthesis) flows from the questions. Descriptive-only questions produce catalog evidence that lists options without helping the reader decide. The brief-writer agent has one job and no time pressure, so it thinks carefully about what questions will surface strategic tensions, not just facts. See `agents/brief-writer.md` for the full prompt.
-4. Search providers (parallel OK — use `--provider tavily` for web, academic providers for papers). Before searching, consider: does this topic have significant non-academic coverage (blogs, news, industry reports, Wikipedia)? If yes, include `--provider tavily` searches alongside academic providers.
-5. Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` — no manual `add-sources` or `log-search` needed
-6. **Citation chasing checkpoint (after round 1).** Before running more keyword searches, check whether your round 1 results include academic papers with >50 citations. If they do, citation traversal is mandatory before proceeding to downloads — identify 3-5 high-impact papers (high citation count, seminal reviews, foundational experiments) and run citation traversal on them. **Minimum: 3 citation traversal searches** (`--references` and/or `--cited-by`) before moving to step 8. Citation traversal has higher precision than keyword search — a paper that cites a seminal work is almost certainly relevant, whereas keyword matches pull in off-topic results.
+4. **Delegate source acquisition to the `source-acquisition` agent.** Spawn a `source-acquisition` subagent (Opus, foreground) with:
+   - The session directory path (absolute)
+   - The CLI directory path (`${CLAUDE_SKILL_DIR}`)
+   - The research brief (scope, questions, completeness criteria)
+   - Mode: `initial`
 
-   **Skip this checkpoint** if: (a) the topic is primarily non-academic (product comparisons, technical docs, financial analysis) with no meaningful citation graph, or (b) round 1 surfaced no papers with >50 citations. In these cases, proceed directly to downloads.
+   The agent handles the entire search-to-download pipeline: broad searches, citation chasing, provider diversity, query refinement, triage, downloads, and recovery. It writes journal entries and updates state.db throughout. It returns a compact JSON manifest with source counts, provider distribution, top papers, triage tiers, download results, coverage assessment per question, and any gaps logged.
 
-   **Why this is a checkpoint, not a suggestion:** In practice, agents tend to run 1-2 citation traversals and move on. But a session with 3+ high-citation papers and only 1 citation chase is leaving the highest-precision search strategy underused — you're relying on noisier keyword searches to fill the same role.
+   **Why delegate:** Search is the biggest token sink in the pipeline — each search returns 2-80KB of JSON, and with 15-20 searches plus repeated `state sources` queries, search-phase data accounts for ~60% of your input tokens. The source-acquisition agent absorbs all raw search data in its own context and returns only a ~500-token manifest. See `agents/source-acquisition.md` for the full prompt.
 
-   **Choosing `--references` vs `--cited-by`:**
-   - **`--references`** (backward): Returns the paper's own bibliography — an author-curated reading list of foundational and related work. Prefer this for foundational papers (high citation count, seminal reviews) where you want to understand the intellectual lineage. High precision, stable over time.
-   - **`--cited-by`** (forward): Returns papers that cited this one — recency-biased, showing who built on it. Prefer this for recent papers where you want to find follow-up work. For foundational papers with 200+ citations, `--cited-by` without filtering returns noise — use `--min-citations N` to surface only substantive follow-up work (e.g., `--cited-by PAPER_ID --min-citations 20 --limit 10`). **If `--cited-by` returns 0 results for a paper with >100 known citations**, this is almost certainly a filtering issue, not an empty result — retry without `--min-citations`. Note: `--cited-by` and `--references` are only supported on Semantic Scholar and PubMed. OpenAlex does not support citation traversal — use keyword search on OpenAlex with the paper's title instead.
-   - **Default strategy:** Run `--references PAPER_ID --limit 10` on every high-impact paper. Add `--cited-by PAPER_ID --min-citations 10 --limit 10` selectively for recent or mid-citation papers where forward citations are manageable.
+   **What you get back:** A manifest telling you how many sources were found, downloaded, and triaged, which brief questions have strong vs. thin coverage, and any gaps already logged. Everything else is on disk (state.db, journal.md, sources/). You never see raw search JSON.
 
-   **Citation chasing fallback tree.** When citation traversal returns 0 results, don't abandon it — work through these fallbacks in order:
-   1. **Retry `--cited-by` without `--min-citations`** — the filter may be too aggressive for the paper's citation profile.
-   2. **Try `--references` instead** — backward chasing (the paper's own bibliography) is more reliable than forward chasing and doesn't depend on external indexing of citing papers.
-   3. **Fall back to keyword search with the paper's exact title** on Semantic Scholar + OpenAlex — this surfaces papers with similar topics even when the citation graph is sparse or incomplete in the provider's index.
+5. **Triage sources for reading.** The source-acquisition agent already ran triage, but you make the final reading allocation. Use the manifest's `triage_tiers` and `top_papers` to decide which sources get reader agents.
+   - **Allocate readers to the top 15-20 sources** by triage tier. For small sessions (<15 downloaded sources), read all good-quality sources.
+   - **Skip:** Sources with `quality: "mismatched"` or `quality: "degraded"`. Also deprioritize sources with <5 citations and no keyword match to brief questions unless they fill a specific gap.
 
-   **Why a fallback tree matters:** In practice, citation chasing returns 0 results in ~30% of attempts across sessions. Without fallbacks, agents log "0 results" and move on, leaving the highest-precision search strategy unused. The fallback tree ensures you exhaust citation-adjacent strategies before falling back to noisier keyword searches.
-7. **Provider diversity checkpoint.** Run `${CLAUDE_SKILL_DIR}/state sources` and check the provider distribution across your sources. If any single provider accounts for >50% of sources (common with Semantic Scholar), your round 2 searches **must** prioritize underrepresented providers. For example, if 65% of sources come from Semantic Scholar, run your next searches on OpenAlex, PubMed, CORE, or Crossref — even if Semantic Scholar would return results faster. **Why this matters:** Provider concentration creates systematic blind spots. Each academic database has different coverage: Semantic Scholar overindexes CS/ML, PubMed overindexes biomedical, OpenAlex has broader interdisciplinary coverage, CORE captures institutional repositories. A session dominated by one provider will miss entire veins of relevant literature that other providers index. Diversifying providers is the single most effective way to improve source coverage without running more searches.
+6. Spawn reader subagents for triaged papers (parallel, one source per agent). **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget.
+7. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
+8. **Delegate findings logging to findings-logger agents (one per question, parallel).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently. Each agent reads all reader notes, identifies evidence relevant to its question, extracts 2-3 distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
+9. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
+10. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
+11. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
 
-8. **Triage sources before downloading (optional for large sessions).** After search rounds complete, run `${CLAUDE_SKILL_DIR}/state triage` to see sources ranked by citation count × title-keyword-relevance to your brief questions. The command scores every source against the brief and assigns priority tiers (high/medium/low/skip). For sessions with 50+ sources, review the top ~30 and focus downloads there — skip sources with off-topic titles and zero citations unless they fill a specific gap. For smaller sessions (<30 sources), download everything and triage at the reading step instead.
+    Spawn the `source-acquisition` agent again (Opus, foreground) with:
+    - The session directory path (absolute)
+    - The CLI directory path (`${CLAUDE_SKILL_DIR}`)
+    - The research brief
+    - Mode: `gap`
+    - **Open gaps** — the gaps from `state audit`
+    - **Applicability targets** — the 3-5 most important findings that will drive recommendations, with domain-specific feasibility questions:
+      - Product: "Can you actually get this? Constraints?" (availability, waitlists, spend requirements)
+      - Academic: "Has this replicated? In what populations/settings? Effect size?"
+      - Medical: "Clinical guidelines vs. individual studies? Contraindications?"
+      - Financial: "Risks? Has this worked in different market conditions? Survivorship bias?"
+      - Technical: "Does this work at scale? Operational constraints? Maintenance burden?"
 
-   **Why triage before download:** Downloading is expensive (subprocess calls, PDF cascade, conversion). In large sessions, 40-60% of downloads produce low-relevance content. Pre-download triage lets you focus bandwidth on sources most likely to contribute to the report, and defer or skip the rest.
+    The agent runs targeted searches for each gap (minimum 2 strategies per gap: keyword + citation chase), applicability searches for the targets, and downloads any new sources. It returns a manifest reporting which gaps were resolved, which are genuine literature gaps (with specific failed strategies documented), and new sources added.
 
-9. `${CLAUDE_SKILL_DIR}/state download-pending --auto-download --batch-size 15` — download pending sources in batches. The `--batch-size` flag (default 15) caps each call to avoid subprocess timeouts. Loop until the response shows `"remaining": 0`. The batch downloader automatically falls back across identifier types (DOI cascade → pdf_url → url) so you don't need to manually retry failed downloads with different identifiers. If the response includes `sync_failures`, run `${CLAUDE_SKILL_DIR}/download --retry-sync` to recover any sources that downloaded but failed to update state.db. Sources listed in `failed_sources` have exhausted all available identifiers — use abstract metadata or move on.
-   **Recover high-priority failures (optional).** If the download batch reports failed sources and some are high-citation or highly relevant papers, run `${CLAUDE_SKILL_DIR}/state recover-failed` to attempt recovery via alternative channels: CORE title search (institutional repositories), Tavily web search for PDFs, and DOI landing page extraction. This is a second-pass strategy for paywalled high-value papers that exhausted the primary cascade. Use `--min-citations 30` to lower the threshold if needed.
+    **Why delegate again:** Gap searches and applicability searches are the same token-heavy pattern — multiple searches whose raw JSON pollutes your context. The agent absorbs it all and returns a compact result. It also enforces the 2-search minimum per gap, which the orchestrator historically shortcuts.
 
-10. **Triage sources before reading.** After downloads complete, rank sources for reading priority. Not every downloaded source deserves a reader agent — allocate readers to the most promising sources to avoid wasting agent slots on low-value content.
-   - **Rank by:** (a) citation count — highly-cited papers are more likely to be substantive; (b) title relevance — does the title contain keywords from a brief question?; (c) recency for the topic — a 2024 paper with 5 citations may be more relevant than a 2010 paper with 50 if the field has evolved.
-   - **Skip:** Sources with `quality: "mismatched"` or `quality: "degraded"` (the content mismatch detector flags wrong-PDF downloads at download time). Also deprioritize sources with <5 citations, no keyword match to brief questions, and not filling a specific gap.
-   - **Allocate readers to the top 15-20 sources** by this ranking. For small sessions (<15 downloaded sources), read all good-quality sources.
+    **After the agent returns:** If new sources were downloaded, spawn reader agents for them, then re-run findings-loggers for questions with new evidence. Run `${CLAUDE_SKILL_DIR}/state audit` again to confirm coverage improved.
 
-   **Why triage matters:** The search-to-read funnel is extremely lossy — in practice, ~50% of downloads are wasted on low-relevance or mismatched content. Triaging by citation count and title relevance before spawning readers prevents spending agent slots on sources that won't contribute to the report.
-
-11. Spawn reader subagents for triaged papers (parallel, one source per agent). **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget. If you wait until all readers complete, you've lost the opportunity to overlap search and reading — the most expensive phases of the pipeline run sequentially instead of concurrently.
-12. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
-13. **Delegate findings logging to findings-logger agents (one per question, parallel).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently. Each agent reads all reader notes, identifies evidence relevant to its question, extracts 2-3 distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds search logs, download output, and reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
-14. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas, and you lose the structured mechanism for systematic improvement — you're left guessing which questions need more work instead of having a concrete list.
-15. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
-16. **Pre-report gap checkpoint — resolve or justify every open gap.** Review all open gaps from the audit. Additionally: if the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
-
-   **Start with `gap-search-plan`:** Run `${CLAUDE_SKILL_DIR}/state gap-search-plan` *before* crafting any gap-resolution searches. It generates suggested queries for each open gap based on the gap text, associated question, and existing sources — using terminology already present in your source base. Execute its suggestions rather than crafting queries from scratch. This prevents the common failure mode of running generic keyword searches that return off-topic results because they don't use field-specific vocabulary discovered during reading.
-
-   For each gap, you must either:
-   - (a) Run **at least 2 targeted searches** to attempt resolution: one keyword query using terminology from the relevant papers (or from `gap-search-plan` output), and one citation chase on the most gap-relevant paper. A gap resolved after only 1 search query is suspicious — the default assumption should be that more searching is needed, not that the literature is empty.
-   - (b) If a gap genuinely can't be resolved after 2+ search attempts (sparse literature), write a journal entry citing the **specific failed search strategies** — not just asserting the gap exists. Example: "Searched PubMed for 'uncanny valley mitigation empirical' (3 results, all design guidelines, no experiments) and ran --cited-by on MacDorman 2016 (0 results on mitigation). This is a genuine literature gap: no empirical mitigation studies exist."
-   - **Proceeding to write the report with open gaps that could have been searched is a process failure.** The point of logging gaps is to act on them, not just document them.
-
-   **Why the 2-search minimum matters:** In practice, agents tend to run a single perfunctory search, find sparse results, and declare a "genuine literature gap." But most apparent gaps are search failures, not literature failures — the right terminology, provider, or citation network wasn't tried. Two searches with different strategies (keyword + citation chase) dramatically reduce false gap declarations.
-17. **Applicability research pass.** Before synthesis, stress-test your key findings for real-world feasibility. For the 3-5 most important findings (the ones that will drive recommendations), run targeted searches asking: "How reliable/accessible/practical is this in real-world conditions?" The question varies by domain:
-    - Product research: "Can you actually get this? What are the constraints?" (e.g., award availability, waitlists, regional limits, spend requirements)
-    - Academic research: "Has this replicated? In what populations/settings? What's the effect size?"
-    - Medical research: "What do clinical guidelines say vs. individual studies? Contraindications? Patient population limits?"
-    - Financial research: "What are the risks? Has this strategy worked in different market conditions? Survivorship bias?"
-    - Technical research: "Does this work at scale? What are the operational constraints? Maintenance burden?"
-    Log applicability findings with `log-finding` — these become the caveats and limitations that make the report trustworthy. A report that says "X is the best option" without noting that X is hard to access, has a 3-month window, or only works for a specific profile is giving bad advice dressed up as research. **Why this matters:** the most common failure mode in research reports is stating findings as universally actionable when they have significant real-world constraints. An expert reader spots this immediately; the applicability pass catches it before they have to.
-18. **Synthesis — writer → reviewer → verifier flow.** You are the supervisor. Do NOT write the report yourself. Instead, orchestrate the three synthesis agents:
+12. **Synthesis — writer → reviewer → verifier flow.** You are the supervisor. Do NOT write the report yourself. Instead, orchestrate the three synthesis agents:
 
     **⚠️ CRITICAL: How to wait for subagents.** When you need a subagent's results before proceeding, launch it as a **foreground** Agent call (the default — do NOT set `run_in_background: true`). Foreground calls block until the agent completes and return its output directly. To run two agents in parallel, put both Agent tool calls in the **same response message** — they execute concurrently and you get both results before your next turn.
 
@@ -90,7 +75,7 @@ You are a research agent with access to academic databases, web search, and stru
     - The research brief (scope, questions, completeness criteria)
     - The **raw `state summary` JSON output** — specifically the `findings` array with source citations and the `gaps` array. This is the evidence backbone; don't compress it into a narrative paragraph.
     - A **narrative key findings summary** alongside the structured data — your interpretation of patterns, contradictions, and relative strength of evidence across questions.
-    - Audit stats (from step 15) for the Methodology section
+    - Audit stats (from step 10) for the Methodology section
 
     **Why both structured and narrative:** The structured findings array gives the writer precise evidence with source IDs for citation. The narrative summary gives interpretive context — which findings are strongest, where sources conflict, what the evidence pattern means. Either alone is insufficient: structured data without interpretation produces a list, not a synthesis; narrative without structured data loses citation precision and risks the writer misattributing claims.
 
@@ -116,81 +101,11 @@ You are a research agent with access to academic databases, web search, and stru
 
 ## Tools Available
 
-### Search (`${CLAUDE_SKILL_DIR}/search --provider <name>`)
+### Search & Download (delegated to source-acquisition agent)
 
-| Provider | Best for | Key flags |
-|----------|----------|-----------|
-| `semantic_scholar` | Academic search, citations, recommendations | `--cited-by`, `--references`, `--recommendations`, `--author`, `--min-citations N` |
-| `openalex` | Broad academic, open-access filtering | `--open-access-only`, `--year-range` |
-| `arxiv` | Broad academic preprints and quantitative finance | `--categories`, `--list-categories`, `--days`, `--download` |
-| `pubmed` | Biomedical, clinical, MeSH terms (returns PMIDs; use `--fetch-pmids` for metadata) | `--type`, `--cited-by`, `--references`, `--mesh`, `--fetch-pmids` |
-| `biorxiv` | Bio/med preprints (bioRxiv + medRxiv) | `--server`, `--days`, `--category`, `--list-categories` |
-| `github` | Repos, code, implementations | `--type`, `--min-stars`, `--repo` |
-| `reddit` | Community discussion, experiences | `--subreddits`, `--post-url` |
-| `tavily` | Web search, news, non-academic sources | `--search-depth`, `--topic`, `--include-domains`, `--exclude-domains`, `--urls` (extract mode) |
-| `hn` | Technical commentary | `--story-id`, `--tags` |
-| `crossref` | Humanities, social science, publisher metadata, DOI lookup | `--year-range`, `--type`, `--sort`, `--subject`, `--issn`, `--doi` |
-| `core` | Open-access full texts, institutional repositories | `--year-range`, `--sort`, `--core-id` |
-| `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
-| `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
-| `opencitations` | DOI-based citation traversal (forward/backward), citation edge metadata | `--cited-by DOI`, `--references DOI` (no keyword search) |
-| `dblp` | CS publications, author lookup, venue lookup | `--author`, `--venue`, `--year-range`, `--type` |
+Search (`${CLAUDE_SKILL_DIR}/search`) and download (`${CLAUDE_SKILL_DIR}/download`) are run by the `source-acquisition` agent, not by you directly. The agent has its own CLI reference in `agents/source-acquisition.md`. You only need to know the provider landscape to validate its manifest and frame gap-mode directives.
 
-Common flags: `--query "..." --limit N --offset N --session-dir DIR` — **always set `--limit`** (50 broad, 20 targeted, 10 citation traversal)
-
-**Session directory auto-discovery:** After `${CLAUDE_SKILL_DIR}/state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars. You can still override with `--session-dir DIR` or `$DEEP_RESEARCH_SESSION_DIR` if needed.
-
-**Searches are auto-tracked:** `${CLAUDE_SKILL_DIR}/search` automatically logs the search and adds all results to state.db when a session is active. No manual `${CLAUDE_SKILL_DIR}/state log-search` or `${CLAUDE_SKILL_DIR}/state add-sources` needed.
-
-#### yfinance data types
-
-```
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type profile       # company overview + key ratios
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type history --period 1y --interval 1d
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type financials --statement income --frequency quarterly
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type options --expiration 2026-06-19
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type dividends
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL --type holders      # institutional holders
-${CLAUDE_SKILL_DIR}/search --provider yfinance --ticker AAPL,MSFT --type profile  # multi-ticker (max 5)
-```
-
-Types: `profile`, `history`, `financials`, `options`, `dividends`, `holders`. Statements: `income`, `balance_sheet`, `cash_flow`. Frequencies: `annual`, `quarterly`. Periods: `1d` `5d` `1mo` `3mo` `6mo` `1y` `2y` `5y` `10y` `ytd` `max`.
-
-#### EDGAR modes
-
-```
-${CLAUDE_SKILL_DIR}/search --provider edgar --query "artificial intelligence" --form-type 10-K --year 2024
-${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --form-type 10-K,10-Q --limit 5
-${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type facts                          # list all XBRL concepts
-${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type facts --concept Revenue        # time series for one concept
-${CLAUDE_SKILL_DIR}/search --provider edgar --ticker AAPL --type concept --concept Assets --taxonomy us-gaap
-${CLAUDE_SKILL_DIR}/search --provider edgar --accession 0000320193-23-000106                     # fetch specific filing
-```
-
-Types: `filings` (default), `facts`, `concept`. Taxonomies: `us-gaap`, `ifrs-full`, `dei`. Full-text search (no `--ticker`) uses SEC EFTS; company queries use the submissions API.
-
-### Download (`${CLAUDE_SKILL_DIR}/download`)
-
-```
---source-id src-003 --to-md       # download by source ID (looks up DOI/URL from state.db)
---url URL --type web              # web page content
---doi DOI --to-md                 # PDF cascade by DOI
---arxiv ID --to-md                # arXiv PDF
---pdf-url URL --to-md             # direct PDF URL
---local-dir DIR --to-md           # ingest existing PDFs from a local folder
---from-json FILE --to-md          # batch download from JSON array
---from-json FILE --to-md --parallel 3  # parallel batch download
-```
-
-Batch JSON format: `[{"doi": "10.1234/..."}, {"url": "https://...", "type": "web"}, ...]`
-Each item can include: `doi`, `url`, `pdf_url`, `arxiv`, `source_id`, `title`, `authors`, `year`, `venue`, `type`.
-
-### Enrich (`${CLAUDE_SKILL_DIR}/enrich`)
-
-```
---doi DOI [--doi DOI2 ...]        # Crossref metadata enrichment
---doi DOI --citation-data          # Crossref + OpenCitations citation/reference counts
-```
+**Session directory auto-discovery:** After `${CLAUDE_SKILL_DIR}/state init`, a `.deep-research-session` marker file is written. All subsequent commands auto-discover the session directory — no need to pass `--session-dir` or set env vars.
 
 ### State (`${CLAUDE_SKILL_DIR}/state`)
 
@@ -239,66 +154,19 @@ audit --strict                    # exit non-zero if warnings found
 
 **A research brief sharpens everything.** A structured brief — scope, key aspects, 3-7 concrete research questions, what a complete answer looks like — drives better searches and becomes the report skeleton. Save it with `${CLAUDE_SKILL_DIR}/state set-brief`.
 
-**Iterative search across multiple providers.** No single source covers everything. Broad initial queries narrow based on what emerges. Cross-referencing academic and web sources catches what any one provider misses. Saturation (seeing the same papers repeatedly) signals adequate coverage. **Always set `--limit` explicitly:** `--limit 50` for initial broad searches, `--limit 20` for targeted follow-ups, `--limit 10` for citation/reference traversal. OpenAlex and Semantic Scholar defaults can return thousands of results — explicit limits prevent noise.
+**CLI output format.** All CLI commands (`state`, `search`, `download`, `enrich`) exit 0 and return a JSON envelope: `{"status": "ok", "results": {...}}` on success, `{"status": "error", "errors": [...]}` on failure. Never grep for plain-text strings like "SUCCESS" or "FAILED" — parse the JSON `"status"` field instead.
 
-**Provider diversity matters.** After round 1 searches, check provider distribution — if any single provider accounts for >50% of total sources, your bibliography is shaped by that provider's corpus biases and ranking algorithms. Each provider has different strengths: Semantic Scholar excels at CS/AI and citation graphs, PubMed at biomedical/clinical, OpenAlex at breadth across disciplines, arXiv at preprints across 20+ fields. Lead with the domain-matched provider but always query 2+ others. Concrete example: if after round 1 you have 60 Semantic Scholar sources and 15 OpenAlex, your round 2 should lean toward OpenAlex, PubMed, or arXiv — run the weakest-covered research questions through those providers specifically rather than adding more S2 queries.
+**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`.
 
-**Citation chasing as a second-round strategy.** After initial keyword searches surface 2-3 key or seminal papers, switch from keyword search to citation traversal. Citation networks have higher precision than keyword search because relevance is pre-filtered by the citing and cited authors — a paper that cites Kätsyri (2015) is almost certainly about the uncanny valley, whereas a keyword match for "uncanny valley cross-cultural" pulls in food science papers. Use `--references PAPER_ID --limit 10` to find a paper's foundational sources (author-curated bibliography — high precision, stable), `--cited-by PAPER_ID --limit 10` to find papers that built on it (recency-biased — good for recent papers, noisy for foundational ones), and `--recommendations PAPER_ID --limit 10` (Semantic Scholar) to find related work the API identifies. **For foundational papers with 200+ citations, use `--cited-by` with `--min-citations N` to filter out tangential recent work** (e.g., `--cited-by PAPER_ID --min-citations 20 --limit 10`). Prefer `--references` as the default citation chase — the original paper's reference list is a domain expert's reading list. This is the highest-precision search strategy available — use it before running more keyword queries.
+**Citation rules.** Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read.
 
-**Search query crafting.** Poor queries cause off-topic contamination. Four rules: (1) Always include the core topic term in every query — use "uncanny valley cross-cultural" not "cross-cultural differences individual variation". (2) If a search returns >500 results, the query is too broad — add qualifying terms. (3) After each search round, spot-check the last few results for relevance — if off-topic, tighten the query before continuing. (4) **Never run a search with an empty or single-word generic query** — every search should have a specific intent. An empty arXiv query returns arbitrary recent papers; a bare topic term like "robotics" returns thousands of irrelevant results. If you're exploring a provider's coverage, use the core topic phrase at minimum.
+**Selective deep reading.** Not every source needs cover-to-cover reading. Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
 
-**Query refinement is a feedback loop, not a one-shot.** Treating search as fire-and-forget misses the most valuable signal: the field's own terminology. Initial results reveal how researchers actually frame the topic — you may discover that "realism inconsistency" is the accepted term, not "appearance mismatch", or that a subfield uses specific methodological vocabulary you didn't anticipate. Use these discoveries to craft round 2 queries: combine broad concept terms with specific terminology from key papers found in round 1. For example, if round 1 papers consistently reference "perceptual mismatch hypothesis", use that exact phrase in a follow-up search rather than your original paraphrase. This iterative refinement — search, read titles/abstracts, extract terminology, refine query — typically yields better results in 2-3 targeted rounds than 7 parallel broad searches.
-
-**CLI output format.** All CLI commands (`state`, `search`, `download`, `enrich`) exit 0 and return a JSON envelope: `{"status": "ok", "results": {...}}` on success, `{"status": "error", "errors": [...]}` on failure. Never grep for plain-text strings like "SUCCESS" or "FAILED" — parse the JSON `"status"` field instead. When running batch loops, just call each command directly; the JSON output is self-describing and doesn't need grep-based validation.
-
-**Parallel search resilience.** All CLI searches (`${CLAUDE_SKILL_DIR}/search`) exit 0 with errors in the JSON envelope, so they are safe to parallelize — including `--provider tavily` alongside academic providers. Run as many parallel searches as needed in a single response block.
-
-**Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`. `${CLAUDE_SKILL_DIR}/enrich` fills venue, authors, and retraction status for key papers.
-
-**Degraded PDFs.** Check `"quality"` in metadata files. Sources with `"degraded"` quality have garbled or minimal text — do NOT claim deep reading. Options: use abstract from search metadata instead, try `${CLAUDE_SKILL_DIR}/download --url https://doi.org/{doi} --type web` for the landing page, or seek an alternate open-access version. The download tool automatically detects degraded conversions and marks them.
-
-**Paywalled papers.** `download-pending --auto-download` already tries DOI cascade (6 sources), then pdf_url, then url as fallback — don't manually re-download sources it reported as failed. Sources in `failed_sources` have exhausted all identifiers. For those, rely on the abstract from search metadata. Don't waste time retrying — move on to open-access alternatives.
-
-**Download aggressively, cite only what you've read.** After search rounds, use `${CLAUDE_SKILL_DIR}/state download-pending --auto-download --batch-size 15` in a loop (repeat until `"remaining": 0`) to download ALL relevant sources — not just the top 5-8. Batching avoids subprocess timeouts with large source lists while the on-disk filter ensures each call resumes where the last left off. Triage by quality: which have good content? which degraded? which paywalled? Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read. Use `${CLAUDE_SKILL_DIR}/download --from-json FILE --to-md --parallel 3` for batch downloads.
-
-**Selective deep reading.** Not every source needs cover-to-cover reading. Metadata triage identifies the most relevant sources for deep reading (intro + results + conclusion). Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
-
-**journal.md is your persistent memory — use it aggressively.** During long research sessions, context compression erases your reasoning traces. Without journal entries, you lose track of what you tried, what worked, and why you pivoted — leading to repeated searches, missed contradictions, and strategy drift. journal.md survives compression and keeps your research coherent across a multi-hour session.
-
-**What to log in journal.md:** Strategy decisions ("pivoting from broad keyword search to citation chasing after finding 3 key papers"), emerging patterns ("three papers converge on perceptual mismatch as the mechanism, but two use different experimental paradigms"), contradictions between sources ("Kätsyri 2015 challenges MacDorman's categorical perception framing — need to reconcile"), coverage assessments ("Q6 has only 1 source after 2 search rounds — need targeted follow-up"), and dead ends ("PubMed search for X returned only clinical studies, not the cognitive science angle needed").
-
-**Search entries are auto-logged.** Each `${CLAUDE_SKILL_DIR}/search` call automatically appends a structured entry to journal.md with provider, query, result count, and top 3 result titles. This gives you a searchable log of what was tried without manual effort. Your job is to add the *interpretation*: after each search round, append an assessment entry explaining what the results mean for your strategy.
-
-**Minimum bar: 500+ words across a full session.** A 200-word journal means you aren't externalizing your reasoning. Aim for entries at natural decision points: after each search round, after reading key papers, when you notice a pattern or contradiction, and before writing the report. Example entries:
-
-```
-## Search Round 2 (after initial broad sweep)
-Round 1 surfaced Kätsyri (2015) and MacDorman (2016) as central reviews.
-Switching to citation chasing — running --cited-by on both.
-Also noticed the field uses "perceptual mismatch" more than "realism inconsistency" —
-will use this in follow-up keyword searches for Q3.
-
-## Coverage Check (pre-report)
-Q1 (mechanisms): 4 sources, good coverage. Two agree on perceptual mismatch,
-one proposes categorization difficulty — note the tension.
-Q4 (individual differences): Only 1 source. Need targeted search.
-Q6 (mitigation): 2 sources but both are design guidelines, not empirical.
-Logging gap for Q6 empirical evidence.
-```
-
-**Journal template for search round assessment** (write this after each batch of searches):
-```
-## Assessment: Round N
-Searches run: [N searches across providers X, Y, Z]
-Key papers found: [list 2-3 most important new sources]
-Terminology discovered: [any field-specific terms to use in follow-up queries]
-Coverage update: [which brief questions are well-covered vs. still thin]
-Next step: [what to search next and why]
-```
+**journal.md is your persistent memory — use it aggressively.** During long research sessions, context compression erases your reasoning traces. Without journal entries, you lose track of what you tried, what worked, and why you pivoted. journal.md survives compression. Log strategy decisions, emerging patterns, contradictions between sources, coverage assessments, and dead ends. The source-acquisition agent writes search-round journal entries; your job is to add orchestrator-level entries: reading assessments, synthesis strategy, and coverage analysis after readers return.
 
 **Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
-**Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer, synthesis-reviewer, and research-verifier agents (see step 18 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). The synthesis-reviewer audits for contradictions, unsupported claims, and missing caveats. The research-verifier checks load-bearing claims against primary sources. Your job is to prepare the handoff materials, route feedback between agents, and deliver the final report. **Why delegate:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context focused entirely on integration and narrative, producing better synthesis than you could in a degraded context.
+**Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer, synthesis-reviewer, and research-verifier agents (see step 12 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). The synthesis-reviewer audits for contradictions, unsupported claims, and missing caveats. The research-verifier checks load-bearing claims against primary sources. Your job is to prepare the handoff materials, route feedback between agents, and deliver the final report. **Why delegate:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context focused entirely on integration and narrative, producing better synthesis than you could in a degraded context.
 
 **Garbled PDF awareness.** Converted PDFs may have scrambled text around tables, figures, and equations. When text looks garbled, note the limitation and seek the information elsewhere rather than interpreting nonsense.
 
@@ -306,7 +174,7 @@ Next step: [what to search next and why]
 
 **Gap-driven refinement is a research strategy, not bookkeeping.** The gap → search → resolve cycle is how you systematically improve weak coverage areas instead of hoping more broad searches will fill them. After reader agents flag that Q2 has only 1 supporting source, `log-gap` creates a concrete target. You then search specifically for that subtopic — a targeted query or citation chase — and `resolve-gap` when coverage improves. Without this loop, weak areas stay weak because you have no structured way to identify and address them. The audit uses the gaps table to assess methodology rigor: **a session with zero gaps logged is a red flag, not a sign of perfection.** Real research almost always has coverage asymmetries — some questions are harder to answer, some subtopics have sparse literature, some sources contradict each other. If your gaps table is empty after 15+ sources, it means gaps weren't tracked, not that none exist. The expected pattern is: log gaps during reading → targeted follow-up searches → resolve gaps → a few may remain as acknowledged limitations in the report.
 
-**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Findings are logged by the `findings-logger` subagents (step 13) — you do not call `log-finding` directly. **You must call `${CLAUDE_SKILL_DIR}/state log-gap` for every research question that has fewer than 2 supporting sources** — this is not optional. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays. **Use the full question text from the brief in `--question`** (e.g., `--question "Q1: What mechanisms drive X?"`) — audit matches findings to brief questions, so abbreviated labels like bare "Q1" may cause false sparse-coverage warnings.
+**Structured coverage tracking.** Searches and sources are auto-tracked by `${CLAUDE_SKILL_DIR}/search`. Findings are logged by the `findings-logger` subagents (step 8) — you do not call `log-finding` directly. **You must call `${CLAUDE_SKILL_DIR}/state log-gap` for every research question that has fewer than 2 supporting sources** — this is not optional. These persist across context compressions and make `${CLAUDE_SKILL_DIR}/state summary` actionable — without them, the summary shows empty findings/gaps arrays. **Use the full question text from the brief in `--question`** (e.g., `--question "Q1: What mechanisms drive X?"`) — audit matches findings to brief questions, so abbreviated labels like bare "Q1" may cause false sparse-coverage warnings.
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
@@ -314,27 +182,15 @@ Next step: [what to search next and why]
 
 ## Provider Selection Guidance
 
-- **PubMed query fallback** — If PubMed returns 0 results, retry with simpler terms before giving up. PubMed's query parser is stricter than Semantic Scholar or OpenAlex — it interprets multi-word queries as MeSH term lookups, and unrecognized phrases return empty results. Simplify by: (a) removing hyphens and special characters, (b) using fewer, broader terms, (c) trying MeSH headings explicitly with `--mesh`. Example: `"uncanny valley perception"` → `"uncanny valley"` → `--mesh "Visual Perception"`. A 0-result PubMed search almost always means a query formatting issue, not an empty literature.
-- **Biomedical / clinical** — PubMed + bioRxiv; add Semantic Scholar for citation context
-- **Any academic topic** — arXiv covers far more than just CS and physics. It spans 20 groups including mathematics, statistics, economics, quantitative finance, quantitative biology, electrical engineering, and all physics subdisciplines. Use `--list-categories` to discover the right category codes for your topic, then `--categories` to filter.
-- **CS / ML / AI** — arXiv + Semantic Scholar; add OpenAlex for breadth
-- **Psychology / cognitive science** — PubMed + Semantic Scholar; add OpenAlex for interdisciplinary breadth. PubMed indexes psychology journals that Semantic Scholar underrepresents; OpenAlex catches education, design, and applied-psych venues.
-- **Humanities / social science / law** — Crossref + OpenAlex; add Semantic Scholar for citation context. Crossref has the broadest publisher coverage across disciplines, including journals that Semantic Scholar and OpenAlex underindex.
-- **Cross-cutting** (e.g., "ML for drug safety") — start broad (Semantic Scholar + PubMed), narrow based on results
-- **Improving download rates** — After search rounds, if many sources are paywalled, run the same queries through CORE (`--provider core`). CORE indexes 46M+ hosted full texts from institutional repositories — papers that failed DOI cascade download may have open-access versions in CORE.
-- **General technical** — `--provider tavily` + GitHub; Reddit/HN for community perspective
-- **When unsure** — search at least 3 providers including one web source (`--provider tavily`). Many topics have significant non-academic coverage that academic-only searches miss.
-- **Need implementations / benchmarks** — GitHub
-- **Latest preprints** — arXiv (broad academic), bioRxiv (bio/med)
-- **Well-cited surveys** — Semantic Scholar or OpenAlex with citation sort; Crossref with `--sort is-referenced-by-count --subject <field>` (always pair citation sort with `--subject` to avoid cross-discipline contamination — without it, top results are highly-cited papers from unrelated fields)
-- **Community opinions** — Reddit + HN
-- **Comparative questions** (e.g., "X vs Y") — combine academic providers with Reddit/HN for practitioner perspective
-- **Company fundamentals** — yfinance (profile + financials); EDGAR for SEC filings and XBRL data
-- **Industry/sector screening** — yfinance multi-ticker profiles; EDGAR full-text search across filings
-- **Regulatory filings** — EDGAR (10-K, 10-Q, 8-K, proxy statements, insider transactions)
-- **Financial deep dive** — Screening (yfinance profiles) → fundamentals (yfinance financials + EDGAR XBRL) → SEC verification (EDGAR filings) → academic context (Semantic Scholar/OpenAlex) → synthesis
-- **Citation traversal with open data** — OpenCitations (`--cited-by DOI` / `--references DOI`). Complements Semantic Scholar citation traversal with independent Crossref-derived coverage, plus self-citation flags and timespan metadata. No keyword search — use Crossref or Semantic Scholar to find DOIs first.
-- **CS-specific research** — DBLP for publication search, author lookup (`--author`), and venue lookup (`--venue`). Clean venue abbreviations (KDD, NeurIPS, ICML) and comprehensive CS/SE coverage.
+Provider selection is handled by the `source-acquisition` agent (see `agents/source-acquisition.md`), but you should understand the landscape to validate the agent's manifest and direct gap-mode searches:
+
+- **Biomedical/clinical:** PubMed + bioRxiv + Semantic Scholar
+- **CS/ML/AI:** arXiv + Semantic Scholar + OpenAlex
+- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
+- **Humanities/social science:** Crossref + OpenAlex + Semantic Scholar
+- **Financial:** yfinance + EDGAR + academic providers for context
+- **General technical:** tavily + GitHub; Reddit/HN for community perspective
+- **When unsure:** at least 3 providers including one web source
 
 ---
 
@@ -365,9 +221,12 @@ Next step: [what to search next and why]
 
 ## Delegation
 
-You are the supervisor. Run CLI commands (`${CLAUDE_SKILL_DIR}/search`, `${CLAUDE_SKILL_DIR}/download`, `${CLAUDE_SKILL_DIR}/enrich`, `${CLAUDE_SKILL_DIR}/state`) directly — no subagent needed for structured JSON output. Use **parallel Bash calls** (multiple in one response) for simultaneous searches across different providers.
+You are the supervisor. Your job is to orchestrate subagents and interpret their manifests — not to run searches or read papers yourself. Run `${CLAUDE_SKILL_DIR}/state` commands directly for lightweight operations (init, mark-read, log-gap, audit, summary). Delegate everything else to subagents.
 
 Use the **Agent tool** to spawn subagents for:
+
+**Source acquisition** (steps 4 and 11 in the workflow). **Always launch as foreground agents.**
+- **`source-acquisition`** (Opus) — runs all search rounds, citation chasing, provider diversity, triage, downloads, and recovery. In `initial` mode, handles the full search-to-download pipeline. In `gap` mode, handles targeted gap resolution and applicability searches. Returns a compact manifest — raw search JSON never reaches your context. See `agents/source-acquisition.md` for the full prompt.
 
 **Reading & comprehension** (tasks where reading full paper text would bloat your context):
 - **Source summarization:** Spawn **one reader subagent per source** and run them in parallel. Each subagent reads one paper, writes a summary to `notes/`, and returns a compact manifest entry. One-to-one assignment ensures the agent devotes full attention to that paper's methodology, evidence, and nuance — batching papers into a single agent degrades comprehension quality.
@@ -376,7 +235,7 @@ Use the **Agent tool** to spawn subagents for:
 **Brief writing** (step 3 in the workflow).
 - **`brief-writer`** (Opus) — generates the research brief with tradeoffs and adversarial questions. Receives the query, assumption surfacing results, and session directory. Returns `brief.json`. Spawn via Agent tool and include the `agents/brief-writer.md` prompt in your directive.
 
-**Synthesis & verification** (step 18 in the workflow). **Always launch these as foreground agents** — they produce results you need before proceeding, and background agents lead to impatient polling and premature bailouts (see step 16 for details). To parallelize, put multiple Agent calls in one response message; they run concurrently and both return before your next turn.
+**Synthesis & verification** (step 12 in the workflow). **Always launch these as foreground agents** — they produce results you need before proceeding, and background agents lead to impatient polling and premature bailouts. To parallelize, put multiple Agent calls in one response message; they run concurrently and both return before your next turn.
 - **`synthesis-writer`** (Opus) — drafts and revises `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
 - **`synthesis-reviewer`** (Sonnet) — audits the draft for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, and citation integrity. Returns a structured issues list. Spawn via Agent tool and include the `agents/synthesis-reviewer.md` prompt.
 - **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns a verification report with per-claim verdicts. Spawn via Agent tool and include the `agents/research-verifier.md` prompt.
@@ -390,9 +249,9 @@ for src in src-003 src-035 src-042; do
 done
 ```
 
-**Wait for all reader subagents before spawning findings-loggers or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Spawn findings-logger agents (step 14) only after all readers have completed and you have marked sources as read.
+**Wait for all reader subagents before spawning findings-loggers or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Spawn findings-logger agents (step 9) only after all readers have completed and you have marked sources as read.
 
-**Keep in your context:** Research brief, search strategy, coverage assessment, contradiction analysis, agent orchestration, and all CLI output parsing. Synthesis and report writing are delegated to agents — keep only the handoff materials and agent return manifests.
+**Keep in your context:** Research brief, agent manifests, coverage assessment, contradiction analysis, and orchestration state. Search data, source content, and report writing are all delegated — keep only the compact returns.
 
 For small sessions (< 10 sources), do everything inline. Delegation is a scaling strategy, not a requirement.
 

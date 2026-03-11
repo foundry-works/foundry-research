@@ -686,9 +686,34 @@ def cmd_sources(args):
     conn = _connect(args.session_dir, readonly=True)
     sid = _get_session_id(conn)
 
+    # --providers: return only provider distribution counts (no source list)
+    if getattr(args, "providers", False):
+        rows = conn.execute(
+            "SELECT provider, COUNT(*) as count FROM sources WHERE session_id = ? GROUP BY provider ORDER BY count DESC",
+            (sid,)
+        ).fetchall()
+        conn.close()
+        success_response({p["provider"]: p["count"] for p in rows})
+        return
+
+    # Build query with optional filters
+    clauses = ["session_id = ?"]
+    params: list = [sid]
+
+    title_contains = getattr(args, "title_contains", None)
+    if title_contains:
+        clauses.append("title LIKE ?")
+        params.append(f"%{title_contains}%")
+
+    min_citations = getattr(args, "min_citations", None)
+    if min_citations is not None:
+        clauses.append("citation_count >= ?")
+        params.append(min_citations)
+
+    where = " AND ".join(clauses)
     rows = conn.execute(
-        "SELECT id, title, type, provider, doi, url, citation_count, added_at FROM sources WHERE session_id = ? ORDER BY id",
-        (sid,)
+        f"SELECT id, title, type, provider, doi, url, citation_count, added_at FROM sources WHERE {where} ORDER BY id",
+        params
     ).fetchall()
     conn.close()
     success_response([dict(r) for r in rows])
@@ -1420,12 +1445,20 @@ def cmd_triage(args):
     brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
     question_terms = _extract_question_terms(json.loads(brief_row["questions"])) if brief_row else []
 
-    # Load all sources
-    sources = [dict(r) for r in conn.execute(
-        "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
-        "content_file, pdf_file, is_read, quality, status "
-        "FROM sources WHERE session_id = ? ORDER BY id", (sid,)
-    ).fetchall()]
+    # Load sources (with optional title filter)
+    title_filter = getattr(args, "title_contains", None)
+    if title_filter:
+        sources = [dict(r) for r in conn.execute(
+            "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
+            "content_file, pdf_file, is_read, quality, status "
+            "FROM sources WHERE session_id = ? AND title LIKE ? ORDER BY id", (sid, f"%{title_filter}%")
+        ).fetchall()]
+    else:
+        sources = [dict(r) for r in conn.execute(
+            "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
+            "content_file, pdf_file, is_read, quality, status "
+            "FROM sources WHERE session_id = ? ORDER BY id", (sid,)
+        ).fetchall()]
     conn.close()
 
     # Score each source
@@ -1881,6 +1914,9 @@ def main():
 
     # sources
     p = sub.add_parser("sources")
+    p.add_argument("--title-contains", default=None, help="Filter sources by title substring (case-insensitive)")
+    p.add_argument("--min-citations", type=int, default=None, help="Only sources with >= N citations")
+    p.add_argument("--providers", action="store_true", help="Return only provider distribution counts (no source list)")
     p.add_argument("--session-dir", **_sd)
 
     # get-source
@@ -1976,6 +2012,7 @@ def main():
     # triage
     p = sub.add_parser("triage")
     p.add_argument("--top", type=int, default=25, help="Number of sources to mark as high+medium priority (default 25)")
+    p.add_argument("--title-contains", default=None, help="Pre-filter: only score sources whose title contains this substring")
     p.add_argument("--session-dir", **_sd)
 
     # recover-failed

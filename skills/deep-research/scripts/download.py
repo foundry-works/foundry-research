@@ -73,6 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--venue", default=None, help="Publication venue")
     parser.add_argument("--citation-count", type=int, default=None, help="Citation count")
     parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
+    parser.add_argument("--summary-only", action="store_true",
+                        help="Return only counts (success/failed/remaining), with per-source details only for failures")
 
     return parser
 
@@ -314,11 +316,26 @@ def main() -> None:
                     sync_failures.append(sid)
 
     # Output result
+    summary_only = getattr(args, "summary_only", False)
     extra = {}
     if sync_failures:
         extra["sync_failures"] = sync_failures
     if isinstance(result, list):
-        success_response(result, total_results=len(result), **extra)
+        if summary_only:
+            succeeded = [r for r in result if r.get("content_file") or r.get("pdf_file")]
+            failed = [r for r in result if not r.get("content_file") and not r.get("pdf_file")]
+            summary = {
+                "downloaded": len(succeeded),
+                "failed": len(failed),
+                "total": len(result),
+                "failed_sources": [
+                    {"source_id": r.get("source_id"), "errors": r.get("errors", [])}
+                    for r in failed
+                ],
+            }
+            success_response(summary, total_results=len(result), **extra)
+        else:
+            success_response(result, total_results=len(result), **extra)
     else:
         if sync_failures:
             result["sync_failures"] = sync_failures
