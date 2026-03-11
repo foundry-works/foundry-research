@@ -44,7 +44,10 @@ def search(args) -> dict:
     if not query:
         return error_response(["--query is required for openalex"], error_code="missing_query")
 
-    limit = min(getattr(args, "limit", 10), 200)  # OpenAlex caps per_page at 200
+    raw_limit = getattr(args, "limit", 10)
+    limit = min(raw_limit, 200)  # OpenAlex caps per_page at 200
+    if raw_limit > 200:
+        log(f"OpenAlex: --limit {raw_limit} exceeds API max of 200; capping to 200", level="warn")
     offset = getattr(args, "offset", 0)
     session_dir = getattr(args, "session_dir", None) or tempfile.mkdtemp(prefix="openalex_")
 

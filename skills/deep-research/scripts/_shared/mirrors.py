@@ -90,6 +90,17 @@ def _discover_mirrors(service: str, client) -> list[str]:
     return list(fallbacks)
 
 
+def _probe_mirror(mirror: str | None, client) -> bool:
+    """Quick HEAD request to verify a cached mirror is still reachable."""
+    if not mirror:
+        return False
+    try:
+        resp = client.get(f"https://{mirror}", timeout=(5, 5), allow_redirects=True)
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
 def _find_working_mirror(service: str, client) -> str | None:
     """Find a working mirror, using in-memory then disk cache before discovery."""
     now = time.time()
@@ -98,7 +109,10 @@ def _find_working_mirror(service: str, client) -> str | None:
     if service in _mirror_cache:
         cached_mirror, cached_at = _mirror_cache[service]
         if now - cached_at < _MIRROR_CACHE_TTL:
-            return cached_mirror
+            if _probe_mirror(cached_mirror, client):
+                return cached_mirror
+            log(f"Cached {service} mirror {cached_mirror} failed probe, re-discovering", level="warn")
+            del _mirror_cache[service]
 
     # 2. Check disk cache
     disk_cache = _load_disk_cache()
@@ -107,8 +121,10 @@ def _find_working_mirror(service: str, client) -> str | None:
         cached_at = entry.get("cached_at", 0)
         if now - cached_at < _MIRROR_CACHE_TTL:
             mirror = entry.get("mirror")
-            _mirror_cache[service] = (mirror, cached_at)
-            return mirror
+            if _probe_mirror(mirror, client):
+                _mirror_cache[service] = (mirror, cached_at)
+                return mirror
+            log(f"Disk-cached {service} mirror {mirror} failed probe, re-discovering", level="warn")
 
     # 3. Discover and probe
     mirrors = _discover_mirrors(service, client)

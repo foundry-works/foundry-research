@@ -103,8 +103,8 @@ class RateLimiter:
             # Respect backoff from 429/503
             if now < backoff_until:
                 wait_time = backoff_until - now
-                # Add jitter (±20%)
-                wait_time *= 0.8 + random.random() * 0.4
+                # Full jitter [50%-150%] to spread concurrent processes
+                wait_time *= 0.5 + random.random()
                 time.sleep(wait_time)
                 continue
 
@@ -129,8 +129,8 @@ class RateLimiter:
 
             # Not enough tokens — estimate wait time
             wait_time = 1.0 / refill_rate
-            # Add jitter (±20%)
-            wait_time *= 0.8 + random.random() * 0.4
+            # Full jitter [50%-150%] to spread concurrent processes
+            wait_time *= 0.5 + random.random()
             time.sleep(wait_time)
 
     def backoff(self, domain: str) -> None:
@@ -157,8 +157,8 @@ class RateLimiter:
 
         # Cap at 30 seconds
         delay = min(delay, 30.0)
-        # Add jitter (±20%)
-        delay *= 0.8 + random.random() * 0.4
+        # Full jitter [50%-150%] to spread concurrent processes
+        delay *= 0.5 + random.random()
 
         conn.execute(
             "UPDATE rate_limits SET backoff_until = ?, tokens = 0 WHERE domain = ?",
