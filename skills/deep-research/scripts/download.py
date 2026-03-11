@@ -26,7 +26,8 @@ from _shared.metadata import (  # noqa: E402
     write_source_metadata,
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
-from _shared.output import error_response, log, log_subprocess_failure, set_quiet, success_response  # noqa: E402
+from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
+from _shared.state_client import call_state  # noqa: E402
 from _shared.pdf_utils import download_pdf, pdf_to_markdown  # noqa: E402
 from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
 
@@ -98,46 +99,13 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
     if not update:
         return True  # nothing to sync is not a failure
 
-    try:
-        import subprocess
-        import tempfile
-
-        # Write update as a temp JSON file (state.py requires file-only --from-json)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
-            tmp_path = tf.name
-            json.dump(update, tf)
-
-        scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        state_script = os.path.join(scripts_dir, "state.py")
-        cmd = [
-            sys.executable, state_script, "update-source",
-            "--id", source_id,
-            "--from-json", tmp_path,
-            "--session-dir", session_dir,
-        ]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            # Check returncode first — non-zero means state.py crashed
-            if proc.returncode != 0:
-                log_subprocess_failure(f"_sync_to_state({source_id})", proc)
-                return False
-            # Parse response — all commands exit 0, errors conveyed in JSON body
-            try:
-                resp = json.loads(proc.stdout) if proc.stdout else {}
-                if resp.get("status") == "error":
-                    errors = resp.get("errors", [])
-                    log(f"_sync_to_state failed for {source_id}: {errors}", level="warn")
-                    return False
-            except json.JSONDecodeError:
-                log(f"_sync_to_state got non-JSON response for {source_id}: {proc.stdout[:200]}", level="warn")
-                return False
-        finally:
-            os.unlink(tmp_path)
-    except Exception as e:
-        log(f"Failed to sync download to state: {e}", level="warn")
-        return False
-
-    return True
+    resp = call_state(
+        session_dir, "update-source",
+        args=["--id", source_id],
+        json_data=update,
+        timeout=5,
+    )
+    return resp is not None
 
 
 def _handle_retry_sync(session_dir: str) -> None:
@@ -211,43 +179,24 @@ def _handle_retry_sync(session_dir: str) -> None:
 
 def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: dict) -> None:
     """Auto-create a new source entry in state.db for a web download not already tracked."""
-    try:
-        import subprocess
-        import tempfile
+    source_data = {
+        "title": meta.get("title") or url,
+        "url": url,
+        "type": "web",
+        "provider": "web",
+    }
+    if meta.get("authors"):
+        source_data["authors"] = meta["authors"]
+    if meta.get("year"):
+        source_data["year"] = meta["year"]
 
-        source_data = {
-            "title": meta.get("title") or url,
-            "url": url,
-            "type": "web",
-            "provider": "web",
-        }
-        # Include optional metadata if available
-        if meta.get("authors"):
-            source_data["authors"] = meta["authors"]
-        if meta.get("year"):
-            source_data["year"] = meta["year"]
-
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
-            tmp_path = tf.name
-            json.dump([source_data], tf)
-
-        scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        state_script = os.path.join(scripts_dir, "state.py")
-        cmd = [
-            sys.executable, state_script, "add-sources",
-            "--from-json", tmp_path,
-            "--session-dir", session_dir,
-        ]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-            if proc.returncode == 0:
-                log(f"Auto-created web source in state.db for {url} → {source_id}")
-            else:
-                log_subprocess_failure("auto-create web source", proc)
-        finally:
-            os.unlink(tmp_path)
-    except Exception as e:
-        log(f"Failed to auto-create web source: {e}", level="warn")
+    resp = call_state(
+        session_dir, "add-sources",
+        json_data=[source_data],
+        timeout=5,
+    )
+    if resp is not None:
+        log(f"Auto-created web source in state.db for {url} → {source_id}")
 
 
 def _resolve_source_id(session_dir: str, source_id: str) -> dict:
@@ -459,45 +408,55 @@ _MAX_WEB_SIZE = 10 * 1024 * 1024  # 10MB cap on web page downloads
 _MAX_WEB_STREAM_SECONDS = 120  # wall-clock cap on web page streaming
 
 
+def _stream_web_content(client, url: str, *,
+                        max_size: int = _MAX_WEB_SIZE,
+                        timeout: int = _MAX_WEB_STREAM_SECONDS) -> tuple[str | None, str | None]:
+    """Stream URL and extract readable content.
+
+    Returns (content, error_msg). On success error_msg is None.
+    Handles: Content-Length check, streaming size cap, wall-clock timeout,
+    readable content extraction.
+    """
+    resp = client.get(url, stream=True, timeout=(15, timeout))
+    try:
+        if resp.status_code != 200:
+            return None, f"HTTP {resp.status_code} for {url}"
+
+        try:
+            cl = int(resp.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            cl = 0
+        if cl > max_size:
+            return None, f"Page too large ({cl} bytes, limit {max_size})"
+
+        chunks: list[str] = []
+        size = 0
+        stream_start = time.monotonic()
+        for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
+            size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+            if size > max_size:
+                return None, f"Page exceeded {max_size // (1024*1024)}MB during download"
+            if time.monotonic() - stream_start > timeout:
+                return None, f"Streaming exceeded {timeout}s wall-clock limit"
+            chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+    finally:
+        resp.close()
+
+    html = "".join(chunks)
+    content = extract_readable_content(html)
+    if not content:
+        return None, "No readable content extracted"
+    return content, None
+
+
 def _download_web(url: str, source_id: str, client, sources_dir: str,
                   meta: dict, result: dict) -> None:
     """Download web page and extract readable content."""
     log(f"Downloading web content: {url}")
     try:
-        resp = client.get(url, stream=True, timeout=(15, _MAX_WEB_STREAM_SECONDS))
-        try:
-            if resp.status_code != 200:
-                result["errors"].append(f"HTTP {resp.status_code} for {url}")
-                return
-
-            # Check Content-Length before reading body to avoid OOM on huge pages
-            try:
-                cl = int(resp.headers.get("Content-Length", 0))
-            except (ValueError, TypeError):
-                cl = 0
-            if cl > _MAX_WEB_SIZE:
-                result["errors"].append(f"Web page too large ({cl} bytes, limit {_MAX_WEB_SIZE})")
-                return
-
-            # Stream with size cap and wall-clock timeout
-            chunks = []
-            size = 0
-            stream_start = time.monotonic()
-            for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
-                size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                if size > _MAX_WEB_SIZE:
-                    result["errors"].append(f"Web page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB during download")
-                    return
-                if time.monotonic() - stream_start > _MAX_WEB_STREAM_SECONDS:
-                    result["errors"].append(f"Web page streaming exceeded {_MAX_WEB_STREAM_SECONDS}s wall-clock limit")
-                    return
-                chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
-        finally:
-            resp.close()
-        html = "".join(chunks)
-        content = extract_readable_content(html)
-        if not content:
-            result["errors"].append("No readable content extracted")
+        content, error = _stream_web_content(client, url)
+        if error or not content:
+            result["errors"].append(error or "No readable content extracted")
             return
 
         # Save as markdown
@@ -596,6 +555,21 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
         result["quality"] = "ok"
 
 
+def _record_pdf_success(result: dict, source_id: str, source_name: str,
+                        pdf_path: str, pdf_size: int, sources_dir: str, to_md: bool) -> None:
+    """Record a successful PDF download into the result dict."""
+    result["pdf_file"] = f"sources/{source_id}.pdf"
+    result["pdf_size_bytes"] = pdf_size
+    result["pdf_downloaded"] = True
+    result["source_used"] = source_name
+    if to_md:
+        _convert_and_record(pdf_path, source_id, sources_dir, result,
+                            title=result.get("_expected_title", ""),
+                            authors=result.get("_expected_authors"))
+    else:
+        result["quality"] = "ok"
+
+
 def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                      _metadata_dir: str, to_md: bool, config: dict, result: dict,
                      cancel: threading.Event | None = None) -> None:
@@ -622,31 +596,15 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             elif source_name == "annas_archive":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
                 if download_annas_archive(doi, pdf_path, config, client):
-                    result["pdf_file"] = f"sources/{source_id}.pdf"
-                    result["pdf_size_bytes"] = os.path.getsize(pdf_path)
-                    result["pdf_downloaded"] = True
-                    result["source_used"] = "annas_archive"
-                    if to_md:
-                        _convert_and_record(pdf_path, source_id, sources_dir, result,
-                            title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
-                    else:
-                        result["quality"] = "ok"
+                    _record_pdf_success(result, source_id, "annas_archive",
+                                        pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
                     return
                 continue
             elif source_name == "scihub":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
                 if download_scihub(doi, pdf_path, client):
-                    result["pdf_file"] = f"sources/{source_id}.pdf"
-                    result["pdf_size_bytes"] = os.path.getsize(pdf_path)
-                    result["pdf_downloaded"] = True
-                    result["source_used"] = "scihub"
-                    if to_md:
-                        _convert_and_record(pdf_path, source_id, sources_dir, result,
-                            title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
-                    else:
-                        result["quality"] = "ok"
+                    _record_pdf_success(result, source_id, "scihub",
+                                        pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
                     return
                 continue
         except Exception as e:
@@ -662,17 +620,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
 
         dl_result = download_pdf(pdf_url, pdf_path, client)
         if dl_result["success"]:
-            result["pdf_file"] = f"sources/{source_id}.pdf"
-            result["pdf_size_bytes"] = dl_result["size_bytes"]
-            result["pdf_downloaded"] = True
-            result["source_used"] = source_name
-
-            if to_md:
-                _convert_and_record(pdf_path, source_id, sources_dir, result,
-                            title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
-            else:
-                result["quality"] = "ok"
+            _record_pdf_success(result, source_id, source_name,
+                                pdf_path, dl_result["size_bytes"], sources_dir, to_md)
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
 
@@ -681,45 +630,22 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
         log(f"All PDF cascade sources failed for DOI {doi}. Attempting DOI landing page fallback.", level="warn")
         try:
             landing_url = f"https://doi.org/{doi}"
-            resp = client.get(landing_url, stream=True, timeout=(15, 30))
-            try:
-                if resp.status_code != 200:
-                    raise ValueError(f"HTTP {resp.status_code}")
-                # Check Content-Length before reading body
-                try:
-                    cl = int(resp.headers.get("Content-Length", 0))
-                except (ValueError, TypeError):
-                    cl = 0
-                if cl > _MAX_WEB_SIZE:
-                    raise ValueError(f"Landing page too large ({cl} bytes)")
-                # Stream with size cap
-                chunks = []
-                size = 0
-                for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
-                    size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
-                    if size > _MAX_WEB_SIZE:
-                        raise ValueError(f"Landing page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB")
-                    chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
-                html = "".join(chunks)
-            finally:
-                resp.close()
-            if html:
-                content = extract_readable_content(html)
-                if content and len(content) > 100:
-                    md_path = os.path.join(sources_dir, f"{source_id}.md")
-                    Path(md_path).write_text(content, encoding="utf-8")
-                    result["content_file"] = f"sources/{source_id}.md"
-                    result["content_length"] = len(content)
-                    result["source_used"] = "doi_landing_page"
-                    result["quality"] = "abstract_only"
-                    result["quality_details"] = {
-                        "content_length": len(content),
-                        "alpha_ratio": 0.0,
-                        "sentence_count": 0,
-                        "reasons": ["fallback to DOI landing page — abstract/metadata only, not full text"],
-                    }
-                    log(f"DOI landing page fallback succeeded: {len(content)} chars extracted")
-                    return
+            content, _err = _stream_web_content(client, landing_url, timeout=30)
+            if content and len(content) > 100:
+                md_path = os.path.join(sources_dir, f"{source_id}.md")
+                Path(md_path).write_text(content, encoding="utf-8")
+                result["content_file"] = f"sources/{source_id}.md"
+                result["content_length"] = len(content)
+                result["source_used"] = "doi_landing_page"
+                result["quality"] = "abstract_only"
+                result["quality_details"] = {
+                    "content_length": len(content),
+                    "alpha_ratio": 0.0,
+                    "sentence_count": 0,
+                    "reasons": ["fallback to DOI landing page — abstract/metadata only, not full text"],
+                }
+                log(f"DOI landing page fallback succeeded: {len(content)} chars extracted")
+                return
         except Exception as e:
             log(f"DOI landing page fallback failed: {e}", level="warn")
 

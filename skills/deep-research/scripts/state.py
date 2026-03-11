@@ -125,43 +125,44 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_MIGRATIONS: list[tuple[str, str]] = [
+    # (column_name, column_definition) — applied to the searches table
+    ("ingested_count", "INTEGER"),
+    ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+]
+
+
+def _migrate_schema(db_path: str) -> None:
+    """Run ALTER TABLE migrations in a dedicated writable connection.
+
+    Single source of truth for the migration column list — called once
+    before the main connection is returned, regardless of readonly mode.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db_path}", uri=True)
+        try:
+            for col, defn in _MIGRATIONS:
+                try:
+                    conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+        finally:
+            conn.close()
+    except Exception:
+        pass  # DB may not exist yet or truly readonly filesystem
+
+
 def _connect(session_dir: str, readonly: bool = False) -> sqlite3.Connection:
     db_path = os.path.join(session_dir, "state.db")
     if readonly and not os.path.exists(db_path):
         error_response([f"state.db not found in {session_dir}"])
+    _migrate_schema(db_path)
     uri = f"file:{db_path}" + ("?mode=ro" if readonly else "")
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=20000")
-    # Migrate: add columns to searches (for existing DBs)
-    if readonly:
-        # Open a brief writable connection for migrations, then close it
-        rw_uri = f"file:{db_path}"
-        try:
-            rw_conn = sqlite3.connect(rw_uri, uri=True)
-            for col, defn in [
-                ("ingested_count", "INTEGER"),
-                ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
-            ]:
-                try:
-                    rw_conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
-                    rw_conn.commit()
-                except sqlite3.OperationalError:
-                    pass  # column already exists
-            rw_conn.close()
-        except Exception:
-            pass  # DB may not exist yet or truly readonly filesystem
-    else:
-        for col, defn in [
-            ("ingested_count", "INTEGER"),
-            ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # column already exists
     return conn
 
 

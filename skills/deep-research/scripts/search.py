@@ -5,13 +5,13 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _shared.config import _discover_session_dir_from_marker  # noqa: E402
-from _shared.output import error_response, log, log_subprocess_failure, set_quiet  # noqa: E402
+from _shared.output import error_response, log, set_quiet  # noqa: E402
+from _shared.state_client import call_state  # noqa: E402
 from providers import available_providers, get_provider  # noqa: E402
 
 # Flags that substitute for --query (provider -> set of flag dest names)
@@ -184,28 +184,20 @@ def _detect_search_mode(provider: str, args) -> str:
 
 def _log_search_to_state(args, result: dict, search_mode: str) -> None:
     """Log the search to session state via state.py."""
-    try:
-        import subprocess
-
-        scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        state_script = os.path.join(scripts_dir, "state.py")
-        ingested_count = len(result.get("results", []))
-        cmd = [
-            sys.executable, state_script, "log-search",
+    ingested_count = len(result.get("results", []))
+    resp = call_state(
+        args.session_dir, "log-search",
+        args=[
             "--provider", args.provider,
             "--query", args.query or "",
             "--search-mode", search_mode,
             "--result-count", str(ingested_count),
             "--ingested-count", str(ingested_count),
-            "--session-dir", args.session_dir,
-        ]
-        proc = subprocess.run(cmd, capture_output=True, timeout=5)
-        if proc.returncode == 0:
-            log(f"Search logged to state (provider={args.provider}, mode={search_mode})")
-        else:
-            log_subprocess_failure("log-search", proc)
-    except Exception as e:
-        log(f"Failed to log search to state: {e}", level="warn")
+        ],
+        timeout=5,
+    )
+    if resp is not None:
+        log(f"Search logged to state (provider={args.provider}, mode={search_mode})")
 
 
 def _add_sources_to_state(args, result: dict) -> None:
@@ -223,42 +215,19 @@ def _add_sources_to_state(args, result: dict) -> None:
     if not sources:
         return
 
-    try:
-        import subprocess
-
-        scripts_dir = os.path.dirname(os.path.abspath(__file__))
-        state_script = os.path.join(scripts_dir, "state.py")
-
-        # Write sources to temp JSON file
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="search_sources_")
-        try:
-            with os.fdopen(tmp_fd, "w") as f:
-                json.dump(sources, f, ensure_ascii=False)
-
-            cmd = [
-                sys.executable, state_script, "add-sources",
-                "--from-json", tmp_path,
-                "--session-dir", args.session_dir,
-            ]
-            proc = subprocess.run(cmd, capture_output=True, timeout=10)
-            if proc.returncode == 0:
-                stdout = proc.stdout.decode("utf-8", errors="replace").strip()
-                try:
-                    add_result = json.loads(stdout)
-                    added = add_result.get("results", {})
-                    if isinstance(added, dict):
-                        n_added = len(added.get("added", []))
-                        n_dup = len(added.get("duplicates", []))
-                        log(f"Sources auto-added to state: {n_added} new, {n_dup} duplicates")
-                except (json.JSONDecodeError, TypeError):
-                    log("Sources sent to state (could not parse response)")
-            else:
-                log_subprocess_failure("add-sources", proc)
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    except Exception as e:
-        log(f"Failed to auto-add sources to state: {e}", level="warn")
+    resp = call_state(
+        args.session_dir, "add-sources",
+        json_data=sources,
+        timeout=10,
+    )
+    if resp is not None:
+        added = resp.get("results", {})
+        if isinstance(added, dict):
+            n_added = len(added.get("added", []))
+            n_dup = len(added.get("duplicates", []))
+            log(f"Sources auto-added to state: {n_added} new, {n_dup} duplicates")
+        else:
+            log("Sources sent to state")
 
 
 def _append_journal_entry(args, result: dict, search_mode: str) -> None:

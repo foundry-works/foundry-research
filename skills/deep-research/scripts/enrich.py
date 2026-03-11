@@ -11,9 +11,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _shared.doi_utils import normalize_doi  # noqa: E402
-from _shared.html_extract import strip_jats_xml  # noqa: E402
 from _shared.http_client import create_session  # noqa: E402
 from _shared.metadata import (  # noqa: E402
+    _safe_int,
     merge_metadata,
     normalize_paper,
     read_source_metadata,
@@ -233,6 +233,23 @@ def _merge_into_source(enrichment_data: dict, source_id: str, metadata_dir: str)
     log(f"Merged {provider} metadata into {source_id}")
 
 
+def _to_enrichment_result(normalized: dict, doi: str, provider: str) -> dict:
+    """Convert normalize_paper() output to the enrichment result format."""
+    return {
+        "doi": doi,
+        "title": normalized.get("title", ""),
+        "authors": normalized.get("authors", []),
+        "year": normalized.get("year", 0),
+        "venue": normalized.get("venue", ""),
+        "abstract": normalized.get("abstract", ""),
+        "cited_by_count": normalized.get("citation_count", 0),
+        "is_retracted": normalized.get("is_retracted", False),
+        "url": normalized.get("url", "") or f"https://doi.org/{doi}",
+        "pdf_url": normalized.get("pdf_url", ""),
+        "_provider": provider,
+    }
+
+
 def _fetch_crossref(doi: str, client) -> dict | None:
     """Fetch metadata from Crossref API for a single DOI."""
     url = f"{_API_URL}/{doi}"
@@ -255,9 +272,11 @@ def _fetch_crossref(doi: str, client) -> dict | None:
     if not message:
         return None
 
-    result = _parse_crossref(message, doi)
-    result["_provider"] = "crossref"
-    return result
+    normalized = normalize_paper(message, "crossref")
+    if not normalized.get("title"):
+        return None
+
+    return _to_enrichment_result(normalized, doi, "crossref")
 
 
 def _fetch_openalex(doi: str, client, mailto: str | None = None) -> dict | None:
@@ -289,26 +308,11 @@ def _fetch_openalex(doi: str, client, mailto: str | None = None) -> dict | None:
         log(f"OpenAlex returned invalid JSON for {doi}", level="warn")
         return None
 
-    # Normalize through metadata.py's existing OpenAlex normalizer
     normalized = normalize_paper(raw, "openalex")
     if not normalized.get("title"):
         return None
 
-    # Convert back to enrichment result format for consistency
-    result = {
-        "doi": doi,
-        "title": normalized.get("title", ""),
-        "authors": normalized.get("authors", []),
-        "year": normalized.get("year", 0),
-        "venue": normalized.get("venue", ""),
-        "abstract": normalized.get("abstract", ""),
-        "cited_by_count": normalized.get("citation_count", 0),
-        "is_retracted": normalized.get("is_retracted", False),
-        "url": normalized.get("url", "") or f"https://doi.org/{doi}",
-        "pdf_url": normalized.get("pdf_url", ""),
-        "_provider": "openalex",
-    }
-    return result
+    return _to_enrichment_result(normalized, doi, "openalex")
 
 
 def _fetch_semantic_scholar(doi: str, client) -> dict | None:
@@ -338,107 +342,13 @@ def _fetch_semantic_scholar(doi: str, client) -> dict | None:
         log(f"Semantic Scholar returned invalid JSON for {doi}", level="warn")
         return None
 
-    # Normalize through metadata.py's existing S2 normalizer
     normalized = normalize_paper(raw, "semantic_scholar")
     if not normalized.get("title"):
         return None
 
-    result = {
-        "doi": doi,
-        "title": normalized.get("title", ""),
-        "authors": normalized.get("authors", []),
-        "year": normalized.get("year", 0),
-        "venue": normalized.get("venue", ""),
-        "abstract": normalized.get("abstract", ""),
-        "cited_by_count": normalized.get("citation_count", 0),
-        "is_retracted": normalized.get("is_retracted", False),
-        "url": normalized.get("url", "") or f"https://doi.org/{doi}",
-        "pdf_url": normalized.get("pdf_url", ""),
-        "_provider": "semantic_scholar",
-    }
-    return result
+    return _to_enrichment_result(normalized, doi, "semantic_scholar")
 
 
-def _parse_crossref(msg: dict, doi: str) -> dict:
-    """Parse Crossref API message into enrichment result."""
-    # Title (array in Crossref)
-    titles = msg.get("title") or []
-    title = titles[0] if titles else ""
-
-    # Authors
-    authors = []
-    for author in msg.get("author") or []:
-        family = author.get("family", "")
-        given = author.get("given", "")
-        if family:
-            name = f"{family}, {given}".strip(", ") if given else family
-            authors.append(name)
-
-    # Year from date-parts (check multiple fields)
-    year = _extract_year(msg)
-
-    # Venue
-    venue_list = msg.get("container-title") or []
-    venue = venue_list[0] if venue_list else ""
-
-    # Abstract (strip JATS XML tags)
-    abstract = msg.get("abstract", "") or ""
-    if abstract:
-        abstract = strip_jats_xml(abstract)
-
-    # Retraction detection
-    is_retracted = msg.get("is-retracted", False) or False
-
-    # Check update-to array for retraction notices
-    if not is_retracted:
-        for update in msg.get("update-to") or []:
-            if update.get("type") == "retraction":
-                is_retracted = True
-                break
-
-    # Check if this record IS a retraction notice
-    if msg.get("type") == "retraction":
-        is_retracted = True
-
-    return {
-        "doi": doi,
-        "title": title,
-        "authors": authors,
-        "year": year,
-        "venue": venue,
-        "volume": msg.get("volume", "") or "",
-        "issue": msg.get("issue", "") or "",
-        "pages": msg.get("page", "") or "",
-        "publisher": msg.get("publisher", "") or "",
-        "abstract": abstract,
-        "cited_by_count": msg.get("is-referenced-by-count") or 0,
-        "type": msg.get("type", "") or "",
-        "is_retracted": is_retracted,
-        "url": msg.get("URL", "") or f"https://doi.org/{doi}",
-    }
-
-
-def _extract_year(msg: dict) -> int:
-    """Extract year from Crossref date-parts format.
-
-    Checks: published-print → published-online → issued → created
-    Format: {"date-parts": [[2024, 3, 15]]}
-    """
-    for field in ("published-print", "published-online", "issued", "created"):
-        date_info = msg.get(field)
-        if date_info and "date-parts" in date_info:
-            parts = date_info["date-parts"]
-            if parts and parts[0] and parts[0][0]:
-                return int(parts[0][0])
-    return 0
-
-
-def _safe_int(val, default: int = 0) -> int:
-    """Convert a value to int, returning default on failure."""
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return default
 
 
 def _enrich_with_opencitations(results: list[dict], session_dir: str, errors: list[str],
