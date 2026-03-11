@@ -972,3 +972,470 @@ class TestHackerNews:
         assert result["status"] == "ok"
         assert result["has_more"] is True
         assert result["total_results"] == 100
+
+
+# ===========================================================================
+# OpenCitations
+# ===========================================================================
+
+class TestOpenCitations:
+
+    @patch("providers.opencitations.create_session")
+    def test_forward_citations(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        # Index API returns citation edges
+        index_response = [
+            {
+                "oci": "062104250928-062203214404",
+                "citing": "omid:br/062104250928 doi:10.5753/compbr.2022.47.4405",
+                "cited": "omid:br/062203214404 doi:10.1145/3442188.3445922",
+                "creation": "2022-07-01",
+                "timespan": "P1Y4M",
+                "journal_sc": "no",
+                "author_sc": "no",
+            },
+        ]
+
+        # Meta API returns metadata for the citing paper
+        meta_response = [
+            {
+                "id": "omid:br/062104250928 doi:10.5753/compbr.2022.47.4405",
+                "title": "Test Paper",
+                "author": "Souza, Marlo",
+                "pub_date": "2022-07-01",
+                "venue": "Computação Brasil [issn:2965-9728 omid:br/062104250997]",
+                "volume": "47",
+                "issue": "",
+                "page": "",
+                "type": "journal article",
+                "publisher": "SBC",
+                "citation_count": "3",
+            },
+        ]
+
+        client.get.side_effect = [
+            _mock_response(200, index_response),
+            _mock_response(200, meta_response),
+        ]
+
+        args = _base_args(
+            query=None,
+            cited_by="10.1145/3442188.3445922",
+            references=None,
+        )
+        result = _parse_output(opencitations.search(args))
+
+        assert result["status"] == "ok"
+        assert result["total_results"] == 1
+        assert result["mode"] == "citations"
+        assert len(result["results"]) == 1
+
+        paper = result["results"][0]
+        assert paper["title"] == "Test Paper"
+        assert paper["authors"] == ["Souza, Marlo"]
+        assert paper["year"] == 2022
+        assert paper["venue"] == "Computação Brasil"
+        assert paper["timespan"] == "P1Y4M"
+        assert paper["self_citation_journal"] is False
+        assert paper["self_citation_author"] is False
+
+    @patch("providers.opencitations.create_session")
+    def test_backward_references(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        index_response = [
+            {
+                "oci": "test-oci",
+                "citing": "doi:10.1145/3442188.3445922",
+                "cited": "doi:10.1145/2207676.2208562",
+                "creation": "2021-03-01",
+                "timespan": "P9Y",
+                "journal_sc": "yes",
+                "author_sc": "no",
+            },
+        ]
+
+        meta_response = [
+            {
+                "id": "doi:10.1145/2207676.2208562",
+                "title": "The Envisioning Cards",
+                "author": "Friedman, Batya; Hendry, David",
+                "pub_date": "2012",
+                "venue": "CHI",
+                "type": "conference paper",
+            },
+        ]
+
+        client.get.side_effect = [
+            _mock_response(200, index_response),
+            _mock_response(200, meta_response),
+        ]
+
+        args = _base_args(
+            query=None,
+            cited_by=None,
+            references="10.1145/3442188.3445922",
+        )
+        result = _parse_output(opencitations.search(args))
+
+        assert result["status"] == "ok"
+        assert result["mode"] == "references"
+        assert len(result["results"]) == 1
+
+        paper = result["results"][0]
+        assert paper["title"] == "The Envisioning Cards"
+        assert paper["authors"] == ["Friedman, Batya", "Hendry, David"]
+        assert paper["self_citation_journal"] is True
+
+    @patch("providers.opencitations.create_session")
+    def test_keyword_search_returns_error(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        args = _base_args(
+            query="test",
+            cited_by=None,
+            references=None,
+        )
+
+        with pytest.raises(SystemExit):
+            opencitations.search(args)
+
+    @patch("providers.opencitations.create_session")
+    def test_no_flags_returns_error(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        args = _base_args(
+            query=None,
+            cited_by=None,
+            references=None,
+        )
+
+        with pytest.raises(SystemExit):
+            opencitations.search(args)
+
+    @patch("providers.opencitations.create_session")
+    def test_404_returns_not_found(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+        client.get.return_value = _mock_response(404, text="Not found")
+
+        args = _base_args(
+            query=None,
+            cited_by="10.9999/nonexistent",
+            references=None,
+        )
+
+        with pytest.raises(SystemExit):
+            opencitations.search(args)
+
+    @patch("providers.opencitations.create_session")
+    def test_meta_api_failure_falls_back_to_minimal_records(self, mock_create):
+        from providers import opencitations
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        index_response = [
+            {
+                "citing": "doi:10.1234/citing",
+                "cited": "doi:10.1234/cited",
+                "timespan": "P2Y",
+                "journal_sc": "no",
+                "author_sc": "no",
+            },
+        ]
+
+        client.get.side_effect = [
+            _mock_response(200, index_response),
+            _mock_response(500, text="Server Error"),  # Meta API fails
+        ]
+
+        args = _base_args(
+            query=None,
+            cited_by="10.1234/cited",
+            references=None,
+        )
+        result = _parse_output(opencitations.search(args))
+
+        assert result["status"] == "ok"
+        assert len(result["results"]) == 1
+        # Should still have DOI and edge metadata even without meta
+        paper = result["results"][0]
+        assert paper["doi"] == "10.1234/citing"
+        assert paper["timespan"] == "P2Y"
+
+
+# ===========================================================================
+# DBLP
+# ===========================================================================
+
+class TestDBLP:
+
+    @patch("providers.dblp.create_session")
+    def test_publication_search(self, mock_create):
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        api_response = {
+            "result": {
+                "query": "anomaly detection",
+                "status": {"@code": "200", "text": "OK"},
+                "hits": {
+                    "@total": "1",
+                    "@computed": "1",
+                    "@sent": "1",
+                    "hit": [{
+                        "@score": "5",
+                        "@id": "123",
+                        "info": {
+                            "authors": {
+                                "author": [
+                                    {"@pid": "1", "text": "Alice Smith"},
+                                    {"@pid": "2", "text": "Bob Jones"},
+                                ]
+                            },
+                            "title": "Anomaly Detection in Streams.",
+                            "venue": "KDD",
+                            "pages": "1067-1075",
+                            "year": "2017",
+                            "type": "Conference and Workshop Papers",
+                            "access": "closed",
+                            "key": "conf/kdd/test17",
+                            "doi": "10.1145/3097983.3098144",
+                            "ee": "https://doi.org/10.1145/3097983.3098144",
+                            "url": "https://dblp.org/rec/conf/kdd/test17",
+                        },
+                    }],
+                },
+            }
+        }
+
+        client.get.return_value = _mock_response(200, api_response)
+
+        args = _base_args(
+            query="anomaly detection",
+            author=None,
+            venue=None,
+            year_range=None,
+            pub_type=None,
+        )
+        result = _parse_output(dblp.search(args))
+
+        assert result["status"] == "ok"
+        assert result["total_results"] == 1
+        assert len(result["results"]) == 1
+
+        paper = result["results"][0]
+        assert paper["title"] == "Anomaly Detection in Streams"  # trailing period stripped
+        assert paper["venue"] == "KDD"
+        assert paper["year"] == 2017
+        assert paper["doi"] == "10.1145/3097983.3098144"
+        assert paper["authors"] == ["Smith, Alice", "Jones, Bob"]
+
+    @patch("providers.dblp.create_session")
+    def test_author_search(self, mock_create):
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        api_response = {
+            "result": {
+                "hits": {
+                    "@total": "1",
+                    "hit": [{
+                        "info": {
+                            "author": "Yoshua Bengio",
+                            "url": "https://dblp.org/pid/56/953",
+                            "notes": {
+                                "note": [
+                                    {"@type": "affiliation", "text": "University of Montréal"},
+                                    {"@type": "award", "text": "Turing Award"},
+                                ]
+                            },
+                        },
+                    }],
+                },
+            }
+        }
+
+        client.get.return_value = _mock_response(200, api_response)
+
+        args = _base_args(
+            query=None,
+            author="Yoshua Bengio",
+            venue=None,
+            year_range=None,
+            pub_type=None,
+        )
+        result = _parse_output(dblp.search(args))
+
+        assert result["status"] == "ok"
+        assert result["mode"] == "author_search"
+        assert len(result["results"]) == 1
+
+        author = result["results"][0]
+        assert author["name"] == "Yoshua Bengio"
+        assert author["notes"]["affiliation"] == "University of Montréal"
+        assert author["notes"]["award"] == "Turing Award"
+
+    @patch("providers.dblp.create_session")
+    def test_venue_search(self, mock_create):
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        api_response = {
+            "result": {
+                "hits": {
+                    "@total": "1",
+                    "hit": [{
+                        "info": {
+                            "venue": "Conference on Neural Information Processing Systems (NeurIPS)",
+                            "acronym": "NeurIPS",
+                            "type": "Conference or Workshop",
+                            "url": "https://dblp.org/db/conf/nips/",
+                        },
+                    }],
+                },
+            }
+        }
+
+        client.get.return_value = _mock_response(200, api_response)
+
+        args = _base_args(
+            query=None,
+            author=None,
+            venue="NeurIPS",
+            year_range=None,
+            pub_type=None,
+        )
+        result = _parse_output(dblp.search(args))
+
+        assert result["status"] == "ok"
+        assert result["mode"] == "venue_search"
+        assert len(result["results"]) == 1
+
+        venue = result["results"][0]
+        assert venue["acronym"] == "NeurIPS"
+        assert venue["type"] == "Conference or Workshop"
+
+    @patch("providers.dblp.create_session")
+    def test_no_flags_returns_error(self, mock_create):
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        args = _base_args(
+            query=None,
+            author=None,
+            venue=None,
+            year_range=None,
+            pub_type=None,
+        )
+
+        with pytest.raises(SystemExit):
+            dblp.search(args)
+
+    @patch("providers.dblp.create_session")
+    def test_mirror_failover(self, mock_create):
+        """When primary returns 500, falls back to Trier mirror."""
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        ok_response = {
+            "result": {
+                "hits": {
+                    "@total": "1",
+                    "hit": [{
+                        "info": {
+                            "authors": {"author": {"text": "Solo Author"}},
+                            "title": "Mirror Paper.",
+                            "venue": "ICML",
+                            "year": "2024",
+                        },
+                    }],
+                },
+            }
+        }
+
+        # First call (primary) returns 500, second call (mirror) succeeds
+        client.get.side_effect = [
+            _mock_response(500, text="Server Error"),
+            _mock_response(200, ok_response),
+        ]
+
+        args = _base_args(
+            query="test",
+            author=None,
+            venue=None,
+            year_range=None,
+            pub_type=None,
+        )
+        result = _parse_output(dblp.search(args))
+
+        assert result["status"] == "ok"
+        assert len(result["results"]) == 1
+        assert result["results"][0]["title"] == "Mirror Paper"
+        # Two GET calls: primary failed, mirror succeeded
+        assert client.get.call_count == 2
+
+    @patch("providers.dblp.create_session")
+    def test_single_author_dict_format(self, mock_create):
+        """DBLP returns a dict (not list) when there's only one author."""
+        from providers import dblp
+
+        client = _make_mock_client()
+        mock_create.return_value = client
+
+        api_response = {
+            "result": {
+                "hits": {
+                    "@total": "1",
+                    "hit": [{
+                        "info": {
+                            "authors": {"author": {"text": "Solo Author"}},
+                            "title": "Single Author Paper.",
+                            "venue": "AAAI",
+                            "year": "2024",
+                        },
+                    }],
+                },
+            }
+        }
+
+        client.get.return_value = _mock_response(200, api_response)
+
+        args = _base_args(
+            query="test",
+            author=None,
+            venue=None,
+            year_range=None,
+            pub_type=None,
+        )
+        result = _parse_output(dblp.search(args))
+
+        assert result["status"] == "ok"
+        paper = result["results"][0]
+        assert paper["authors"] == ["Author, Solo"]

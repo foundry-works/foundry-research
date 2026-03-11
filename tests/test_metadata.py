@@ -2,10 +2,13 @@
 
 from _shared.metadata import (
     PAPER_SCHEMA,
+    _clean_opencitations_venue,
     _extract_crossref_year,
     _is_empty,
+    _parse_opencitations_authors,
     _parse_year,
     _reformat_author,
+    _safe_int,
     merge_metadata,
     normalize_paper,
     read_source_metadata,
@@ -274,3 +277,116 @@ class TestMergeMetadata:
         assert _is_empty("text") is False
         assert _is_empty(42) is False
         assert _is_empty(["a"]) is False
+
+
+# ---------------------------------------------------------------------------
+# 7. OpenCitations normalization
+# ---------------------------------------------------------------------------
+
+class TestOpenCitationsNormalization:
+    def test_normalize_opencitations_basic(self):
+        raw = {
+            "id": "doi:10.1234/test",
+            "title": "Test Paper",
+            "author": "Smith, John; Doe, Jane [0000-0001-1234-5678]",
+            "pub_date": "2022-07-01",
+            "venue": "Nature [issn:1234-5678 omid:br/1234]",
+            "citation_count": "42",
+        }
+        paper = normalize_paper(raw, "opencitations")
+        assert paper["title"] == "Test Paper"
+        assert paper["authors"] == ["Smith, John", "Doe, Jane"]
+        assert paper["year"] == 2022
+        assert paper["venue"] == "Nature"
+        assert paper["doi"] == "10.1234/test"
+        assert paper["citation_count"] == 42
+        assert paper["provider"] == "opencitations"
+
+    def test_normalize_opencitations_empty_author(self):
+        raw = {"title": "No Authors", "author": "", "pub_date": "2020"}
+        paper = normalize_paper(raw, "opencitations")
+        assert paper["authors"] == []
+        assert paper["year"] == 2020
+
+    def test_clean_venue_strips_brackets(self):
+        assert _clean_opencitations_venue("Nature [issn:1234]") == "Nature"
+        assert _clean_opencitations_venue("Ai & Society") == "Ai & Society"
+        assert _clean_opencitations_venue("") == ""
+        assert _clean_opencitations_venue("[only bracket]") == "[only bracket]"
+
+    def test_parse_authors_with_orcid(self):
+        result = _parse_opencitations_authors("Smith, A [0000-0001-1234]; Doe, B")
+        assert result == ["Smith, A", "Doe, B"]
+
+    def test_parse_authors_empty(self):
+        assert _parse_opencitations_authors("") == []
+
+    def test_safe_int(self):
+        assert _safe_int(42) == 42
+        assert _safe_int("10") == 10
+        assert _safe_int("abc") == 0
+        assert _safe_int(None) == 0
+
+
+# ---------------------------------------------------------------------------
+# 8. DBLP normalization
+# ---------------------------------------------------------------------------
+
+class TestDBLPNormalization:
+    def test_normalize_dblp_basic(self):
+        raw = {
+            "title": "Test Paper Title.",
+            "authors": {"author": [{"text": "Alice Smith"}, {"text": "Bob Jones"}]},
+            "venue": "KDD",
+            "year": "2017",
+            "doi": "10.1145/3097983.3098144",
+            "ee": "https://doi.org/10.1145/3097983.3098144",
+            "pages": "1067-1075",
+            "access": "open",
+        }
+        paper = normalize_paper(raw, "dblp")
+        assert paper["title"] == "Test Paper Title"  # trailing period stripped
+        assert paper["authors"] == ["Smith, Alice", "Jones, Bob"]
+        assert paper["venue"] == "KDD"
+        assert paper["year"] == 2017
+        assert paper["doi"] == "10.1145/3097983.3098144"
+        assert paper["pages"] == "1067-1075"
+        assert paper["is_open_access"] is True
+        assert paper["provider"] == "dblp"
+
+    def test_normalize_dblp_single_author_dict(self):
+        """DBLP returns a dict instead of list when there's one author."""
+        raw = {
+            "title": "Solo Paper.",
+            "authors": {"author": {"text": "Solo Author"}},
+            "venue": "AAAI",
+            "year": "2024",
+        }
+        paper = normalize_paper(raw, "dblp")
+        assert paper["authors"] == ["Author, Solo"]
+
+    def test_normalize_dblp_plain_author_list(self):
+        """The dblp-api library pre-processes authors into a plain list."""
+        raw = {
+            "title": "Pre-processed.",
+            "authors": ["Alice Smith", "Bob Jones"],
+            "venue": "ICML",
+            "year": "2023",
+        }
+        paper = normalize_paper(raw, "dblp")
+        assert paper["authors"] == ["Smith, Alice", "Jones, Bob"]
+
+    def test_normalize_dblp_no_doi_uses_ee(self):
+        raw = {
+            "title": "No DOI Paper.",
+            "ee": "https://example.com/paper",
+            "year": "2024",
+        }
+        paper = normalize_paper(raw, "dblp")
+        assert paper["url"] == "https://example.com/paper"
+        assert paper["doi"] == ""
+
+    def test_normalize_dblp_closed_access(self):
+        raw = {"title": "Closed.", "access": "closed", "year": "2024"}
+        paper = normalize_paper(raw, "dblp")
+        assert paper["is_open_access"] is False
