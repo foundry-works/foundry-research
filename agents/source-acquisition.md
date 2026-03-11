@@ -45,6 +45,7 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 - **`--references`** (backward) — the paper's own bibliography. High precision, stable. Default strategy.
 - **`--cited-by`** (forward) — papers that cited it. Recency-biased. For foundational papers (200+ citations), use `--min-citations N` to filter noise.
 - **Fallback tree** when citation traversal returns 0: retry `--cited-by` without `--min-citations` → try `--references` → fall back to keyword search with paper's exact title
+- **CORE title lookups:** When searching CORE by exact paper title (citation chasing fallback), always pass `--title-mode`. CORE's full-text tokenizer chokes on colons, hyphens, and long subtitles — `--title-mode` strips these before querying, improving hit rate from ~50% to ~90%.
 
 **Skip citation chasing** if: the topic is non-academic (product comparisons, financial analysis) or round 1 found no papers with >50 citations.
 
@@ -79,7 +80,7 @@ After search rounds complete, run `state triage` to rank sources by citation cou
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --batch-size 15` in a loop until `"remaining": 0`. Cap at 3 batch loops to avoid runaway downloads.
+1. Run `state download-pending --auto-download --batch-size 15` in a loop until `"remaining": 0`. Cap at 3 batch loops to avoid runaway downloads. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
 4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). Use `--min-citations 30` to adjust the threshold.
@@ -130,6 +131,7 @@ Citation traversal (Semantic Scholar, PubMed only) — `--compact` applies here 
 ```
 
 Common flags: `--limit N`, `--offset N`, `--year-range YYYY-YYYY`, `--open-access-only`, `--min-citations N`
+CORE-specific: `--title-mode` (normalize query for exact title lookup — use when citation-chasing via CORE)
 
 Searches are auto-tracked — they automatically log to state.db and add sources. No manual `log-search` or `add-sources` needed.
 
@@ -144,6 +146,7 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state triage --title-contains "keyword"  # pre-filter before scoring
 {cli_dir}/state download-pending           # list sources without content
 {cli_dir}/state download-pending --auto-download --batch-size 15
+{cli_dir}/state download-pending --auto-download --batch-size 15 --prioritize-gaps  # gap mode
 {cli_dir}/state log-gap --text "..."       # record coverage gap
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 {cli_dir}/state summary                    # brief + sources + findings + gaps

@@ -1,5 +1,6 @@
 """CORE search provider — open-access academic papers via the CORE API."""
 
+import re
 import tempfile
 
 from _shared.config import get_config
@@ -33,6 +34,13 @@ def add_arguments(parser) -> None:
         "--core-id",
         default=None,
         help="Look up a single work by CORE ID",
+    )
+    parser.add_argument(
+        "--title-mode",
+        action="store_true",
+        default=False,
+        help="Normalize query for title lookup: strip punctuation, remove articles, truncate. "
+             "Use when citation-chasing by exact paper title.",
     )
 
 
@@ -79,11 +87,29 @@ def search(args) -> dict:
         http.close()
 
 
+def _normalize_title_query(query: str) -> str:
+    """Normalize a paper title for CORE full-text search.
+
+    CORE's /search/works tokenizes on punctuation, so exact titles with colons,
+    hyphens, and em-dashes produce poor matches. This strips noise characters,
+    removes common articles, and truncates long subtitles.
+    """
+    q = re.sub(r'[:\-\u2014\u2013()\[\]{}]', ' ', query)  # strip punctuation
+    q = re.sub(r'\b(a|an|the|of|in|on|for|and|with|to|by)\b', ' ', q, flags=re.IGNORECASE)
+    q = ' '.join(q.split())  # collapse whitespace
+    return q[:150]  # truncate long subtitles
+
+
 def _keyword_search(http, args) -> dict:
     """Execute a keyword search against CORE /search/works."""
     query = args.query
     limit = min(getattr(args, "limit", 10), 100)  # CORE caps at 100
     offset = getattr(args, "offset", 0)
+
+    # Normalize for title lookups — strip punctuation that breaks CORE tokenization
+    if getattr(args, "title_mode", False):
+        query = _normalize_title_query(query)
+        log(f"Title-mode normalized query: {query!r}")
 
     # Build the query with year filter if specified
     search_query = query

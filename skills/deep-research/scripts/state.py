@@ -1033,6 +1033,53 @@ def cmd_get_metric(args):
 # download-pending
 # ---------------------------------------------------------------------------
 
+def _prioritize_by_gaps(session_dir: str, pending: list) -> list:
+    """Reorder pending sources so gap-relevant ones come first.
+
+    Scores each source title against open gap terms (text + question fields).
+    Sources with matches sort first (by match count desc), others keep original order.
+    """
+    try:
+        conn = _connect(session_dir, readonly=True)
+        sid = _get_session_id(conn)
+        gaps = conn.execute(
+            "SELECT text, question FROM gaps WHERE session_id = ? AND status = 'open'",
+            (sid,)
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return pending  # DB issue — skip prioritization silently
+
+    if not gaps:
+        return pending
+
+    gap_texts = []
+    for g in gaps:
+        if g["text"]:
+            gap_texts.append(g["text"])
+        if g["question"]:
+            gap_texts.append(g["question"])
+    gap_terms = set(_extract_terms(gap_texts))
+
+    if not gap_terms:
+        return pending
+
+    # Score each source by how many gap terms appear in its title
+    scored = []
+    for src in pending:
+        title_lower = (src.get("title") or "").lower()
+        score = sum(1 for t in gap_terms if t in title_lower)
+        scored.append((score, src))
+
+    boosted = sum(1 for s, _ in scored if s > 0)
+    if boosted:
+        log(f"Gap prioritization: {boosted} sources boosted ahead of {len(scored) - boosted} others")
+
+    # Stable sort: gap-relevant first (desc score), then original order
+    scored.sort(key=lambda x: -x[0])
+    return [src for _, src in scored]
+
+
 def cmd_download_pending(args):
     """List or download sources that have no on-disk content."""
     conn = _connect(args.session_dir, readonly=True)
@@ -1073,6 +1120,11 @@ def cmd_download_pending(args):
 
     if skipped_on_disk:
         log(f"{skipped_on_disk} sources already on disk, skipping")
+
+    # Gap-aware prioritization: boost sources whose titles match open gap terms
+    if getattr(args, "prioritize_gaps", False) and pending:
+        pending = _prioritize_by_gaps(args.session_dir, pending)
+
     log(f"Found {len(pending)} sources without on-disk content")
 
     batch_size = getattr(args, "batch_size", None)
@@ -2002,6 +2054,7 @@ def main():
     p.add_argument("--batch-size", type=int, default=15, help="Max sources per batch (default 15). Caller loops until remaining=0.")
     p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
     p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: min(480, max(300, batch*30)))")
+    p.add_argument("--prioritize-gaps", action="store_true", default=False, help="Reorder pending sources so gap-relevant ones download first")
     p.add_argument("--session-dir", **_sd)
 
     # audit

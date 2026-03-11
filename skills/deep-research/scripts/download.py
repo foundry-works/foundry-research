@@ -90,10 +90,19 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
 
     update = {}
     if result.get("content_file"):
-        update["content_file"] = result["content_file"]
+        content_path = os.path.join(session_dir, result["content_file"])
+        if os.path.exists(content_path):
+            update["content_file"] = result["content_file"]
+        else:
+            log(f"content_file claimed but missing: {result['content_file']}")
     if result.get("pdf_file"):
-        update["pdf_file"] = result["pdf_file"]
-    if result.get("pdf_downloaded") or result.get("content_file"):
+        pdf_path = os.path.join(session_dir, result["pdf_file"])
+        if os.path.exists(pdf_path):
+            update["pdf_file"] = result["pdf_file"]
+        else:
+            log(f"pdf_file claimed but missing: {result['pdf_file']}")
+    # Only mark downloaded if at least one verified file exists on disk
+    if update.get("content_file") or update.get("pdf_file"):
         update["status"] = "downloaded"
     if result.get("quality"):
         update["quality"] = result["quality"]
