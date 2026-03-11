@@ -27,6 +27,7 @@ _IDENTIFIER_FLAGS = {
     "crossref": {"doi"},
     "core": {"core_id"},
     "tavily": {"urls"},
+    "opencitations": {"cited_by", "references"},
 }
 
 
@@ -174,6 +175,7 @@ def _detect_search_mode(provider: str, args) -> str:
                 "core_id": "fetch",
                 "urls": "fetch",
                 "accession": "fetch",
+                # opencitations uses the same flag names as semantic_scholar
             }
             return mode_map.get(flag, "keyword")
     return "keyword"

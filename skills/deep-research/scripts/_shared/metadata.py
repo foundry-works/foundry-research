@@ -80,6 +80,8 @@ def normalize_paper(raw: dict, provider: str) -> dict:
         paper = _normalize_arxiv(paper, raw)
     elif provider == "biorxiv":
         paper = _normalize_biorxiv(paper, raw)
+    elif provider == "opencitations":
+        paper = _normalize_opencitations(paper, raw)
     else:
         # Generic: copy matching fields directly
         for key in PAPER_SCHEMA:
@@ -216,6 +218,83 @@ def _normalize_biorxiv(paper: dict, raw: dict) -> dict:
     if paper.get("authors"):
         paper["authors"] = [_reformat_author(a) for a in paper["authors"]]
     return paper
+
+
+def _normalize_opencitations(paper: dict, raw: dict) -> dict:
+    """Normalize OpenCitations Meta API response to unified schema.
+
+    Meta API fields: id, title, author, pub_date, venue, volume, issue, page, type, publisher.
+    Author format: "family, given [orcid]" semicolon-separated.
+    """
+    paper["title"] = raw.get("title", "") or ""
+    paper["venue"] = _clean_opencitations_venue(raw.get("venue", "") or raw.get("source_title", "") or "")
+    paper["type"] = "academic"
+
+    # DOI — may be in 'id' field as "doi:10.xxx" or in 'doi' field directly
+    doi = raw.get("doi", "")
+    if not doi:
+        oc_id = raw.get("id", "")
+        for part in oc_id.split():
+            if part.startswith("doi:"):
+                doi = part[4:]
+                break
+    paper["doi"] = doi
+    paper["url"] = f"https://doi.org/{doi}" if doi else ""
+
+    # Year from pub_date (format: "YYYY-MM-DD" or "YYYY")
+    pub_date = raw.get("pub_date", "") or raw.get("year", "")
+    paper["year"] = _parse_year(pub_date)
+
+    # Authors — semicolon-separated, format: "family, given [orcid]"
+    author_str = raw.get("author", "")
+    if author_str:
+        paper["authors"] = _parse_opencitations_authors(author_str)
+    else:
+        paper["authors"] = []
+
+    # Citation count from Meta API
+    paper["citation_count"] = _safe_int(raw.get("citation_count", 0))
+
+    return paper
+
+
+def _parse_opencitations_authors(author_str: str) -> list[str]:
+    """Parse OpenCitations author string: 'Family, Given [orcid]; Family2, Given2'."""
+    authors = []
+    for entry in author_str.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        # Strip ORCID bracket suffix if present: "Smith, John [0000-0001-...]"
+        bracket = entry.find("[")
+        if bracket > 0:
+            entry = entry[:bracket].strip()
+        if entry:
+            authors.append(entry)
+    return authors
+
+
+def _clean_opencitations_venue(venue: str) -> str:
+    """Strip bracketed metadata from OpenCitations venue strings.
+
+    E.g. 'Computação Brasil [issn:2965-9728 omid:br/062104250997]' → 'Computação Brasil'
+    """
+    if not venue:
+        return ""
+    bracket = venue.find("[")
+    if bracket > 0:
+        return venue[:bracket].strip()
+    return venue
+
+
+def _safe_int(value) -> int:
+    """Convert value to int, defaulting to 0."""
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
 
 
 def _reformat_author(name: str) -> str:

@@ -17,6 +17,7 @@ _REGISTRY: dict[str, str] = {
     "edgar": "providers.edgar",
     "crossref": "providers.crossref",
     "core": "providers.core",
+    "opencitations": "providers.opencitations",
 }
 
 

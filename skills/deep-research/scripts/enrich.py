@@ -47,6 +47,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--session-dir", default=None,
         help="Session directory (for rate limiter state and metadata merge)",
     )
+    parser.add_argument(
+        "--citation-data", action="store_true", default=False,
+        help="Also fetch OpenCitations citation/reference counts for each DOI",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
     return parser
 
@@ -104,6 +108,10 @@ def main() -> None:
                 errors.append(f"Error for {doi}: {e}")
     finally:
         client.close()
+
+    # OpenCitations enrichment pass (additive — runs after Crossref)
+    if args.citation_data and results:
+        _enrich_with_opencitations(results, session_dir, errors)
 
     if results or not errors:
         success_response(results, total_results=len(results))
@@ -220,6 +228,55 @@ def _extract_year(msg: dict) -> int:
             if parts and parts[0] and parts[0][0]:
                 return int(parts[0][0])
     return 0
+
+
+def _enrich_with_opencitations(results: list[dict], session_dir: str, errors: list[str]) -> None:
+    """Add OpenCitations citation/reference counts to enrichment results."""
+    oc_client = create_session(
+        session_dir,
+        rate_limits={"api.opencitations.net": 2.5},
+    )
+    oc_base = "https://api.opencitations.net/index/v2"
+
+    try:
+        for item in results:
+            doi = item.get("doi", "")
+            if not doi:
+                continue
+
+            # Citation count (forward)
+            try:
+                resp = oc_client.get(f"{oc_base}/citation-count/doi:{doi}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list) and data:
+                        item["opencitations_citation_count"] = int(data[0].get("count", 0))
+                    elif isinstance(data, dict):
+                        item["opencitations_citation_count"] = int(data.get("count", 0))
+                    log(f"OpenCitations citation count for {doi}: {item.get('opencitations_citation_count', 'N/A')}")
+                else:
+                    log(f"OpenCitations citation-count returned {resp.status_code} for {doi}", level="warn")
+            except Exception as e:
+                log(f"OpenCitations citation-count failed for {doi}: {e}", level="warn")
+                errors.append(f"OpenCitations citation-count error for {doi}: {e}")
+
+            # Reference count (backward)
+            try:
+                resp = oc_client.get(f"{oc_base}/reference-count/doi:{doi}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list) and data:
+                        item["opencitations_reference_count"] = int(data[0].get("count", 0))
+                    elif isinstance(data, dict):
+                        item["opencitations_reference_count"] = int(data.get("count", 0))
+                    log(f"OpenCitations reference count for {doi}: {item.get('opencitations_reference_count', 'N/A')}")
+                else:
+                    log(f"OpenCitations reference-count returned {resp.status_code} for {doi}", level="warn")
+            except Exception as e:
+                log(f"OpenCitations reference-count failed for {doi}: {e}", level="warn")
+                errors.append(f"OpenCitations reference-count error for {doi}: {e}")
+    finally:
+        oc_client.close()
 
 
 if __name__ == "__main__":
