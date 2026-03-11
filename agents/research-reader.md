@@ -33,12 +33,18 @@ A directive from the supervisor containing:
 
 - Write the summary to `notes/{source_id}.md` in the session directory, using a **relative path from the project root**
 - The note should include: core findings (2-3 sentences), key evidence/data points, methodology, limitations, and relevance to the research question
-- Return ONLY a compact JSON manifest entry to the supervisor — do NOT return the full summary in your response
+- Return ONLY a compact JSON manifest entry to the supervisor — do NOT return the full summary in your response. Include `coverage_signal` to help the supervisor assess coverage without reading the full note.
 
 Manifest format:
 ```json
-{"source_id": "src-003", "status": "ok", "path": "notes/src-003.md"}
+{"source_id": "src-003", "status": "ok", "path": "notes/src-003.md", "coverage_signal": {"questions": ["Q1: What mechanisms drive X?", "Q3: What are the tradeoffs?"], "evidence_strength": "strong"}}
 ```
+
+The `coverage_signal` field tells the supervisor which research questions this source is relevant to and how strong the evidence is:
+- **`questions`**: List the research questions (from the directive) that this source provides evidence for. Use the full question text. Omit questions the source doesn't address.
+- **`evidence_strength`**: Rate as `"strong"` (primary data, large sample, peer-reviewed), `"moderate"` (smaller study, secondary analysis, or single strong finding), or `"weak"` (anecdotal, tangential, or methodologically limited). This reflects the source's overall evidence quality, not per-question strength.
+
+**Why this matters:** The supervisor uses coverage signals to detect thin spots (questions with <2 sources or only weak evidence) early — before all readers finish — enabling targeted follow-up searches while search budget remains. Without this, the supervisor must read every note to assess coverage, which defeats the purpose of parallel delegation.
 
 This keeps the supervisor's context clean. The supervisor reads notes/ files as needed.
 

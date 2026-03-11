@@ -51,6 +51,8 @@ A directive from the supervisor containing:
 - What gaps remain unresolved
 - Use audit data from the directive if provided
 
+**Cross-reference journal.md for methodology accuracy.** Before writing the Methodology section, read `journal.md` in the session directory. It contains the supervisor's search-round logs — which providers were queried, what citation chasing was attempted (including failed attempts), and what gap-resolution strategies were tried. Use this to verify your methodology claims against what actually happened. Specifically: if citation chasing was attempted but returned 0 results, report it accurately (e.g., "Citation traversal on [paper] yielded no additional sources") rather than omitting it. Omitting failed strategies makes the methodology look less thorough than it was, and misrepresents the search effort. Conversely, don't claim strategies that the journal doesn't document.
+
 ## Output format
 
 Write the report to `report.md` in the session directory using a relative path.

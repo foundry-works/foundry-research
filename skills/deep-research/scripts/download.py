@@ -184,6 +184,18 @@ def _handle_retry_sync(session_dir: str) -> None:
             skipped.append(sid)
             continue
 
+        # Recover quality from metadata JSON if available
+        metadata_dir = os.path.join(sources_dir, "metadata")
+        meta_file = os.path.join(metadata_dir, f"{sid}.json")
+        if os.path.exists(meta_file):
+            try:
+                meta = json.loads(Path(meta_file).read_text(encoding="utf-8"))
+                result["quality"] = meta.get("quality", "ok")
+            except (json.JSONDecodeError, OSError):
+                result["quality"] = "ok"
+        else:
+            result["quality"] = "ok"
+
         if _sync_to_state(session_dir, result):
             synced.append(sid)
         else:
@@ -463,6 +475,7 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
         result["content_file"] = f"sources/{source_id}.md"
         result["content_length"] = len(content)
         result["source_used"] = "web"
+        result["quality"] = "ok"
 
         meta["url"] = url
         meta["type"] = "web"
@@ -491,6 +504,8 @@ def _download_direct_pdf(url: str, source_id: str, client, sources_dir: str,
         _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
                             authors=result.get("_expected_authors"))
+    else:
+        result["quality"] = "ok"
 
 
 def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
@@ -546,6 +561,8 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
                 _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
                             authors=result.get("_expected_authors"))
+            else:
+                result["quality"] = "ok"
             return
 
         except Exception as e:
@@ -977,6 +994,7 @@ def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: s
                 dest_md = os.path.join(sources_dir, f"{source_id}.md")
                 shutil.copy2(filepath, dest_md)
                 entry["content_file"] = f"sources/{source_id}.md"
+                entry["quality"] = "ok"
 
                 title = os.path.splitext(os.path.basename(filepath))[0]
                 meta = {
@@ -985,6 +1003,7 @@ def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: s
                     "type": "academic",
                     "has_pdf": False,
                     "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "quality": "ok",
                 }
                 write_source_metadata(metadata_dir, source_id, meta)
 
@@ -994,6 +1013,7 @@ def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: s
                 dest_md = os.path.join(sources_dir, f"{source_id}.md")
                 Path(dest_md).write_text(content, encoding="utf-8")
                 entry["content_file"] = f"sources/{source_id}.md"
+                entry["quality"] = "ok"
 
                 title = os.path.splitext(os.path.basename(filepath))[0]
                 meta = {
@@ -1002,6 +1022,7 @@ def _handle_local_dir(args, _session_dir: str, sources_dir: str, metadata_dir: s
                     "type": "web",
                     "has_pdf": False,
                     "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "quality": "ok",
                 }
                 write_source_metadata(metadata_dir, source_id, meta)
 
