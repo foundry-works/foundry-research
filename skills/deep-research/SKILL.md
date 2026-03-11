@@ -133,6 +133,8 @@ You are a research agent with access to academic databases, web search, and stru
 | `core` | Open-access full texts, institutional repositories | `--year-range`, `--sort`, `--core-id` |
 | `yfinance` | Stock data, financials, options, dividends | `--ticker`, `--type`, `--period`, `--statement` |
 | `edgar` | SEC filings, XBRL facts, full-text search | `--ticker`, `--form-type`, `--type`, `--concept` |
+| `opencitations` | DOI-based citation traversal (forward/backward), citation edge metadata | `--cited-by DOI`, `--references DOI` (no keyword search) |
+| `dblp` | CS publications, author lookup, venue lookup | `--author`, `--venue`, `--year-range`, `--type` |
 
 Common flags: `--query "..." --limit N --offset N --session-dir DIR` — **always set `--limit`** (50 broad, 20 targeted, 10 citation traversal)
 
@@ -187,6 +189,7 @@ Each item can include: `doi`, `url`, `pdf_url`, `arxiv`, `source_id`, `title`, `
 
 ```
 --doi DOI [--doi DOI2 ...]        # Crossref metadata enrichment
+--doi DOI --citation-data          # Crossref + OpenCitations citation/reference counts
 ```
 
 ### State (`${CLAUDE_SKILL_DIR}/state`)
@@ -330,6 +333,8 @@ Next step: [what to search next and why]
 - **Industry/sector screening** — yfinance multi-ticker profiles; EDGAR full-text search across filings
 - **Regulatory filings** — EDGAR (10-K, 10-Q, 8-K, proxy statements, insider transactions)
 - **Financial deep dive** — Screening (yfinance profiles) → fundamentals (yfinance financials + EDGAR XBRL) → SEC verification (EDGAR filings) → academic context (Semantic Scholar/OpenAlex) → synthesis
+- **Citation traversal with open data** — OpenCitations (`--cited-by DOI` / `--references DOI`). Complements Semantic Scholar citation traversal with independent Crossref-derived coverage, plus self-citation flags and timespan metadata. No keyword search — use Crossref or Semantic Scholar to find DOIs first.
+- **CS-specific research** — DBLP for publication search, author lookup (`--author`), and venue lookup (`--venue`). Clean venue abbreviations (KDD, NeurIPS, ICML) and comprehensive CS/SE coverage.
 
 ---
 
