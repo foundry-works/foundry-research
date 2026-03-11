@@ -104,8 +104,8 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
 
         # Write update as a temp JSON file (state.py requires file-only --from-json)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
-            json.dump(update, tf)
             tmp_path = tf.name
+            json.dump(update, tf)
 
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         state_script = os.path.join(scripts_dir, "state.py")
@@ -229,8 +229,8 @@ def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: di
             source_data["year"] = meta["year"]
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
-            json.dump([source_data], tf)
             tmp_path = tf.name
+            json.dump([source_data], tf)
 
         scripts_dir = os.path.dirname(os.path.abspath(__file__))
         state_script = os.path.join(scripts_dir, "state.py")
@@ -261,7 +261,7 @@ def _resolve_source_id(session_dir: str, source_id: str) -> dict:
     db_path = os.path.join(session_dir, "state.db")
     if not os.path.exists(db_path):
         error_response([f"No state.db found in {session_dir}"], error_code="no_state")
-        raise SystemExit(1)
+        sys.exit(0)
 
     conn = _sqlite3.connect(db_path)
     try:
@@ -275,7 +275,7 @@ def _resolve_source_id(session_dir: str, source_id: str) -> dict:
 
     if not row:
         error_response([f"Source {source_id} not found in state.db"], error_code="source_not_found")
-        raise SystemExit(1)
+        sys.exit(0)
 
     return dict(row)
 
@@ -378,7 +378,8 @@ def main() -> None:
 
 
 def _handle_single(args, client, _session_dir: str, sources_dir: str,
-                   metadata_dir: str, config: dict) -> dict:
+                   metadata_dir: str, config: dict,
+                   cancel: threading.Event | None = None) -> dict:
     """Handle a single download (URL, PDF URL, DOI, or arXiv)."""
     source_id = args.source_id
     if not source_id:
@@ -433,7 +434,7 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
         meta["doi"] = doi
         result["doi"] = doi
         _download_by_doi(doi, source_id, client, sources_dir, metadata_dir,
-                         args.to_md, config, result)
+                         args.to_md, config, result, cancel=cancel)
 
     # Write metadata
     if result.get("pdf_downloaded"):
@@ -597,12 +598,16 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
 
 
 def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
-                     _metadata_dir: str, to_md: bool, config: dict, result: dict) -> None:
+                     _metadata_dir: str, to_md: bool, config: dict, result: dict,
+                     cancel: threading.Event | None = None) -> None:
     """Run PDF cascade for a DOI: OpenAlex → Unpaywall → arXiv → PMC → Anna's → Sci-Hub."""
     log(f"Running PDF cascade for DOI: {doi}")
 
     # Try each source in order
     for source_name in CASCADE_SOURCES:
+        if cancel and cancel.is_set():
+            result["errors"].append("Cancelled during PDF cascade")
+            return
         result["sources_tried"].append(source_name)
 
         pdf_url = None
@@ -626,6 +631,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                         _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
                             authors=result.get("_expected_authors"))
+                    else:
+                        result["quality"] = "ok"
                     return
                 continue
             elif source_name == "scihub":
@@ -639,6 +646,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                         _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
                             authors=result.get("_expected_authors"))
+                    else:
+                        result["quality"] = "ok"
                     return
                 continue
         except Exception as e:
@@ -663,6 +672,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
                             authors=result.get("_expected_authors"))
+            else:
+                result["quality"] = "ok"
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
 
@@ -671,9 +682,30 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
         log(f"All PDF cascade sources failed for DOI {doi}. Attempting DOI landing page fallback.", level="warn")
         try:
             landing_url = f"https://doi.org/{doi}"
-            resp = client.get(landing_url, timeout=(15, 30))
-            if resp.status_code == 200 and resp.text:
-                content = extract_readable_content(resp.text)
+            resp = client.get(landing_url, stream=True, timeout=(15, 30))
+            try:
+                if resp.status_code != 200:
+                    raise ValueError(f"HTTP {resp.status_code}")
+                # Check Content-Length before reading body
+                try:
+                    cl = int(resp.headers.get("Content-Length", 0))
+                except (ValueError, TypeError):
+                    cl = 0
+                if cl > _MAX_WEB_SIZE:
+                    raise ValueError(f"Landing page too large ({cl} bytes)")
+                # Stream with size cap
+                chunks = []
+                size = 0
+                for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
+                    size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+                    if size > _MAX_WEB_SIZE:
+                        raise ValueError(f"Landing page exceeded {_MAX_WEB_SIZE // (1024*1024)}MB")
+                    chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+                html = "".join(chunks)
+            finally:
+                resp.close()
+            if html:
+                content = extract_readable_content(html)
                 if content and len(content) > 100:
                     md_path = os.path.join(sources_dir, f"{source_id}.md")
                     Path(md_path).write_text(content, encoding="utf-8")
@@ -1171,7 +1203,7 @@ def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str
             item_start = time.monotonic()
             log(f"Batch download {index + 1}/{len(items)} (parallel)")
             batch_args = _make_batch_args(item, args.to_md)
-            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config)
+            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config, cancel=cancel)
             elapsed = time.monotonic() - item_start
             if elapsed > _BATCH_ITEM_TIMEOUT:
                 log(f"Batch item {index + 1} took {elapsed:.0f}s (>{_BATCH_ITEM_TIMEOUT}s limit)", level="warn")

@@ -43,6 +43,9 @@ _PYMUPDF_TIMEOUT = 60
 # Memory limit for PDF conversion subprocesses (2 GB)
 _SUBPROCESS_MEM_LIMIT = 2 * 1024 * 1024 * 1024
 
+# Max markdown output size (50 MB) — prevents OOM when parent captures subprocess stdout
+_MAX_MD_OUTPUT = 50 * 1024 * 1024
+
 
 def _make_mem_limiter():
     """Return a preexec_fn that caps subprocess RSS, or None if unsupported."""
@@ -311,11 +314,17 @@ def generate_toc(md_path: str, toc_path: str) -> dict:
 
 
 def _run_pymupdf4llm(pdf_path: str, timeout: int) -> str | None:
-    """Run pymupdf4llm.to_markdown() in a subprocess with a timeout."""
+    """Run pymupdf4llm.to_markdown() in a subprocess with a timeout.
+
+    Output is truncated at _MAX_MD_OUTPUT inside the subprocess to prevent
+    the parent from buffering unbounded stdout into memory.
+    """
+    limit = _MAX_MD_OUTPUT
     script = (
         "import sys, pymupdf4llm; "
         "md = pymupdf4llm.to_markdown(sys.argv[1]); "
-        "sys.stdout.buffer.write(md.encode('utf-8'))"
+        f"out = md.encode('utf-8')[:{limit}]; "
+        "sys.stdout.buffer.write(out)"
     )
     try:
         result = subprocess.run(
@@ -342,15 +351,17 @@ def _run_pypdf(pdf_path: str, timeout: int = _PYMUPDF_TIMEOUT) -> str | None:
     """Extract raw text from PDF using pypdf in a subprocess with timeout.
 
     Runs in a subprocess for memory isolation and timeout enforcement,
-    matching the pattern used by _run_pymupdf4llm.
+    matching the pattern used by _run_pymupdf4llm.  Output is truncated
+    at _MAX_MD_OUTPUT to prevent unbounded parent memory usage.
     """
+    out_limit = _MAX_MD_OUTPUT
     script = (
         "import sys; from pypdf import PdfReader; "
         f"reader = PdfReader(sys.argv[1]); "
         f"limit = min(len(reader.pages), {_MAX_PYPDF_PAGES}); "
         "pages = [p.extract_text() or '' for p in reader.pages[:limit]]; "
         "text = '\\n\\n'.join(p for p in pages if p); "
-        "sys.stdout.buffer.write(text.encode('utf-8'))"
+        f"sys.stdout.buffer.write(text.encode('utf-8')[:{out_limit}])"
     )
     try:
         result = subprocess.run(
