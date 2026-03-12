@@ -61,12 +61,12 @@
 - [x] Skip sources that are clearly off-topic, garbled, or stubs
 
 ## 9. Open-Access PDF Recovery via Web Search
-- [ ] Add web search fallback guidance to `agents/source-acquisition.md` (Option A — immediate)
-  - [ ] When high-priority source fails download cascade, try:
-    - [ ] `"{first author last name}" "{key title words}" PDF`
-    - [ ] `"{paper title}" PDF`
-  - [ ] Use first author from source metadata
-  - [ ] Only attempt for top 5-10 highest-priority failed sources (not all failures)
+- [x] Add web search fallback guidance to `agents/source-acquisition.md` (Option A — immediate)
+  - [x] When high-priority source fails download cascade, try:
+    - [x] `"{first author last name}" "{key title words}" PDF`
+    - [x] `"{paper title}" PDF`
+  - [x] Use first author from source metadata
+  - [x] Only attempt for top 5-10 highest-priority failed sources (not all failures)
 - [ ] Evaluate: track recovery rate over 2-3 sessions to decide if Option B (code) or C (recover-failed) is worth building
 
 ## 10. Enforce Orchestrator Journal Entries

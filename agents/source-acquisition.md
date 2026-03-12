@@ -105,6 +105,36 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
+### Web search recovery for paywalled papers
+
+After `recover-failed` completes, check whether any **high-priority** sources (top 5-10 by triage score) are still missing content. These are often foundational papers locked behind publisher paywalls (Wiley, Elsevier, APA, Cambridge) that the API-based cascade can't reach — but authors frequently self-host their most-cited papers on personal websites, lab pages, or university repositories.
+
+**When to use this:** Only for high-priority failed sources that matter for coverage. Don't web-search every failure — most low-tier misses aren't worth the effort.
+
+**How to recover:**
+
+1. For each high-priority missing source, get its first author and title from state.db (use `state sources --title-contains "keyword"` or check your triage output).
+
+2. Run a Tavily search with author name + title keywords + "PDF":
+   ```
+   {cli_dir}/search --provider tavily --query '"{first author last name}" "{key title words}" PDF' --limit 10
+   ```
+   This finds author lab sites, university repositories, ResearchGate, Academia.edu, OSF, and preprint servers. Use `search_depth: advanced` if available (costs 2 credits vs. 1, but scrapes deeper).
+
+3. If that misses, try a broader title-only search:
+   ```
+   {cli_dir}/search --provider tavily --query '"{full paper title}" PDF' --limit 10
+   ```
+
+4. When a search finds a plausible URL (PDF link on an `.edu` domain, ResearchGate, OSF, or author site), download the source directly by ID:
+   ```
+   {cli_dir}/download <source-id> --url "<found-url>"
+   ```
+
+**Why this works:** In the temperament measurement session, every foundational paper (Rothbart's CBQ, IBQ-R, Goldsmith's Lab-TAB) was inaccessible via the standard cascade — but the CBQ paper was freely hosted on Rothbart's lab site at Bowdoin College. A simple `"Rothbart" "Children's Behavior Questionnaire" PDF` search would have found it immediately.
+
+**Budget:** Cap at 5-10 web search attempts per session. Log what you tried and outcomes in journal.md so the orchestrator knows what's still missing and why.
+
 **Use `--summary-only` on direct download calls** (e.g., `download --retry-sync --summary-only`) to get counts only instead of verbose per-source details. The `download-pending --auto-download` output is already compact (just counts + failed source IDs).
 
 ---
