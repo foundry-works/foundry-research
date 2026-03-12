@@ -56,9 +56,9 @@
 - [x] Update `agents/source-acquisition.md` to report "potentially resolved" not "fully resolved"
 
 ## 8. Orchestrator Pre-Read Check
-- [ ] Add guidance in `skills/deep-research/SKILL.md` delegation section
-- [ ] Instruct orchestrator to read first 20-30 lines before spawning reader agents
-- [ ] Skip sources that are clearly off-topic, garbled, or stubs
+- [x] Add guidance in `skills/deep-research/SKILL.md` delegation section
+- [x] Instruct orchestrator to read first 20-30 lines before spawning reader agents
+- [x] Skip sources that are clearly off-topic, garbled, or stubs
 
 ## 9. Open-Access PDF Recovery via Web Search
 - [ ] Add web search fallback guidance to `agents/source-acquisition.md` (Option A — immediate)
