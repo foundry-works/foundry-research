@@ -127,6 +127,27 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
+### Post-download content validation (mandatory before manifest)
+
+After all downloads and recovery attempts complete, validate content for the **top 20-30 sources by triage score** that have content files on disk. This catches mismatches that slip past the title-word check — papers sharing common words with the target title but covering a completely different topic (e.g., "The 'Uncanny Valley' and the Verisimilitude of Sexual Offenders" passing a check for an uncanny valley perception paper because both contain "uncanny valley").
+
+1. For each source with a content file, read the first 10 lines of the content file
+2. Check if the actual content plausibly matches the metadata title/abstract — look for author names, key domain terms, venue name, or methodology keywords from the abstract
+3. If obviously mismatched (different topic, different authors, garbled/stub content), call `{cli_dir}/state set-quality --id src-NNN --quality mismatched`
+4. Report validation results in the manifest under `content_validation`:
+
+```json
+"content_validation": {
+  "checked": 25,
+  "valid": 18,
+  "mismatched": 6,
+  "degraded": 1,
+  "mismatched_ids": ["src-005", "src-181"]
+}
+```
+
+**Why at this stage:** The orchestrator's batch pre-read step (SKILL.md step 6) catches mismatches too, but it happens after you've returned — meaning the orchestrator has to context-switch back into validation mode. Catching gross mismatches here saves 8-15 wasted reader agent invocations (~160-300K tokens) and lets the orchestrator trust your manifest's download counts when allocating readers.
+
 ### Web search recovery for paywalled papers
 
 After `recover-failed` completes, check whether any **high-priority** sources (top 5-10 by triage score) are still missing content. These are often foundational papers locked behind publisher paywalls (Wiley, Elsevier, APA, Cambridge) that the API-based cascade can't reach — but authors frequently self-host their most-cited papers on personal websites, lab pages, or university repositories.
@@ -298,6 +319,13 @@ After completing all search rounds, triage, and downloads, return a **compact JS
     "papers_chased": 4,
     "traversals_run": 6,
     "sources_from_chasing": 23
+  },
+  "content_validation": {
+    "checked": 25,
+    "valid": 18,
+    "mismatched": 6,
+    "degraded": 1,
+    "mismatched_ids": ["src-005", "src-181"]
   }
 }
 ```

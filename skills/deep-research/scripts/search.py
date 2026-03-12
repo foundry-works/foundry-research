@@ -49,6 +49,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="Suppress stderr log output")
     parser.add_argument("--compact", action="store_true",
                         help="Return only (id, title, citation_count, doi, provider) per result — strips abstracts and full metadata")
+    parser.add_argument("--search-type", default="manual",
+                        choices=["manual", "recovery", "citation"],
+                        help="Search type for state tracking (default: manual)")
     return parser
 
 
@@ -216,12 +219,14 @@ def _detect_search_mode(provider: str, args) -> str:
 def _log_search_to_state(args, result: dict, search_mode: str) -> None:
     """Log the search to session state via state.py."""
     ingested_count = len(result.get("results", []))
+    search_type = getattr(args, "search_type", "manual") or "manual"
     resp = call_state(
         args.session_dir, "log-search",
         args=[
             "--provider", args.provider,
             "--query", args.query or "",
             "--search-mode", search_mode,
+            "--search-type", search_type,
             "--result-count", str(ingested_count),
             "--ingested-count", str(ingested_count),
         ],

@@ -22,9 +22,16 @@ A directive from the supervisor containing:
 
 ### Step 1: Identify load-bearing claims
 
-Read the report and identify the **5-10 most important claims** — the ones the report's conclusions and recommendations depend on. A claim is "load-bearing" if, were it false, the report's advice would change.
+Read the report and identify the **8-15 most important claims** — the ones the report's conclusions and recommendations depend on. A claim is "load-bearing" if, were it false, the report's advice would change.
 
-Skip: definitional statements, transitional logic, claims that are hedged as uncertain, and claims with strong primary source backing already visible in the notes.
+**Prioritize in this order:**
+1. **Specific numbers** (sample sizes, effect sizes, percentages, p-values) — most verifiable, most damaging if wrong
+2. **Study conclusion characterizations** ("found X" or "rejected Y") — easy to subtly misstate through summarization
+3. **Absence-of-evidence claims** ("no study has shown...") — hardest to verify, highest risk of being wrong
+
+**De-prioritize:** Definitional statements ("the uncanny valley was proposed by Mori in 1970"), transitional logic, hedged claims, and claims with strong primary source backing already visible in the notes. Spend verification effort where errors are consequential and non-obvious, not on trivially confirmable facts.
+
+**Why 8-15, not 5-10:** At 5-10 claims, the verifier tends to pick a mix of easy and hard claims. The partially-supported findings consistently come from the harder end of the list — suggesting more checking would find more problems. A 4000-word report with 15+ references typically has 15-20 load-bearing claims; checking half of them is a reasonable floor.
 
 ### Step 2: Classify current source type
 
@@ -62,11 +69,11 @@ Write the detailed verification report to disk, then return a compact JSON summa
 {
   "status": "verified",
   "path": "deep-research-topic/notes/verification-report.md",
-  "claims_checked": 8,
+  "claims_checked": 12,
   "results": {
-    "confirmed": 5,
+    "confirmed": 8,
     "contradicted": 1,
-    "partially_supported": 1,
+    "partially_supported": 2,
     "unverifiable": 1
   },
   "high_priority_issues": [

@@ -38,6 +38,16 @@ Rules:
 - `--sources` is a comma-separated list of source IDs that support this finding. Only cite sources whose notes actually contain relevant evidence.
 - `--question` must be the **exact full question text** you were given — do not abbreviate or rephrase it. The audit system matches findings to questions by this field.
 
+## Deduplication
+
+Before logging a finding, check whether you've already logged a finding that cites the same source(s) and makes essentially the same evidential claim, even if framed from a different angle. A single study often yields one core result — don't log it three times with different emphasis.
+
+- If a source's note contains one key result relevant to your question, log one finding — not separate findings for "the method," "the result," and "the implication"
+- If two sources report the same conclusion independently, that's one finding with two source citations, not two findings
+- When a finding is tangentially relevant to your question but primarily belongs under a different question, note the cross-relevance briefly in `--text` rather than logging a full finding (e.g., "...also relevant to Q4 methodology concerns")
+
+**Why this matters:** In past sessions, 6 parallel findings-loggers produced 81 findings from 18 sources, but the distinct evidence base was closer to 40-50 unique claims. The synthesis-writer had to mentally deduplicate — 50 clean findings are easier to synthesize than 81 with overlaps.
+
 ## What NOT to do
 
 - Do NOT fabricate findings unsupported by the notes. If a note is vague or tangential, skip it.

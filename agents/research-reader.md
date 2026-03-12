@@ -24,7 +24,8 @@ A directive from the supervisor containing:
 
 1. Read `sources/metadata/{source_id}.json` first for structured metadata (title, authors, abstract, venue, year, citation count, quality)
 2. **Check the `quality` field before proceeding.** If `quality` is `"mismatched"` or `"degraded"`, note this prominently in your summary and do not treat the content as authoritative for the stated paper. For mismatched sources, the on-disk content likely belongs to a different paper than the metadata describes — flag this so the supervisor knows the source can't be cited for its intended purpose. For degraded sources, rely primarily on the abstract from metadata.
-3. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
+3. **Assess actual content quality** regardless of the `quality` field — it may not have been set yet. Read enough of the content file to determine whether it contains substantive paper text (methods, results, discussion) or just navigation/stub/paywall content.
+4. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
 4. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
 
 ## File paths
@@ -59,6 +60,25 @@ For key quantitative claims — sample sizes, effect sizes, p-values, percentage
 If you find numbers that seem inflated, inconsistent between sections, or that you cannot verify from the Methods section, add a `## Claims to Verify` section at the end of your note listing each uncertain claim with the specific text and your concern. This lets downstream agents prioritize fact-checking on the most fragile numbers rather than discovering errors late in the pipeline.
 
 **Why this matters:** A 5x inflation in participant count that propagates through findings, the draft report, and into the final output is only caught by the verifier — the last line of defense. Catching it at the reader stage is cheaper and more reliable.
+
+## Status determination rules
+
+The supervisor uses `status` to filter sources before findings extraction. Returning `"ok"` for empty or irrelevant content wastes downstream agent invocations (~20-50K tokens each).
+
+Return **`"ok"`** ONLY if the content file contains substantive paper text — methods, results, discussion, or meaningful analysis. Not just navigation, TOC, or abstract.
+
+Return **`"degraded"`** if:
+- Content file has <500 characters of actual text
+- Content is only a table of contents, navigation elements, or journal landing page
+- Content is behind a paywall (login prompts, subscription text, "access denied")
+- Content is garbled beyond useful extraction but some metadata is available
+
+Return **`"unreadable"`** if:
+- Content file doesn't exist or is empty
+- Content file is binary/corrupted
+- Metadata says one paper but content is clearly a different paper (different authors, different topic entirely)
+
+**Why this matters:** In past sessions, a source containing only a table of contents was returned as `"ok"` because the file existed and was readable. Downstream findings-loggers treated the note equally with real notes, potentially extracting non-existent evidence. The distinction between "I can open the file" and "the file contains usable research content" is critical.
 
 ## Error handling
 

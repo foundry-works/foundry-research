@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS searches (
     provider TEXT NOT NULL,
     query TEXT NOT NULL,
     search_mode TEXT NOT NULL DEFAULT 'keyword',
+    search_type TEXT NOT NULL DEFAULT 'manual',
     result_count INTEGER NOT NULL,
     ingested_count INTEGER,
     timestamp TEXT NOT NULL,
@@ -131,6 +132,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     # (table, column_name, column_definition)
     ("searches", "ingested_count", "INTEGER"),
     ("searches", "search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+    ("searches", "search_type", "TEXT NOT NULL DEFAULT 'manual'"),
     ("sources", "relevance_score", "REAL"),
     ("sources", "relevance_rationale", "TEXT"),
 ]
@@ -421,10 +423,11 @@ def cmd_log_search(args):
 
     ingested_count = getattr(args, "ingested_count", None)
     search_mode = getattr(args, "search_mode", "keyword") or "keyword"
+    search_type = getattr(args, "search_type", "manual") or "manual"
     try:
         conn.execute(
-            "INSERT INTO searches (id, session_id, provider, query, search_mode, result_count, ingested_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (search_id, sid, args.provider, args.query, search_mode, args.result_count, ingested_count, _now())
+            "INSERT INTO searches (id, session_id, provider, query, search_mode, search_type, result_count, ingested_count, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (search_id, sid, args.provider, args.query, search_mode, search_type, args.result_count, ingested_count, _now())
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -434,7 +437,7 @@ def cmd_log_search(args):
 
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": search_id, "provider": args.provider, "query": args.query, "search_mode": search_mode})
+    success_response({"id": search_id, "provider": args.provider, "query": args.query, "search_mode": search_mode, "search_type": search_type})
 
 
 def cmd_add_source(args):
@@ -679,7 +682,7 @@ def cmd_searches(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        "SELECT id, provider, query, search_mode, result_count, ingested_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
+        "SELECT id, provider, query, search_mode, search_type, result_count, ingested_count, timestamp FROM searches WHERE session_id = ? ORDER BY id",
         (sid,)
     ).fetchall()
     conn.close()
@@ -1305,6 +1308,15 @@ def cmd_audit(args):
     for f in findings:
         f["sources"] = json.loads(f["sources"]) if f.get("sources") else []
 
+    # Load searches for methodology stats
+    all_searches = conn.execute(
+        "SELECT search_type FROM searches WHERE session_id = ?", (sid,)
+    ).fetchall()
+    searches_by_type = {}
+    for s in all_searches:
+        st = s["search_type"] if "search_type" in s.keys() else "manual"
+        searches_by_type[st] = searches_by_type.get(st, 0) + 1
+
     # Load gaps
     gaps = [dict(r) for r in conn.execute(
         "SELECT * FROM gaps WHERE session_id = ? AND status = 'open' ORDER BY id", (sid,)
@@ -1464,11 +1476,16 @@ def cmd_audit(args):
         "findings_count": len(findings),
         "findings_by_question": {k: len(v) for k, v in findings_by_question.items()},
         "open_gaps": len(gaps),
+        "gaps": [{"id": g["id"], "text": g["text"], "question": g.get("question"), "status": g["status"]} for g in gaps],
         "sparse_questions": sparse_questions,
         "methodology": {
             "deep_reads": deep_reads,
             "abstract_only": total_abstract_only,
             "web_sources": web_sources,
+            "searches": {
+                "total": len(all_searches),
+                **searches_by_type,
+            },
         },
         "warnings": warnings,
     }
@@ -1710,6 +1727,7 @@ def cmd_recover_failed(args):
                     "--query", title[:200],
                     "--limit", "3",
                     "--session-dir", args.session_dir,
+                    "--search-type", "recovery",
                 ]
                 proc = subprocess.run(cmd, capture_output=True, timeout=30)
                 if proc.returncode == 0:
@@ -1754,6 +1772,7 @@ def cmd_recover_failed(args):
                     "--query", f'"{title[:150]}" pdf',
                     "--limit", "3",
                     "--session-dir", args.session_dir,
+                    "--search-type", "recovery",
                 ]
                 proc = subprocess.run(cmd, capture_output=True, timeout=30)
                 if proc.returncode == 0:
@@ -2004,6 +2023,9 @@ def main():
     p.add_argument("--search-mode", default="keyword",
                    choices=["keyword", "cited_by", "references", "recommendations", "author", "browse", "fetch"],
                    help="Search mode (default: keyword)")
+    p.add_argument("--search-type", default="manual",
+                   choices=["manual", "recovery", "citation"],
+                   help="Search type: manual (agent-initiated), recovery (recover-failed), citation (citation chasing)")
     p.add_argument("--result-count", type=int, required=True)
     p.add_argument("--ingested-count", type=int, default=None, help="Actual number of results ingested")
     p.add_argument("--session-dir", **_sd)

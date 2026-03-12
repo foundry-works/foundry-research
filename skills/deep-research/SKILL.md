@@ -63,6 +63,14 @@ You are a research agent with access to academic databases, web search, and stru
 12. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
 13. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
 
+    **When to skip gap-mode:** If ALL of the following are true, gap-mode may be skipped:
+    - Every research question has 5+ findings
+    - No question relies on a single source for its core claims
+    - The audit shows no critical gaps (e.g., paywalled foundational papers that would change conclusions)
+    - Coverage assessment rates all questions as "moderate" or "strong"
+
+    Log the skip decision and rationale in journal.md. This is a research judgment, not a shortcut — gap-mode exists for sessions with genuine coverage holes, not as a mandatory checkbox. **Why allow skipping:** Gap-mode involves spawning the source-acquisition agent again (Opus, foreground), running searches, downloading, then spawning more readers. For a session with strong coverage, this adds 10-15 minutes and ~100K tokens with no improvement to the final report.
+
     Spawn the `source-acquisition` agent again (Opus, foreground) with:
     - The session directory path (absolute)
     - The CLI directory path (`${CLAUDE_SKILL_DIR}`)
