@@ -49,11 +49,11 @@
 - [x] Add topical filtering requirement for `recover-failed`
 
 ## 7. Gap Resolution Verification
-- [ ] Update `skills/deep-research/SKILL.md` step 11 (gap-mode)
-  - [ ] Orchestrator must not call `resolve-gap` based solely on acquisition manifest
-  - [ ] Spawn readers for new gap-mode sources first
-  - [ ] Only resolve gaps where a reader confirms relevant content
-- [ ] Update `agents/source-acquisition.md` to report "potentially resolved" not "fully resolved"
+- [x] Update `skills/deep-research/SKILL.md` step 11 (gap-mode)
+  - [x] Orchestrator must not call `resolve-gap` based solely on acquisition manifest
+  - [x] Spawn readers for new gap-mode sources first
+  - [x] Only resolve gaps where a reader confirms relevant content
+- [x] Update `agents/source-acquisition.md` to report "potentially resolved" not "fully resolved"
 
 ## 8. Orchestrator Pre-Read Check
 - [ ] Add guidance in `skills/deep-research/SKILL.md` delegation section

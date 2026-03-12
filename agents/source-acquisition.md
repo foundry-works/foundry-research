@@ -29,6 +29,8 @@ Targeted follow-up after reading is complete. You receive additional context:
 
 In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 strategies per gap: keyword + citation chase), then applicability searches for the targets. Download and triage any new sources found.
 
+**Important caveat on gap resolution:** You can download sources that *appear* to address a gap based on metadata (title, abstract), but you cannot verify whether the actual content matches. Metadata-content mismatches are common (31% in one session) — a paper titled "multi-informant validity" may contain gastroenterology content. Report gaps as **"potentially resolved"** in your manifest, never "fully resolved." The orchestrator will spawn readers to verify content before calling `resolve-gap`.
+
 ---
 
 ## Search Strategy
@@ -254,7 +256,7 @@ After completing all search rounds, triage, and downloads, return a **compact JS
   "status": "ok",
   "mode": "gap",
   "gaps_addressed": 3,
-  "gaps_resolved": 2,
+  "gaps_potentially_resolved": 2,
   "gaps_unresolvable": [
     {"gap_id": "gap-3", "reason": "Searched PubMed for X (3 results, all off-topic) and --cited-by on Y (0 results). Genuine literature gap."}
   ],
