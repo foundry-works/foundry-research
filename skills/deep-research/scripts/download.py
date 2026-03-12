@@ -499,9 +499,23 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
         if qa["quality"] != "ok":
             result["quality_details"] = qa["quality_details"]
 
+        # Semantic mismatch check: does extracted text match expected metadata?
+        title = meta.get("title", "")
+        authors = meta.get("authors")
+        if result["quality"] == "ok" and (title or authors):
+            mismatch = check_content_mismatch(content, title=title, authors=authors)
+            if mismatch["mismatched"]:
+                result["quality"] = "mismatched"
+                details = result.get("quality_details") or {}
+                details["reasons"] = details.get("reasons", []) + [mismatch["reason"]]
+                details["title_hits"] = mismatch["title_hits"]
+                details["author_hits"] = mismatch["author_hits"]
+                result["quality_details"] = details
+                log(f"Content mismatch detected for {source_id}: {mismatch['reason']}", level="warn")
+
         meta["url"] = url
         meta["type"] = "web"
-        log(f"Saved web content: {md_path} ({len(content)} chars, quality={qa['quality']})")
+        log(f"Saved web content: {md_path} ({len(content)} chars, quality={result['quality']})")
 
     except Exception as e:
         result["errors"].append(f"Web download failed: {e}")

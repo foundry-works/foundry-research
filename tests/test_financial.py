@@ -194,10 +194,11 @@ class TestYfinanceHistoryMode:
 class TestYfinanceDividendsMode:
     @patch.dict("sys.modules", {"yfinance": MagicMock()})
     def test_empty_dividends(self):
-        import pandas as pd
         mock_yf = sys.modules["yfinance"]
         mock_ticker = MagicMock()
-        mock_ticker.dividends = pd.Series(dtype=float)
+        empty_series = MagicMock()
+        empty_series.empty = True
+        mock_ticker.dividends = empty_series
         mock_yf.Ticker.return_value = mock_ticker
 
         args = Namespace(

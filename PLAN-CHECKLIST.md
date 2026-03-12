@@ -16,12 +16,13 @@
 - [ ] Test: run on the temperament session's state.db and verify off-topic papers score low
 
 ## 2. Content Validation at Download Time
-- [ ] Add mismatch detection in `download.py` after PDF→markdown conversion
-  - [ ] Extract significant title words (4+ chars) from metadata
-  - [ ] Check first 1000 chars of converted content for title word presence
-  - [ ] If < 2 title words found → set `quality = "mismatched"` in state.db
-  - [ ] Log mismatch to journal.md
-- [ ] Test: verify known mismatches from temperament session (src-051, src-128, src-129, src-758) would be caught
+- [x] Add mismatch detection in `download.py` after PDF→markdown conversion
+  - [x] Extract significant title words (4+ chars) from metadata
+  - [x] Check first 1000 chars of converted content for title word presence
+  - [x] If < 2 title words found → set `quality = "mismatched"` in state.db
+  - [x] Log mismatch to stderr (journal.md is orchestrator-level, not CLI-level)
+- [x] Add mismatch detection in `_download_web` for web-extracted content (was missing)
+- [x] Test: verify known mismatches from temperament session (src-051, src-128, src-129, src-758) would be caught
 
 ## 3. Triage Keyword Floor Reduction
 - [ ] Change `state.py` line 1533: `0.5 + relevance` → `0.1 + relevance`
