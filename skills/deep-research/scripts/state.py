@@ -1630,7 +1630,8 @@ def cmd_recover_failed(args):
 
     # Find sources without on-disk content
     rows = conn.execute(
-        """SELECT id, title, doi, url, pdf_url, citation_count, type
+        """SELECT id, title, doi, url, pdf_url, citation_count, type,
+                  relevance_score
            FROM sources WHERE session_id = ?
            AND content_file IS NULL AND pdf_file IS NULL
            ORDER BY citation_count DESC NULLS LAST""",
@@ -1651,7 +1652,15 @@ def cmd_recover_failed(args):
 
         title = (r["title"] or "").lower()
         cite_count = r["citation_count"] or 0
+        rel_score = r["relevance_score"]
         keyword_hits = sum(1 for t in question_terms if t in title) if question_terms else 0
+
+        # Skip sources that LLM relevance scoring identified as off-topic.
+        # Without an LLM score, fall back to keyword hits as a weaker signal.
+        if rel_score is not None and rel_score < 0.3:
+            continue
+        if rel_score is None and keyword_hits == 0 and question_terms:
+            continue
 
         # High-priority: citation_count > threshold OR high title relevance
         min_citations = getattr(args, "min_citations", 50)
@@ -1665,6 +1674,7 @@ def cmd_recover_failed(args):
                 "url": r["url"],
                 "citation_count": cite_count,
                 "keyword_hits": keyword_hits,
+                "relevance_score": rel_score,
             })
 
     if not failed:

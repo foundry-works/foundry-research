@@ -29,8 +29,8 @@
 - [ ] Test: verify "SPIRIT 2013" (6932 cites, 0 relevance) no longer outranks relevant papers
 
 ## 4. `recover-failed` Topical Filtering
-- [ ] Add relevance check in `cmd_recover_failed` before attempting recovery
-- [ ] Skip sources with `relevance_score < 0.3` (or zero keyword hits if no LLM score)
+- [x] Add relevance check in `cmd_recover_failed` before attempting recovery
+- [x] Skip sources with `relevance_score < 0.3` (or zero keyword hits if no LLM score)
 - [ ] Test: verify off-topic high-citation papers are skipped during recovery
 
 ## 5. `state sync-files` Command
