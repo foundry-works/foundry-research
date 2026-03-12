@@ -1535,9 +1535,9 @@ def cmd_triage(args):
         cite_count = s.get("citation_count") or 0
         cite_score = math.log1p(cite_count)  # log(1 + citations)
 
-        # Combined score: citation_score × (0.5 + relevance)
-        # The 0.5 base ensures even 0-relevance papers with high citations get some score
-        score = cite_score * (0.5 + relevance)
+        # Combined score: citation_score × (0.1 + relevance)
+        # The 0.1 floor keeps zero-relevance papers from dominating via citations alone
+        score = cite_score * (0.1 + relevance)
 
         # Check on-disk status
         sources_dir = os.path.join(args.session_dir, "sources")

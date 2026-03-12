@@ -25,7 +25,7 @@
 - [x] Test: verify known mismatches from temperament session (src-051, src-128, src-129, src-758) would be caught
 
 ## 3. Triage Keyword Floor Reduction
-- [ ] Change `state.py` line 1533: `0.5 + relevance` → `0.1 + relevance`
+- [x] Change `state.py` line 1538: `0.5 + relevance` → `0.1 + relevance`
 - [ ] Test: verify "SPIRIT 2013" (6932 cites, 0 relevance) no longer outranks relevant papers
 
 ## 4. `recover-failed` Topical Filtering
