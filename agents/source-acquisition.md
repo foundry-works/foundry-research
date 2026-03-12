@@ -33,6 +33,8 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 
 ## Search Strategy
 
+**Search budget:** Aim for 15-25 total searches in initial mode. The temperament measurement session ran 90 searches, which flooded state.db with off-topic sources and wasted download bandwidth. Diminishing returns set in after ~20 searches — new results overlap heavily with existing sources. If you haven't hit coverage by 25 searches, the gap is in query quality, not quantity. Refine queries or try different providers instead of adding more searches.
+
 ### Round 1: Broad sweep
 - Run 3-5 parallel searches across different providers, using the core topic terms from the brief
 - **Always set `--limit` explicitly:** 50 for broad, 20 for targeted, 10 for citation traversal
@@ -97,7 +99,9 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 1. Run `state download-pending --auto-download --batch-size 15` in a loop until `"remaining": 0`. Cap at 3 batch loops to avoid runaway downloads. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
-4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). Use `--min-citations 30` to adjust the threshold.
+4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). Use `--min-citations 30` to adjust the threshold. **Important:** `recover-failed` now filters by topical relevance — sources with `relevance_score < 0.3` or zero keyword hits are skipped automatically. This prevents wasting recovery attempts on high-citation but off-topic papers (e.g., eating disorder scales, COVID depression measures that happen to have thousands of citations). If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
+
+**Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
 **Use `--summary-only` on direct download calls** (e.g., `download --retry-sync --summary-only`) to get counts only instead of verbose per-source details. The `download-pending --auto-download` output is already compact (just counts + failed source IDs).
 

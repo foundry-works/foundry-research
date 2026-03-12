@@ -43,10 +43,10 @@
 - [ ] Test: create a source with a file but no content_file record, verify sync fixes it
 
 ## 6. Source-Acquisition Agent Prompt Updates
-- [ ] Add `triage-relevance` step to pipeline in `agents/source-acquisition.md`
-- [ ] Add search budget guidance (15-25 searches initial round)
-- [ ] Add warning about metadata-content mismatches
-- [ ] Add topical filtering requirement for `recover-failed`
+- [x] Add `triage-relevance` step to pipeline in `agents/source-acquisition.md`
+- [x] Add search budget guidance (15-25 searches initial round)
+- [x] Add warning about metadata-content mismatches
+- [x] Add topical filtering requirement for `recover-failed`
 
 ## 7. Gap Resolution Verification
 - [ ] Update `skills/deep-research/SKILL.md` step 11 (gap-mode)
