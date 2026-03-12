@@ -34,12 +34,12 @@
 - [ ] Test: verify off-topic high-citation papers are skipped during recovery
 
 ## 5. `state sync-files` Command
-- [ ] Implement `cmd_sync_files` in `state.py`
-  - [ ] Walk `sources/` directory for `.md` and `.pdf` files
-  - [ ] Update `content_file` for sources with files on disk but no DB record
-  - [ ] Clear `content_file` for records pointing to missing files
-  - [ ] Report counts in JSON envelope
-- [ ] Register in argparse subcommands
+- [x] Implement `cmd_sync_files` in `state.py`
+  - [x] Walk `sources/` directory for `.md` and `.pdf` files
+  - [x] Update `content_file` for sources with files on disk but no DB record
+  - [x] Clear `content_file` for records pointing to missing files
+  - [x] Report counts in JSON envelope
+- [x] Register in argparse subcommands
 - [ ] Test: create a source with a file but no content_file record, verify sync fixes it
 
 ## 6. Source-Acquisition Agent Prompt Updates

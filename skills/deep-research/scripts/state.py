@@ -1889,6 +1889,87 @@ def _cleanup_json_input(path: str, is_temp: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# sync-files
+# ---------------------------------------------------------------------------
+
+def cmd_sync_files(args):
+    """Reconcile content_file in state.db with what actually exists on disk.
+
+    Walks sources/ looking for {source_id}.md or {source_id}.pdf files and
+    updates content_file for any source whose file exists but isn't recorded.
+    Also clears content_file for records pointing to files that no longer exist.
+    """
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    sources_dir = os.path.join(args.session_dir, "sources")
+
+    if not os.path.isdir(sources_dir):
+        success_response({
+            "linked": 0,
+            "cleared": 0,
+            "message": "No sources/ directory found"
+        })
+        return
+
+    # Build map of source_id -> on-disk file path (prefer .md over .pdf)
+    disk_files = {}  # source_id -> relative path from session_dir
+    for fname in os.listdir(sources_dir):
+        name, ext = os.path.splitext(fname)
+        if ext not in (".md", ".pdf"):
+            continue
+        # Only override if we don't already have .md (prefer .md)
+        if name not in disk_files or ext == ".md":
+            disk_files[name] = os.path.join("sources", fname)
+
+    # Get all sources for this session
+    rows = conn.execute(
+        "SELECT id, content_file FROM sources WHERE session_id = ?",
+        (sid,)
+    ).fetchall()
+
+    linked = 0
+    cleared = 0
+
+    for row in rows:
+        src_id = row["id"]
+        current = row["content_file"]
+        on_disk = disk_files.get(src_id)
+
+        if on_disk and not current:
+            # File exists on disk but not recorded in DB
+            conn.execute(
+                "UPDATE sources SET content_file = ? WHERE id = ? AND session_id = ?",
+                (on_disk, src_id, sid)
+            )
+            linked += 1
+            log(f"Linked {src_id} -> {on_disk}")
+        elif current and not on_disk:
+            # DB record points to file that doesn't exist
+            full_path = os.path.join(args.session_dir, current)
+            if not os.path.exists(full_path):
+                conn.execute(
+                    "UPDATE sources SET content_file = NULL WHERE id = ? AND session_id = ?",
+                    (src_id, sid)
+                )
+                cleared += 1
+                log(f"Cleared missing content_file for {src_id} (was {current})")
+
+    conn.commit()
+
+    if linked > 0 or cleared > 0:
+        _regenerate_snapshot(args.session_dir, conn, sid)
+
+    conn.close()
+
+    success_response({
+        "linked": linked,
+        "cleared": cleared,
+        "total_on_disk": len(disk_files),
+        "total_sources": len(rows),
+    })
+
+
+# ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 
@@ -2090,6 +2171,10 @@ def main():
     p.add_argument("--min-citations", type=int, default=50, help="Minimum citations to consider high-priority (default 50)")
     p.add_argument("--session-dir", **_sd)
 
+    # sync-files
+    p = sub.add_parser("sync-files")
+    p.add_argument("--session-dir", **_sd)
+
     args = parser.parse_args()
 
     if args.quiet:
@@ -2131,6 +2216,7 @@ def main():
         "audit": cmd_audit,
         "triage": cmd_triage,
         "recover-failed": cmd_recover_failed,
+        "sync-files": cmd_sync_files,
     }
 
     commands[args.command](args)
