@@ -69,6 +69,7 @@ You are a research agent with access to academic databases, web search, and stru
     - The research brief
     - Mode: `gap`
     - **Open gaps** — the gaps from `state audit`
+    - **Mismatched source IDs** — sources with confirmed content mismatches from the Source Quality Report (step 9) that must NOT be counted as existing coverage. Format: "The following sources have mismatched content (downloaded content doesn't match metadata): src-168 (expected: CBQ validation, actual: family history review), src-347 (expected: EAS factor structure, actual: ADHD study). Do not count these as coverage for any gap." **Why pass these explicitly:** Without mismatch context, the gap agent sees matching titles in state.db and reports gaps as "potentially resolved" — creating false confidence that cascades into thin or missing report sections. In the temperament session, this exact failure mode left 8/12 gaps unresolved because the gap agent trusted title matches on content-mismatched sources.
     - **Applicability targets** — the 3-5 most important findings that will drive recommendations, with domain-specific feasibility questions:
       - Product: "Can you actually get this? Constraints?" (availability, waitlists, spend requirements)
       - Academic: "Has this replicated? In what populations/settings? Effect size?"

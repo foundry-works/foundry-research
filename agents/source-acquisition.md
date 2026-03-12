@@ -26,6 +26,7 @@ Targeted follow-up after reading is complete. You receive additional context:
 - **Open gaps** — from `state audit`, listing which questions have thin coverage
 - **Gap search plan** — suggested queries from `state gap-search-plan` (run this yourself if not provided)
 - **Applicability targets** — 3-5 key findings the orchestrator wants stress-tested for real-world feasibility
+- **Mismatched source IDs** — sources the orchestrator has confirmed as content mismatches (downloaded content doesn't match metadata). Do not count these as existing coverage when assessing whether a gap is already addressed. Include them in the `known_mismatches_excluded` array in your manifest so the orchestrator knows which sources you excluded from coverage assessment.
 
 In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 strategies per gap: keyword + citation chase), then applicability searches for the targets. Download and triage any new sources found.
 
@@ -290,6 +291,7 @@ After completing all search rounds, triage, and downloads, return a **compact JS
   "gaps_unresolvable": [
     {"gap_id": "gap-3", "reason": "Searched PubMed for X (3 results, all off-topic) and --cited-by on Y (0 results). Genuine literature gap."}
   ],
+  "known_mismatches_excluded": ["src-168", "src-347"],
   "applicability_searches": 4,
   "new_sources": 12,
   "new_downloads": 8

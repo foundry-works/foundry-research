@@ -18,10 +18,10 @@
   - [x] Include journal.md template with structured tally format
   - [x] Renumber subsequent steps
 
-- [ ] **4. Mismatch context for gap-mode** — `skills/deep-research/SKILL.md`
-  - [ ] Add "Mismatched source IDs" to step 11's agent directive bullet list
-  - [ ] Add `known_mismatches_excluded` field to gap-mode manifest spec
-  - [ ] Reference the quality report from item 3 as the source for mismatch IDs
+- [x] **4. Mismatch context for gap-mode** — `skills/deep-research/SKILL.md`
+  - [x] Add "Mismatched source IDs" to step 13's agent directive bullet list
+  - [x] Add `known_mismatches_excluded` field to gap-mode manifest spec
+  - [x] Reference the quality report from item 3 as the source for mismatch IDs
 
 - [ ] **5. Paywall strategy** — `skills/deep-research/SKILL.md`
   - [ ] Add "Paywall-heavy fields" subsection under "What Good Research Looks Like"
