@@ -2,16 +2,16 @@
 
 ## Batch 1: Prompt Changes
 
-- [ ] **1. Remove fixed finding quota** — `agents/findings-logger.md`
-  - [ ] Line 9: Remove "2-3" from description
-  - [ ] Line 23 (step 4): Replace fixed range with organic guidance
-  - [ ] Verify no other lines reference the "2-3" quota
+- [x] **1. Remove fixed finding quota** — `agents/findings-logger.md`
+  - [x] Line 9: Remove "2-3" from description
+  - [x] Line 23 (step 4): Replace fixed range with organic guidance
+  - [x] Verify no other lines reference the "2-3" quota (fixed residual "2-3" in SKILL.md step 10)
 
-- [ ] **2. Mandatory pre-read validation step** — `skills/deep-research/SKILL.md`
-  - [ ] Insert new step 6 between triage (current 5) and reader spawning (current 6)
-  - [ ] Renumber subsequent steps (6→7, 7→8, ... 12→13)
-  - [ ] Update existing pre-read note at line 248 to reference the new step number
-  - [ ] Update all internal step references (e.g., "step 8" in findings-logger delegation, "step 12" in synthesis)
+- [x] **2. Mandatory pre-read validation step** — `skills/deep-research/SKILL.md`
+  - [x] Insert new step 6 between triage (current 5) and reader spawning (current 6)
+  - [x] Renumber subsequent steps (6→7, 7→8, ... 12→13)
+  - [x] Update existing pre-read note — now references step 6 in delegation section (line 276)
+  - [x] Update all internal step references (step 9, 10, 12, 14 all correct)
 
 - [x] **3. Post-reader source quality report** — `skills/deep-research/SKILL.md`
   - [x] Insert new step after mark-read step, before findings-loggers
