@@ -27,16 +27,16 @@
   - [x] Add "Paywall-heavy fields" subsection under "What Good Research Looks Like"
   - [x] Include: citing-paper search, preprint hunting, honest framing, ask user
 
-- [ ] **6. Instrument-first search strategy** — `agents/source-acquisition.md`
-  - [ ] Add "Domain-specific search strategies" section after "Query crafting rules"
-  - [ ] Include instrument-first, construct-second, population-third ordering
-  - [ ] Include author-name search guidance
-  - [ ] Add "How to detect this pattern" trigger
+- [x] **6. Instrument-first search strategy** — `agents/source-acquisition.md`
+  - [x] Add "Domain-specific search strategies" section after "Query crafting rules"
+  - [x] Include instrument-first, construct-second, population-third ordering
+  - [x] Include author-name search guidance
+  - [x] Add "How to detect this pattern" trigger
 
-- [ ] **7. Pre-insertion relevance gate** — `agents/source-acquisition.md`
-  - [ ] Add "Pre-insertion relevance gate" section to Search Strategy
-  - [ ] Include: extract 5-8 domain terms from brief, keyword-check titles
-  - [ ] Caveat: this is guidance-level since `search` auto-ingests
+- [x] **7. Pre-insertion relevance gate** — `agents/source-acquisition.md`
+  - [x] Add "Pre-insertion relevance gate" section to Search Strategy
+  - [x] Include: extract 5-8 domain terms from brief, keyword-check titles
+  - [x] Caveat: this is guidance-level since `search` auto-ingests
 
 - [ ] **Post-batch-1: Run `./copy-to-skills.sh`** to deploy to `.claude/` for testing
 

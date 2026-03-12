@@ -66,6 +66,27 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 3. Spot-check the last few results for relevance after each search
 4. Never run empty or single-word generic queries
 
+### Domain-specific search strategies
+
+**Instrument/measurement topics** (questionnaires, scales, assessment tools):
+1. Search by instrument name first: `"Children's Behavior Questionnaire" validation psychometric` is far more productive than `"school-age children" temperament measurement`
+2. Then search by construct: `"effortful control" measurement children`
+3. Then search by population: `temperament assessment school-age 5-12`
+4. Use author-name searches for fields with known key researchers: `Rothbart temperament`, `Kochanska effortful control`
+5. Reserve broad population-based searches for gap-filling, not initial rounds
+
+**Why instrument-first:** Broad population searches ("school-age children temperament measurement") return thousands of irrelevant results — papers about dental hygiene, nutritional status, or helminth infections that happen to involve "school-age children." Instrument-specific queries find the target literature immediately because instrument names are high-specificity terms with almost no false positives.
+
+**How to detect this pattern:** If the brief mentions specific instruments, scales, or assessment tools by name, use this strategy. If the brief asks about "how X is measured" or "what tools exist for Y," the answer is instruments — search for known ones first.
+
+### Pre-insertion relevance gate
+
+Before running broad searches, extract 5-8 key domain terms from the research brief's scope and questions — not generic terms like "study" or "analysis," but domain-specific terms (e.g., "temperament," "CBQ," "effortful control," "psychometric"). Use these terms to craft targeted queries rather than relying on post-hoc filtering.
+
+After each search round, spot-check result titles against these domain terms. If a search returned mostly titles with zero domain-term overlap, the query was too broad — refine it rather than running more broad searches. A 100-source database with 80% relevance is far more useful than a 724-source database with 10% relevance.
+
+**Why filter early:** Off-topic sources pollute triage rankings, waste download bandwidth, and inflate source counts that give false confidence about coverage. LLM relevance scoring (run later) catches subtler mismatches, but early query refinement catches the obvious 90% of noise for free. The goal is fewer, better searches — not more searches with post-hoc cleanup.
+
 ### Provider selection
 - **Biomedical/clinical:** PubMed + bioRxiv; add Semantic Scholar for citation context
 - **CS/ML/AI:** arXiv + Semantic Scholar; add OpenAlex for breadth
