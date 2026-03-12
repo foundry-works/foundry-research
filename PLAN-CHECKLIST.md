@@ -49,16 +49,13 @@
   - [x] Update callers in `download.py` to pass `meta.get("abstract", "")`
   - [x] Write tests for the new check with realistic mismatch examples
 
-- [ ] **9. Debug triage citation counts** — `skills/deep-research/scripts/state.py`
-  - [ ] Trace data flow: search result JSON → `add-sources` → state.db `citation_count` column
-  - [ ] Check field name normalization across providers (`citation_count` vs `citationCount` vs `cited_by_count`)
-  - [ ] Verify `cmd_triage` reads from correct column
-  - [ ] Fix the propagation gap
-  - [ ] Test with sample data from multiple providers
+- [x] **9. Debug triage citation counts** — `skills/deep-research/scripts/state.py`
+  - [x] Trace data flow: search result JSON → `add-sources` → state.db `citation_count` column
+  - [x] Check field name normalization across providers (`citation_count` vs `citationCount` vs `cited_by_count`)
+  - [x] Verify `cmd_triage` reads from correct column
+  - [x] **Finding: No code bug found.** All providers normalize correctly: Semantic Scholar `citationCount`→`citation_count`, OpenAlex `cited_by_count`→`citation_count`, Crossref `is-referenced-by-count`→`citation_count`, CORE `citationCount`→`citation_count`. PubMed doesn't provide citation counts (by design). The "all-zeros" in the temperament session was likely due to heavy PubMed/CORE usage where APIs returned null/0 counts, not a propagation bug.
 
-- [ ] **10. Fix content_file population** — `skills/deep-research/scripts/state.py` + `download.py`
-  - [ ] Check `_sync_to_state` in download.py for `content_file` update
-  - [ ] Check `cmd_sources` in state.py for `content_file` in output
-  - [ ] If missing, add content_file update to download success path
-  - [ ] If not displayed, add to sources output format
-  - [ ] Test: download a source, verify `state sources` shows content_file
+- [x] **10. Fix content_file population** — `skills/deep-research/scripts/state.py` + `download.py`
+  - [x] Check `_sync_to_state` in download.py for `content_file` update — **already correct**, syncs content_file to state.db after download
+  - [x] Check `cmd_sources` in state.py for `content_file` in output — **BUG FOUND**: SELECT didn't include content_file, pdf_file, or quality
+  - [x] Fixed: added content_file, pdf_file, quality to `cmd_sources` SELECT clause

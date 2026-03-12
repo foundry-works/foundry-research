@@ -716,7 +716,7 @@ def cmd_sources(args):
 
     where = " AND ".join(clauses)
     rows = conn.execute(
-        f"SELECT id, title, type, provider, doi, url, citation_count, added_at FROM sources WHERE {where} ORDER BY id",
+        f"SELECT id, title, type, provider, doi, url, citation_count, content_file, pdf_file, quality, added_at FROM sources WHERE {where} ORDER BY id",
         params
     ).fetchall()
     conn.close()
