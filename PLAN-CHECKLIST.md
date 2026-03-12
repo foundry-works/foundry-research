@@ -23,9 +23,9 @@
   - [x] Add `known_mismatches_excluded` field to gap-mode manifest spec
   - [x] Reference the quality report from item 3 as the source for mismatch IDs
 
-- [ ] **5. Paywall strategy** — `skills/deep-research/SKILL.md`
-  - [ ] Add "Paywall-heavy fields" subsection under "What Good Research Looks Like"
-  - [ ] Include: citing-paper search, preprint hunting, honest framing, ask user
+- [x] **5. Paywall strategy** — `skills/deep-research/SKILL.md`
+  - [x] Add "Paywall-heavy fields" subsection under "What Good Research Looks Like"
+  - [x] Include: citing-paper search, preprint hunting, honest framing, ask user
 
 - [ ] **6. Instrument-first search strategy** — `agents/source-acquisition.md`
   - [ ] Add "Domain-specific search strategies" section after "Query crafting rules"
