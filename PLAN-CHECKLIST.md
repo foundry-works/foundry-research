@@ -70,9 +70,9 @@
 - [ ] Evaluate: track recovery rate over 2-3 sessions to decide if Option B (code) or C (recover-failed) is worth building
 
 ## 10. Enforce Orchestrator Journal Entries
-- [ ] Strengthen journal guidance in `skills/deep-research/SKILL.md`
-  - [ ] Mandatory entry after brief is set (questions + search strategy)
-  - [ ] Mandatory entry after source-acquisition returns (manifest summary, coverage, gaps)
-  - [ ] Mandatory entry after readers complete (coverage analysis, patterns, contradictions)
-  - [ ] Mandatory entry after gap-mode returns (resolved vs. open, synthesis strategy)
-  - [ ] Mandatory entry before synthesis handoff (narrative key findings summary)
+- [x] Strengthen journal guidance in `skills/deep-research/SKILL.md`
+  - [x] Mandatory entry after brief is set (questions + search strategy)
+  - [x] Mandatory entry after source-acquisition returns (manifest summary, coverage, gaps)
+  - [x] Mandatory entry after readers complete (coverage analysis, patterns, contradictions)
+  - [x] Mandatory entry after gap-mode returns (resolved vs. open, synthesis strategy)
+  - [x] Mandatory entry before synthesis handoff (narrative key findings summary)
