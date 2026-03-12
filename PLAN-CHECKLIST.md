@@ -38,16 +38,16 @@
   - [x] Include: extract 5-8 domain terms from brief, keyword-check titles
   - [x] Caveat: this is guidance-level since `search` auto-ingests
 
-- [ ] **Post-batch-1: Run `./copy-to-skills.sh`** to deploy to `.claude/` for testing
+- [x] **Post-batch-1: Run `./copy-to-skills.sh`** to deploy to `.claude/` for testing
 
 ## Batch 2: Script Changes
 
-- [ ] **8. Strengthen content mismatch detection** — `skills/deep-research/scripts/_shared/quality.py`
-  - [ ] Add `abstract` parameter to `check_content_mismatch`
-  - [ ] Extract top-10 non-stopword terms from abstract
-  - [ ] Add abstract keyword overlap check (threshold: <20% AND title_hits < 2)
-  - [ ] Update callers in `download.py` to pass `meta.get("abstract", "")`
-  - [ ] Write tests for the new check with realistic mismatch examples
+- [x] **8. Strengthen content mismatch detection** — `skills/deep-research/scripts/_shared/quality.py`
+  - [x] Add `abstract` parameter to `check_content_mismatch`
+  - [x] Extract top-10 non-stopword terms from abstract
+  - [x] Add abstract keyword overlap check (threshold: <20% AND title_hits < 3)
+  - [x] Update callers in `download.py` to pass `meta.get("abstract", "")`
+  - [x] Write tests for the new check with realistic mismatch examples
 
 - [ ] **9. Debug triage citation counts** — `skills/deep-research/scripts/state.py`
   - [ ] Trace data flow: search result JSON → `add-sources` → state.db `citation_count` column

@@ -111,33 +111,52 @@ def assess_quality(text: str) -> dict:
     return {"quality": "degraded", "quality_details": details}
 
 
-def check_content_mismatch(text: str, title: str = "", authors: list[str] | None = None) -> dict:
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "are", "was",
+    "were", "been", "have", "has", "had", "its", "not", "but", "can",
+    "may", "how", "what", "which", "who", "all", "any", "than", "into",
+    "our", "their", "between", "about", "more", "also", "does", "new",
+    "through", "during", "based", "using", "study", "research", "analysis",
+}
+
+
+def _extract_keywords(text: str, stopwords: set[str] = _STOPWORDS, min_len: int = 3) -> list[str]:
+    """Extract non-stopword terms from text (lowercase, 3+ chars)."""
+    return [
+        w for w in re.sub(r"[^a-z0-9\s]", " ", text.lower()).split()
+        if len(w) >= min_len and w not in stopwords
+    ]
+
+
+def check_content_mismatch(
+    text: str,
+    title: str = "",
+    authors: list[str] | None = None,
+    abstract: str = "",
+) -> dict:
     """Check if extracted text plausibly matches expected metadata.
 
     Looks for title keywords and author surnames in the text. If zero matches
     are found, the content is likely from the wrong paper (e.g., wrong PDF
     retrieved from a mirror).
 
+    When an abstract is provided, also checks abstract-keyword overlap against
+    the content. This catches the failure mode where a paper shares common
+    words with the title (e.g., "children" and "behavior") but is about a
+    completely different topic (e.g., dental hygiene, not temperament).
+
     Returns:
-        {"mismatched": bool, "title_hits": int, "author_hits": int, "reason": str}
+        {"mismatched": bool, "title_hits": int, "author_hits": int,
+         "abstract_overlap": float | None, "reason": str}
     """
     if not text or (not title and not authors):
-        return {"mismatched": False, "title_hits": 0, "author_hits": 0, "reason": ""}
+        return {"mismatched": False, "title_hits": 0, "author_hits": 0,
+                "abstract_overlap": None, "reason": ""}
 
     text_lower = text[:20000].lower()  # check first ~20k chars for speed
 
     # Extract meaningful title keywords (3+ chars, skip stopwords)
-    _STOPWORDS = {
-        "the", "and", "for", "with", "from", "that", "this", "are", "was",
-        "were", "been", "have", "has", "had", "its", "not", "but", "can",
-        "may", "how", "what", "which", "who", "all", "any", "than", "into",
-        "our", "their", "between", "about", "more", "also", "does", "new",
-        "through", "during", "based", "using", "study", "research", "analysis",
-    }
-    title_words = [
-        w for w in re.sub(r"[^a-z0-9\s]", " ", title.lower()).split()
-        if len(w) >= 3 and w not in _STOPWORDS
-    ] if title else []
+    title_words = _extract_keywords(title) if title else []
     title_hits = sum(1 for w in title_words if w in text_lower) if title_words else 0
 
     # Check author surnames (last name before comma, or last word)
@@ -148,6 +167,25 @@ def check_content_mismatch(text: str, title: str = "", authors: list[str] | None
             surname = parts[0].strip().lower() if parts else ""
             if surname and len(surname) >= 3 and surname in text_lower:
                 author_hits += 1
+
+    # Abstract-keyword overlap check
+    abstract_overlap = None
+    if abstract and len(abstract) >= 50:
+        abstract_kws = _extract_keywords(abstract)
+        # Deduplicate and take top 10 by length (longer = more domain-specific)
+        seen = set()
+        unique_kws = []
+        for kw in sorted(abstract_kws, key=len, reverse=True):
+            if kw not in seen:
+                seen.add(kw)
+                unique_kws.append(kw)
+        abstract_kws = unique_kws[:10]
+
+        if abstract_kws:
+            # Check against first 5000 words (~first few pages)
+            text_check = text_lower[:15000]
+            hits = sum(1 for kw in abstract_kws if kw in text_check)
+            abstract_overlap = hits / len(abstract_kws)
 
     # Mismatch: we have metadata to check against but found nothing
     has_title_keywords = len(title_words) >= 2
@@ -162,16 +200,30 @@ def check_content_mismatch(text: str, title: str = "", authors: list[str] | None
     else:
         mismatched = False
 
+    # Abstract-keyword gate: even if title/author passed, flag as mismatched
+    # when abstract overlap is very low AND title match is weak.
+    # This catches papers that share generic title words but are off-topic.
+    # Threshold: title_hits < 3 because generic words (children, behavior,
+    # measurement) easily produce 2 hits on completely wrong papers.
+    if (not mismatched and abstract_overlap is not None
+            and abstract_overlap < 0.2 and title_hits < 3):
+        mismatched = True
+
     reason = ""
     if mismatched:
-        reason = (
-            f"content may be from wrong paper: "
-            f"0/{len(title_words)} title keywords and 0/{len(authors or [])} author surnames found in text"
+        parts = []
+        parts.append(
+            f"{title_hits}/{len(title_words)} title keywords and "
+            f"{author_hits}/{len(authors or [])} author surnames found"
         )
+        if abstract_overlap is not None:
+            parts.append(f"abstract keyword overlap {abstract_overlap:.0%}")
+        reason = f"content may be from wrong paper: {', '.join(parts)}"
 
     return {
         "mismatched": mismatched,
         "title_hits": title_hits,
         "author_hits": author_hits,
+        "abstract_overlap": abstract_overlap,
         "reason": reason,
     }

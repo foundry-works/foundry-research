@@ -387,6 +387,7 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     # Store expected metadata for content mismatch detection
     result["_expected_title"] = meta.get("title", "")
     result["_expected_authors"] = meta.get("authors", [])
+    result["_expected_abstract"] = meta.get("abstract", "")
 
     if args.url:
         _download_web(args.url, source_id, client, sources_dir, meta, result)
@@ -503,7 +504,7 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
         title = meta.get("title", "")
         authors = meta.get("authors")
         if result["quality"] == "ok" and (title or authors):
-            mismatch = check_content_mismatch(content, title=title, authors=authors)
+            mismatch = check_content_mismatch(content, title=title, authors=authors, abstract=meta.get("abstract", ""))
             if mismatch["mismatched"]:
                 result["quality"] = "mismatched"
                 details = result.get("quality_details") or {}
@@ -539,7 +540,8 @@ def _download_direct_pdf(url: str, source_id: str, client, sources_dir: str,
     if to_md:
         _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
+                            authors=result.get("_expected_authors"),
+                            abstract=result.get("_expected_abstract", ""))
     else:
         result["quality"] = "ok"
 
@@ -590,7 +592,8 @@ def _download_arxiv(arxiv_id: str, source_id: str, client, sources_dir: str,
     if to_md:
         _convert_and_record(pdf_path, source_id, sources_dir, result,
                     title=result.get("_expected_title", ""),
-                    authors=result.get("_expected_authors"))
+                    authors=result.get("_expected_authors"),
+                    abstract=result.get("_expected_abstract", ""))
     else:
         result["quality"] = "ok"
 
@@ -605,7 +608,8 @@ def _record_pdf_success(result: dict, source_id: str, source_name: str,
     if to_md:
         _convert_and_record(pdf_path, source_id, sources_dir, result,
                             title=result.get("_expected_title", ""),
-                            authors=result.get("_expected_authors"))
+                            authors=result.get("_expected_authors"),
+                            abstract=result.get("_expected_abstract", ""))
     else:
         result["quality"] = "ok"
 
@@ -774,7 +778,8 @@ def _resolve_pmc(doi: str, client) -> str | None:
 
 
 def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result: dict,
-                        title: str = "", authors: list[str] | None = None) -> None:
+                        title: str = "", authors: list[str] | None = None,
+                        abstract: str = "") -> None:
     """Convert PDF to markdown and update result dict."""
     md_path = os.path.join(sources_dir, f"{source_id}.md")
     conv = pdf_to_markdown(pdf_path, md_path)
@@ -793,7 +798,7 @@ def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result:
             try:
                 from pathlib import Path as _Path
                 md_text = _Path(md_path).read_text(encoding="utf-8")
-                mismatch = check_content_mismatch(md_text, title=title, authors=authors)
+                mismatch = check_content_mismatch(md_text, title=title, authors=authors, abstract=abstract)
                 if mismatch["mismatched"]:
                     result["quality"] = "mismatched"
                     details = result.get("quality_details") or {}

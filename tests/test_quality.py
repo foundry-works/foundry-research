@@ -101,6 +101,88 @@ class TestCheckContentMismatch:
         )
         assert not result["mismatched"]
 
+    def test_abstract_overlap_catches_shared_words_mismatch(self):
+        """Paper shares generic title words but abstract keywords are absent → mismatched.
+
+        This is the core failure mode: a paper about "children" and "behavior"
+        passes title matching but is actually about dental hygiene, not temperament.
+        """
+        text = (
+            "This study examined children's behavior during dental procedures. "
+            "Behavioral management techniques were assessed across 200 pediatric "
+            "dental patients aged 5-12 years. Oral hygiene compliance was measured "
+            "using the Frankl behavior rating scale. Results showed that children "
+            "with prior dental experience exhibited fewer behavioral problems."
+        )
+        result = check_content_mismatch(
+            text,
+            title="Children's behavior assessment: A measurement study",
+            authors=None,
+            abstract=(
+                "This paper reviews psychometric properties of the Children's Behavior "
+                "Questionnaire (CBQ), a caregiver-report temperament measure assessing "
+                "effortful control, surgency, and negative affectivity in children aged "
+                "3-7 years. We examine reliability, factor structure, and cross-cultural "
+                "validation across 12 countries."
+            ),
+        )
+        assert result["mismatched"]
+        assert result["abstract_overlap"] is not None
+        assert result["abstract_overlap"] < 0.2
+
+    def test_abstract_overlap_passes_matching_content(self):
+        """Content matches both title and abstract → not mismatched."""
+        text = (
+            "The CBQ measures three broad dimensions of temperament: surgency, "
+            "negative affectivity, and effortful control. Psychometric evaluation "
+            "across multiple samples shows strong reliability. Factor structure "
+            "was confirmed using confirmatory factor analysis in cross-cultural "
+            "samples from 12 countries including validation studies."
+        )
+        result = check_content_mismatch(
+            text,
+            title="Children's Behavior Questionnaire: Psychometric properties",
+            authors=["Rothbart, Mary K."],
+            abstract=(
+                "This paper reviews psychometric properties of the Children's Behavior "
+                "Questionnaire (CBQ), a caregiver-report temperament measure assessing "
+                "effortful control, surgency, and negative affectivity. We examine "
+                "reliability, factor structure, and cross-cultural validation."
+            ),
+        )
+        assert not result["mismatched"]
+        assert result["abstract_overlap"] is not None
+        assert result["abstract_overlap"] >= 0.2
+
+    def test_abstract_too_short_skipped(self):
+        """Abstract shorter than 50 chars → overlap check skipped."""
+        result = check_content_mismatch(
+            "Some content about various topics.",
+            title="Short Paper",
+            authors=None,
+            abstract="Brief.",
+        )
+        assert result["abstract_overlap"] is None
+
+    def test_strong_title_match_overrides_low_abstract_overlap(self):
+        """If title_hits >= 3, low abstract overlap alone doesn't trigger mismatch."""
+        text = (
+            "Temperament questionnaire validation in preschool children. "
+            "This study validates a temperament questionnaire for preschoolers."
+        )
+        result = check_content_mismatch(
+            text,
+            title="Temperament questionnaire validation in preschool children",
+            authors=None,
+            abstract=(
+                "We examine psychometric properties including factor structure, "
+                "convergent validity, discriminant validity, and test-retest "
+                "reliability of the instrument across diverse populations."
+            ),
+        )
+        # title_hits >= 3 so abstract overlap alone shouldn't flag it
+        assert not result["mismatched"]
+
 
 # ---------------------------------------------------------------------------
 # assess_quality
