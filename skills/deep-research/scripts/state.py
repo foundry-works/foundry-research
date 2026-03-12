@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS sources (
     is_read INTEGER DEFAULT 0,
     tags TEXT DEFAULT '[]',
     quality REAL,
+    relevance_score REAL,
+    relevance_rationale TEXT,
     status TEXT DEFAULT 'pending',
     added_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -125,10 +127,12 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-_MIGRATIONS: list[tuple[str, str]] = [
-    # (column_name, column_definition) — applied to the searches table
-    ("ingested_count", "INTEGER"),
-    ("search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+_MIGRATIONS: list[tuple[str, str, str]] = [
+    # (table, column_name, column_definition)
+    ("searches", "ingested_count", "INTEGER"),
+    ("searches", "search_mode", "TEXT NOT NULL DEFAULT 'keyword'"),
+    ("sources", "relevance_score", "REAL"),
+    ("sources", "relevance_rationale", "TEXT"),
 ]
 
 
@@ -141,9 +145,9 @@ def _migrate_schema(db_path: str) -> None:
     try:
         conn = sqlite3.connect(f"file:{db_path}", uri=True)
         try:
-            for col, defn in _MIGRATIONS:
+            for table, col, defn in _MIGRATIONS:
                 try:
-                    conn.execute(f"ALTER TABLE searches ADD COLUMN {col} {defn}")
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass  # column already exists
@@ -1499,17 +1503,16 @@ def cmd_triage(args):
 
     # Load sources (with optional title filter)
     title_filter = getattr(args, "title_contains", None)
+    _src_cols = ("id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
+                 "content_file, pdf_file, is_read, quality, relevance_score, relevance_rationale, status")
     if title_filter:
         sources = [dict(r) for r in conn.execute(
-            "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
-            "content_file, pdf_file, is_read, quality, status "
-            "FROM sources WHERE session_id = ? AND title LIKE ? ORDER BY id", (sid, f"%{title_filter}%")
+            f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND title LIKE ? ORDER BY id",
+            (sid, f"%{title_filter}%")
         ).fetchall()]
     else:
         sources = [dict(r) for r in conn.execute(
-            "SELECT id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
-            "content_file, pdf_file, is_read, quality, status "
-            "FROM sources WHERE session_id = ? ORDER BY id", (sid,)
+            f"SELECT {_src_cols} FROM sources WHERE session_id = ? ORDER BY id", (sid,)
         ).fetchall()]
     conn.close()
 
@@ -1521,8 +1524,12 @@ def cmd_triage(args):
 
         # Title keyword relevance: count how many brief-question keywords appear in title
         keyword_hits = sum(1 for t in question_terms if t in title) if question_terms else 0
-        # Normalize to 0-1 range (cap at 5 hits)
-        relevance = min(keyword_hits / 5.0, 1.0) if question_terms else 0.5
+
+        # Prefer LLM relevance score when available; fall back to keyword matching
+        if s.get("relevance_score") is not None:
+            relevance = s["relevance_score"]
+        else:
+            relevance = min(keyword_hits / 5.0, 1.0) if question_terms else 0.5
 
         # Citation score: log-scale to avoid extreme skew from mega-cited papers
         cite_count = s.get("citation_count") or 0

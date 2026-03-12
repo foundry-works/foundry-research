@@ -1,18 +1,18 @@
 # Deep Research Improvement Checklist
 
 ## 1. LLM-Powered Abstract Relevance Scoring
-- [ ] Add `relevance_score` (REAL) and `relevance_rationale` (TEXT) columns to sources table schema in `state.py`
-- [ ] Create `scripts/triage-relevance` executable script
-  - [ ] CLI argument parsing (--top N, --batch-size, --session-dir)
-  - [ ] Pull brief + abstracts from state.db
-  - [ ] Batch abstracts (15-20 per call)
-  - [ ] Format prompt for Haiku (brief + numbered abstracts → JSON scores)
-  - [ ] Call `claude -p ... --model haiku --output-format json`
-  - [ ] Parse response, write scores to state.db
-  - [ ] JSON envelope output (exit 0, status ok/error)
-  - [ ] Graceful fallback if `claude` CLI unavailable
-- [ ] Modify `cmd_triage` in `state.py` to prefer `relevance_score` over keyword matching
-- [ ] Update `agents/source-acquisition.md` to call `triage-relevance` between ingest and download
+- [x] Add `relevance_score` (REAL) and `relevance_rationale` (TEXT) columns to sources table schema in `state.py`
+- [x] Create `scripts/triage-relevance` executable script
+  - [x] CLI argument parsing (--top N, --batch-size, --session-dir)
+  - [x] Pull brief + abstracts from state.db
+  - [x] Batch abstracts (15-20 per call)
+  - [x] Format prompt for Haiku (brief + numbered abstracts → JSON scores)
+  - [x] Call `claude -p ... --model haiku --output-format json`
+  - [x] Parse response, write scores to state.db
+  - [x] JSON envelope output (exit 0, status ok/error)
+  - [x] Graceful fallback if `claude` CLI unavailable
+- [x] Modify `cmd_triage` in `state.py` to prefer `relevance_score` over keyword matching
+- [x] Update `agents/source-acquisition.md` to call `triage-relevance` between ingest and download
 - [ ] Test: run on the temperament session's state.db and verify off-topic papers score low
 
 ## 2. Content Validation at Download Time

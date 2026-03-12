@@ -72,9 +72,23 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 
 ---
 
+## LLM Relevance Scoring
+
+After search rounds complete and before triage, run LLM relevance scoring to replace keyword matching with semantic relevance judgments. This prevents high-citation off-topic papers from dominating triage rankings.
+
+```
+{cli_dir}/triage-relevance --top 60 --batch-size 15
+```
+
+This scores source abstracts against the research brief using Haiku, writing `relevance_score` (0-1) and `relevance_rationale` back to state.db. The subsequent `state triage` command will use these LLM scores instead of keyword matching when available.
+
+**When to run:** After all search rounds are complete and sources are ingested. Only sources with abstracts and no existing score are processed, so it's safe to re-run after gap-mode searches.
+
+**If it fails:** The script exits with a JSON error envelope. Triage will fall back to keyword matching automatically — LLM scoring is an enhancement, not a hard requirement.
+
 ## Triage
 
-After search rounds complete, run `state triage` to rank sources by citation count × title relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
+After LLM relevance scoring, run `state triage` to rank sources by citation count × relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
 
 ---
 
@@ -150,6 +164,12 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state log-gap --text "..."       # record coverage gap
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 {cli_dir}/state summary                    # brief + sources + findings + gaps
+```
+
+### Relevance Scoring
+```
+{cli_dir}/triage-relevance                 # score abstracts against brief (default: top 60, batch 15)
+{cli_dir}/triage-relevance --top 40 --batch-size 20  # custom limits
 ```
 
 ### Download
