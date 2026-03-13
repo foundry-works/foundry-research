@@ -146,12 +146,17 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
-4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
+4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 15 total attempts across all channels, and auto-skips any channel that has 0 successes after 5 attempts. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
+
+   **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
    - `--min-relevance 0.3` — skips sources whose LLM relevance score is below threshold
    - `--title-keywords <comma-separated>` — derive 5-10 domain-specific terms from the brief's scope/questions and pass them here; sources whose title contains none of these keywords are skipped
    - `--min-citations 30` — adjust the citation threshold as needed
+   - `--max-attempts N` — override the default budget of 15 total recovery attempts (raise for broad topics, lower when time is tight)
 
    Example: `state recover-failed --min-relevance 0.3 --title-keywords "uncanny,valley,perception,humanoid,robot" --min-citations 30`
+
+   The response includes `skipped_channels` (channels auto-disabled due to 0% success after 5 tries) and `budget_exhausted` (true if the attempt cap was reached before all eligible sources were tried). If CORE gets skipped, switch to Tavily author-page searches for the remaining high-priority failures using the web search recovery workflow below.
 
    **`recover-failed` is slow** — it tries multiple download channels per source and can take 3-5 minutes for 20+ sources. Set `timeout: 600000` on the Bash call so it doesn't hit the default 2-minute timeout. If it times out, the agent loses the result and cannot retrieve it (see rule 4).
 
@@ -298,7 +303,7 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 
 # Recovery — ⚠ slow command, set Bash timeout to 600000
-{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
+{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3" --max-attempts 15
 ```
 
 ### Relevance Scoring
@@ -353,11 +358,11 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 }
 ```
 
-**`state recover-failed --min-relevance 0.3 --title-keywords "..."`**
+**`state recover-failed --min-relevance 0.3 --title-keywords "..." --max-attempts 15`**
 ```json
 {
   "status": "ok",
-  "results": {"recovered": 3, "recovered_sources": ["src-044", "src-071"], "still_failed": 2, "still_failed_sources": ["src-089", "src-102"], "attempted": 5}
+  "results": {"recovered": 3, "recovered_sources": ["src-044", "src-071"], "still_failed": 2, "still_failed_sources": ["src-089", "src-102"], "attempted": 8, "eligible": 5, "budget_exhausted": false, "skipped_channels": ["core"], "channel_stats": {"core": {"attempts": 5, "successes": 0}, "tavily": {"attempts": 2, "successes": 2}, "doi": {"attempts": 1, "successes": 1}}}
 }
 ```
 

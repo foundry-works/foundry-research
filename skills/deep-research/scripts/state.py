@@ -2060,8 +2060,20 @@ def cmd_recover_failed(args):
     search_script = os.path.join(scripts_dir, "search.py")
     download_script = os.path.join(scripts_dir, "download.py")
 
+    max_attempts = getattr(args, "max_attempts", 15) or 15
     recovered = []
     still_failed = []
+    total_attempts = 0
+    channel_stats = {"core": {"attempts": 0, "successes": 0},
+                     "tavily": {"attempts": 0, "successes": 0},
+                     "doi": {"attempts": 0, "successes": 0}}
+    skipped_channels = []
+    budget_exhausted = False
+
+    def _channel_available(ch: str) -> bool:
+        """Return False if a channel should be skipped (0 successes after 5+ attempts)."""
+        s = channel_stats[ch]
+        return not (s["attempts"] >= 5 and s["successes"] == 0)
 
     for item in failed:
         sid_val = item["source_id"]
@@ -2073,10 +2085,20 @@ def cmd_recover_failed(args):
             recovered.append(sid_val)
             continue
 
+        # Budget check: stop if we've exhausted max attempts
+        if total_attempts >= max_attempts:
+            if not budget_exhausted:
+                log(f"Recovery budget exhausted ({max_attempts} attempts). Stopping.")
+                budget_exhausted = True
+            still_failed.append(sid_val)
+            continue
+
         # Strategy 1: CORE search by title
         success = False
-        if title:
+        if title and _channel_available("core"):
             try:
+                channel_stats["core"]["attempts"] += 1
+                total_attempts += 1
                 cmd = [
                     sys.executable, search_script,
                     "--provider", "core",
@@ -2109,6 +2131,7 @@ def cmd_recover_failed(args):
                                     if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
                                         log(f"Recovered {sid_val} via CORE")
                                         recovered.append(sid_val)
+                                        channel_stats["core"]["successes"] += 1
                                         success = True
                                         break
                     except (json.JSONDecodeError, TypeError):
@@ -2116,12 +2139,22 @@ def cmd_recover_failed(args):
             except (subprocess.TimeoutExpired, Exception) as e:
                 log(f"CORE recovery failed for {sid_val}: {e}", level="debug")
 
+            # Check if CORE should be skipped going forward
+            if not _channel_available("core") and "core" not in skipped_channels:
+                skipped_channels.append("core")
+                log("CORE channel skipped: 0 successes after 5 attempts")
+
         if success:
+            continue
+        if total_attempts >= max_attempts:
+            still_failed.append(sid_val)
             continue
 
         # Strategy 2: Tavily search for "title pdf"
-        if title:
+        if title and _channel_available("tavily"):
             try:
+                channel_stats["tavily"]["attempts"] += 1
+                total_attempts += 1
                 cmd = [
                     sys.executable, search_script,
                     "--provider", "tavily",
@@ -2152,6 +2185,7 @@ def cmd_recover_failed(args):
                                     if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
                                         log(f"Recovered {sid_val} via Tavily PDF search")
                                         recovered.append(sid_val)
+                                        channel_stats["tavily"]["successes"] += 1
                                         success = True
                                         break
                     except (json.JSONDecodeError, TypeError):
@@ -2159,12 +2193,22 @@ def cmd_recover_failed(args):
             except (subprocess.TimeoutExpired, Exception) as e:
                 log(f"Tavily recovery failed for {sid_val}: {e}", level="debug")
 
+            # Check if Tavily should be skipped going forward
+            if not _channel_available("tavily") and "tavily" not in skipped_channels:
+                skipped_channels.append("tavily")
+                log("Tavily channel skipped: 0 successes after 5 attempts")
+
         if success:
+            continue
+        if total_attempts >= max_attempts:
+            still_failed.append(sid_val)
             continue
 
         # Strategy 3: DOI landing page as web source
-        if doi:
+        if doi and _channel_available("doi"):
             try:
+                channel_stats["doi"]["attempts"] += 1
+                total_attempts += 1
                 doi_url = f"https://doi.org/{doi}"
                 dl_cmd = [
                     sys.executable, download_script,
@@ -2178,9 +2222,15 @@ def cmd_recover_failed(args):
                     if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
                         log(f"Recovered {sid_val} via DOI landing page")
                         recovered.append(sid_val)
+                        channel_stats["doi"]["successes"] += 1
                         success = True
             except (subprocess.TimeoutExpired, Exception) as e:
                 log(f"DOI landing page recovery failed for {sid_val}: {e}", level="debug")
+
+            # Check if DOI should be skipped going forward
+            if not _channel_available("doi") and "doi" not in skipped_channels:
+                skipped_channels.append("doi")
+                log("DOI channel skipped: 0 successes after 5 attempts")
 
         if not success:
             still_failed.append(sid_val)
@@ -2190,7 +2240,11 @@ def cmd_recover_failed(args):
         "recovered_sources": recovered,
         "still_failed": len(still_failed),
         "still_failed_sources": still_failed,
-        "attempted": len(failed),
+        "attempted": total_attempts,
+        "eligible": len(failed),
+        "budget_exhausted": budget_exhausted,
+        "skipped_channels": skipped_channels,
+        "channel_stats": channel_stats,
     })
 
 
@@ -2557,6 +2611,9 @@ def main():
                    help="Skip sources with relevance_score below this threshold (default 0.3)")
     p.add_argument("--title-keywords", type=str, default="",
                    help="Comma-separated keywords; require at least one match in source title to attempt recovery")
+    p.add_argument("--max-attempts", type=int, default=15,
+                   help="Maximum total recovery attempts across all channels (default 15). "
+                        "Channels with 0 successes after 5 attempts are auto-skipped.")
     p.add_argument("--session-dir", **_sd)
 
     # manifest

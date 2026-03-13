@@ -23,13 +23,13 @@
 
 ## 3. Recovery Search Budget and Domain-Aware Early Exit
 
-- [ ] **3a.** Add `--max-attempts N` flag to `recover-failed` in `state.py` (default 15)
-- [ ] **3b.** Implement attempt counter: increment per recovery attempt (each channel per source = 1 attempt), stop when counter reaches max
-- [ ] **3c.** Add per-channel success tracking dict: `{channel: {"attempts": N, "successes": M}}`
-- [ ] **3d.** Implement channel early-exit: if a channel has 0 successes after 5 attempts, skip it for remaining sources; log the skip in the JSON response
-- [ ] **3e.** Add `skipped_channels` to `recover-failed` response schema
-- [ ] **3f.** Update `source-acquisition.md` recovery section (lines 149-158): add budget framing, document `--max-attempts`, add channel-skip behavior
-- [ ] **3g.** Update `source-acquisition.md` CLI reference (line ~300-301) with new flag
+- [x] **3a.** Add `--max-attempts N` flag to `recover-failed` in `state.py` (default 15)
+- [x] **3b.** Implement attempt counter: increment per recovery attempt (each channel per source = 1 attempt), stop when counter reaches max
+- [x] **3c.** Add per-channel success tracking dict: `{channel: {"attempts": N, "successes": M}}`
+- [x] **3d.** Implement channel early-exit: if a channel has 0 successes after 5 attempts, skip it for remaining sources; log the skip in the JSON response
+- [x] **3e.** Add `skipped_channels` to `recover-failed` response schema
+- [x] **3f.** Update `source-acquisition.md` recovery section (lines 149-158): add budget framing, document `--max-attempts`, add channel-skip behavior
+- [x] **3g.** Update `source-acquisition.md` CLI reference (line ~300-301) with new flag
 - [ ] **3h.** Add test: 20 sources eligible, max-attempts=5 → only 5 attempts run
 - [ ] **3i.** Add test: channel with 0/5 success rate → channel skipped for source #6
 
