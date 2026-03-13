@@ -190,7 +190,7 @@ After `recover-failed` completes, check whether any **high-priority** sources (t
    ```
    {cli_dir}/search --provider tavily --query '"{first author last name}" "{key title words}" PDF' --limit 10
    ```
-   This finds author lab sites, university repositories, ResearchGate, Academia.edu, OSF, and preprint servers. Use `search_depth: advanced` if available (costs 2 credits vs. 1, but scrapes deeper).
+   This finds author lab sites, university repositories, ResearchGate, Academia.edu, OSF, and preprint servers.
 
 3. If that misses, try a broader title-only search:
    ```
@@ -244,27 +244,28 @@ Next step: [what to search next and why]
 **Always use `--compact`** — it strips abstracts and full metadata from results, returning only (id, title, citation_count, doi, provider, year, type). Full metadata is still written to state.db by the auto-ingest pipeline. You don't need abstracts in your context — titles and citation counts are sufficient for search strategy decisions.
 
 **Assessing coverage per question with compact results:** You won't have abstracts, but titles are sufficient for coverage estimation. After each search round, scan result titles for keywords from each brief question. A title containing "cross-cultural" and "uncanny valley" is a strong signal for Q3 about cross-cultural variation. Use `state triage` (which scores title-keyword relevance against the brief) for a structured assessment after all rounds complete. This is an estimate — the readers will do the deep coverage assessment later.
-Providers: `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
 
-Citation traversal (Semantic Scholar, PubMed only) — `--compact` applies here too:
+**Providers:** `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
+
+Citation traversal (Semantic Scholar, PubMed only) — `--compact` and `--brief-keywords` apply here too:
 ```
-{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --limit 10 --compact
-{cli_dir}/search --provider semantic_scholar --references PAPER_ID --limit 10 --compact
-{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --min-citations 20 --limit 10 --compact
+{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --limit 10 --compact --brief-keywords "..."
+{cli_dir}/search --provider semantic_scholar --references PAPER_ID --limit 10 --compact --brief-keywords "..."
+{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --min-citations 20 --limit 10 --compact --brief-keywords "..."
 ```
 
 **Citation chasing workflow example:** After round 1 finds a seminal paper (e.g., src-012, "Uncanny Valley Revisited", 440 citations, S2 ID `a1b2c3d4...`):
 ```
 # Forward: who cited this paper? (filter for quality with --min-citations)
-{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --min-citations 20 --limit 20 --compact
+{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --min-citations 20 --limit 20 --compact --brief-keywords "..."
 # Backward: what did this paper cite? (its bibliography)
-{cli_dir}/search --provider semantic_scholar --references a1b2c3d4e5f6... --limit 20 --compact
+{cli_dir}/search --provider semantic_scholar --references a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
 # If you only have a DOI (raw DOIs are auto-prefixed to DOI:10.xxx):
-{cli_dir}/search --provider semantic_scholar --cited-by 10.1016/j.cognition.2012.04.007 --limit 20 --compact
+{cli_dir}/search --provider semantic_scholar --cited-by 10.1016/j.cognition.2012.04.007 --limit 20 --compact --brief-keywords "..."
 # If --cited-by returns 0 with --min-citations, retry without the filter:
-{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --limit 20 --compact
+{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
 # Last resort: keyword search with the paper's exact title
-{cli_dir}/search --provider semantic_scholar --query "Uncanny Valley Revisited" --limit 10 --compact
+{cli_dir}/search --provider semantic_scholar --query "Uncanny Valley Revisited" --limit 10 --compact --brief-keywords "..."
 ```
 
 Common flags: `--limit N`, `--offset N`, `--year-range YYYY-YYYY`, `--open-access-only`, `--min-citations N`
@@ -307,12 +308,22 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/download --retry-sync            # recover sync failures
 ```
 
-
-All CLI commands exit 0 and return JSON: `{"status": "ok", ...}` or `{"status": "error", "errors": [...]}`. Parse the JSON — don't grep for text patterns.
-
 ### Response Schemas
 
-These are the actual JSON structures returned by the commands you parse most often. Use these to extract values directly — don't guess at key paths.
+All CLI commands exit 0 and return JSON: `{"status": "ok", "results": ..., "total_results": N}` or `{"status": "error", "errors": [...]}`. Use these schemas to extract values — don't guess at key paths.
+
+**`search --provider <name> --query "..." --compact`**
+```json
+{
+  "status": "ok",
+  "results": [
+    {"id": "src-001", "title": "...", "citation_count": 340, "doi": "10.1234/...", "provider": "semantic_scholar", "year": 2021, "type": "academic"}
+  ],
+  "total_results": 47,
+  "errors": []
+}
+```
+With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, `provider`, `year`, `type`. `results` is always a **list** (not a dict). `total_results` is the provider's total hit count (may exceed `len(results)` due to `--limit`).
 
 **`state triage --top N`**
 ```json
@@ -320,7 +331,7 @@ These are the actual JSON structures returned by the commands you parse most oft
   "status": "ok",
   "results": {
     "sources": [
-      {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "keyword_hits": 3}
+      {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "provider": "semantic_scholar", "keyword_hits": 3}
     ],
     "summary": {"total": 89, "high_priority": 15, "medium_priority": 15, "skip_quality": 4, "brief_keywords_used": 8},
     "top_sources": [
@@ -454,5 +465,5 @@ The `state manifest --mode gap` command returns `gaps_addressed`, `gaps_potentia
 ## Error Handling
 
 - If a search provider is down or rate-limited, skip it and note in the journal. Don't retry indefinitely.
-- If downloads stall, cap at 3 batch loops and report remaining count in the manifest.
+- If downloads stall, `--max-batches 3` handles the cap automatically. Report the remaining count from the response in your manifest.
 - Always return a valid JSON manifest, even on partial failure — include what succeeded and what didn't.
