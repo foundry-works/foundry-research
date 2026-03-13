@@ -1,104 +1,126 @@
-# Plan: Reduce Orchestrator Context Pressure Through CLI Output Compaction
+# Plan: Two-Stage Research Pipeline & Dedicated Revision
 
-## Diagnosis
+## Problem
 
-The orchestrator runs out of context not because it's doing too much *thinking* — but because the CLI tools return too much *noise*. The biggest offenders:
+The current `/deep-research` skill tries to do everything in one session: research gathering, initial draft, review, and revision. By the time synthesis happens, the orchestrator's context is polluted with search manifests, reader coordination, and gap analysis. The revision step reuses the synthesis-writer agent — but drafting and revising are fundamentally different tasks, and cramming all reviewer feedback (factual + style) into one pass forces the writer to triage competing priorities on the fly.
 
-- **`state sources`** returns 11 fields per source × 30-50 sources = 10-50KB per call, called 3-5 times per session.
-- **`state summary`** returns full findings text + full source list + full gap details = 5-20KB, landing in the orchestrator's context right before synthesis — the most context-pressured phase.
-- **`state audit`** returns full ID arrays (`downloaded_ids`, `notes_ids`, `no_content`) listing 20-40 IDs each, when the orchestrator only needs counts.
+## Design
 
-## Design Principle
+Split the pipeline into two independent skills with a clean handoff point, and create a dedicated revision agent that makes surgical edits rather than regenerating the report.
 
-From blogpost2.md: *"Factorize the factorizable, leave the judgment to the model."*
+### Stage 1: `/deep-research` — Research & Draft
 
-CLI output formatting is factorizable. Research judgment (gap analysis, coverage assessment, synthesis strategy) is not. We shrink the factories — we don't move thinking out of the orchestrator.
+Everything up to and including the initial draft. This is the current SKILL.md steps 1-14a, ending when `report.md` is written to disk. The orchestrator's job is done once the synthesis-writer returns a draft.
 
-### What we're NOT doing (and why)
+**What changes:**
+- Remove steps 14b-14d (review/revise/deliver) from the current SKILL.md
+- The skill ends by telling the user: "Draft is at `report.md`. Review it, then run `/deep-research-revision` when ready."
+- All research infrastructure (state.py, search, download, agents for acquisition/reading/findings/brief/synthesis-writer) stays exactly as-is
 
-- **No "pre-read validator" agent.** Pre-read validation is lightweight judgment informed by the orchestrator's full research context. An agent would make pass/fail decisions without knowing the brief, the coverage landscape, or what gaps need filling. The orchestrator sometimes notices "this source is about X, not Y, but X might still be useful for Q4" — a validator agent can't do that.
-- **No "coverage analyst" agent.** Gap detection and strategy is the core judgment call of the research process. Delegating it to an agent that received manifests as input text (decontextualized from the research journey) would be building a sub-factory. The orchestrator deciding "Q3 is thin, let's target it with citation chasing on paper X" is exactly the thinking that should stay with the thinker.
-- **No "synthesis prep" agent.** The narrative key-findings summary is an interpretive act. The orchestrator has lived the research journey — it knows which sources were mismatched, which gaps resisted filling, what surprised it. A prep agent would be narrating a journey it didn't take.
+**Why stop here:** The draft is the natural handoff point. The user has something to read and react to. They might want to redirect the report before spending tokens on revision. They might be happy with the draft as-is. And the revision orchestrator gets a fresh context focused entirely on quality.
 
-## Changes
+### Stage 2: `/deep-research-revision` — Review & Revise
 
-### 1. `state sources --compact` (state.py)
+A new skill that takes an existing session directory with a `report.md` and runs a structured review→revise cycle.
 
-**Current:** Returns `id, title, type, provider, doi, url, citation_count, content_file, pdf_file, quality, added_at` for every source. At 30-50 sources, this is 10-50KB.
+**Required input:** Session directory path — the user must provide this as an argument (e.g., `/deep-research-revision ./deep-research-credit-cards`). The skill validates that `report.md`, `notes/`, and `sources/metadata/` exist at that path. No auto-discovery — the user explicitly tells us what to revise.
 
-**Change:** Add `--compact` flag that returns only `id, title, quality, content_file` — the four fields the orchestrator actually uses when deciding what to read and what to skip. ~80% output reduction.
+**Why required, not auto-discovered:** Auto-discovery via `.deep-research-session` marker files is fragile when the user has multiple sessions, or when running revision in a different working directory than where research happened. An explicit path removes ambiguity and makes the skill work regardless of where the user invokes it from.
 
-Also add `--fields` flag for arbitrary field selection: `--fields id,title,doi` returns only those columns. This future-proofs against needing different field subsets without adding more boolean flags.
+**Optional input:** User feedback — free-text direction like "section 3 is too long" or "I disagree with the conclusion about X". This gets incorporated into the revision instructions alongside automated review findings.
 
-**Why these fields:** The orchestrator uses `sources` for: (a) pre-read validation — needs `id` + `content_file` to know what to Read, (b) quality checks — needs `quality` to skip mismatched/degraded, (c) journal logging — needs `title` for human-readable entries. Everything else (`doi`, `url`, `citation_count`, `provider`, `added_at`) is used by the source-acquisition agent in its own context, not by the orchestrator.
+**Pass 1 — Accuracy:**
+1. Launch `synthesis-reviewer` + `research-verifier` in parallel (same response message, foreground)
+2. Collect all high/medium issues from reviewer + all contradicted/partially-supported claims from verifier
+3. If user provided feedback, add it as a separate "User feedback" section in the revision instructions
+4. Rename `report.md` → `report_draft.md` (preserve original for diffing)
+5. Launch `report-reviser` with: the draft path, the accuracy issues list, user feedback, session directory
+6. Reviser makes targeted edits, writes updated `report.md`
 
-### 2. `state summary --compact` (state.py)
+**Pass 2 — Style:**
+1. Launch `style-reviewer` on the corrected `report.md`
+2. Collect all high/medium style issues
+3. Launch `report-reviser` with: the corrected draft, the style issues list, session directory
+4. Reviser makes targeted edits to final `report.md`
 
-**Current:** Returns the full brief, full source list (id + title + type + provider), full findings list (id + text + sources + question), full gaps list, and metrics. At 20+ findings with multi-sentence text and citation arrays, this is 5-20KB.
+**Why two passes, not parallel:** Style fixes applied to text containing factual errors are wasted work — the text will change when errors are fixed. Running accuracy first means the style reviewer sees correct text, and the reviser has a simpler job each time. The cost is ~2-3 minutes of sequential execution, which is trivial compared to the research phase.
 
-**Change:** Add `--compact` flag that returns:
-- `brief`: just the questions list (not scope or completeness_criteria)
-- `search_count`, `source_count` (counts only)
-- `sources_by_type`, `sources_by_provider` (distribution maps, already compact)
-- `findings_by_question`: `{"Q1: What mechanisms...": 4, "Q2: Does it replicate?": 1}` — counts per question, not the findings themselves
-- `gaps`: kept as-is (usually <5 items, small)
-- Omit: `sources` array, `findings` array, `metrics` array
+**Why user feedback in Pass 1:** User direction is closer to "accuracy" than "style" — it's about content, emphasis, and conclusions. Incorporating it in the accuracy pass means the style reviewer sees text that already reflects the user's intent.
 
-**Why:** The orchestrator uses `summary` for coverage assessment: "Which questions have thin findings? How many sources do I have? Are there open gaps?" It doesn't need the findings *text* — that's for the synthesis-writer. The compact version gives the orchestrator exactly the decision-making data it needs in ~1-2KB instead of 5-20KB.
+### New Agent: `report-reviser`
 
-### 3. `state summary --write-handoff` (state.py)
+A dedicated agent for making targeted edits to an existing report based on a structured issues list.
 
-**Current:** The orchestrator calls `state summary`, receives the full 5-20KB response in context, then passes findings + gaps + brief to the synthesis-writer as part of the Agent prompt.
+**Key differences from synthesis-writer:**
 
-**Change:** Add `--write-handoff` flag that writes the full summary (findings with text, gaps, brief, methodology stats) to `synthesis-handoff.json` in the session directory and returns only `{"path": "deep-research-topic/synthesis-handoff.json", "findings_count": 24, "gaps_count": 2}`.
+| Dimension | synthesis-writer | report-reviser |
+|-----------|-----------------|----------------|
+| Input | Notes, findings, metadata, brief | Existing draft + issue list |
+| Operation | Blank-page synthesis | Surgical edits to flagged sections |
+| Tools | Read, Glob, Write | Read, Glob, **Edit** |
+| Core rule | Build coherent narrative from evidence | Fix what's broken, leave the rest alone |
+| Risk to mitigate | Missing evidence, weak structure | Collateral damage to unflagged sections |
 
-The orchestrator passes the file path to the synthesis-writer, which reads it directly. The full findings data never enters the orchestrator's context.
+**Why Edit, not Write:** The synthesis-writer uses `Write` because it generates the whole file. The reviser uses `Edit` because it should only touch specific passages. This is a structural constraint that prevents the "regenerate everything" failure mode — `Edit` requires specifying exact text to replace, which forces targeted changes.
 
-**Why this isn't "moving thinking":** The orchestrator still writes its narrative key-findings summary (the interpretive layer) based on what it already knows from living the research journey — reader manifests, gap analysis, quality report. It just doesn't need to hold the raw structured findings in its context to do that. The structured data is for the synthesis-writer's citation precision, not for the orchestrator's judgment.
+**Agent prompt design principles:**
+- "Do not modify any section that has no flagged issues" — explicit constraint
+- Each edit must trace to a specific issue ID from the review
+- Return a manifest mapping issue IDs to the edits made (for audit trail)
+- If an issue requires context the reviser doesn't have (e.g., needs to check a source), flag it as unresolved rather than guessing
 
-### 4. `state audit --brief` (state.py)
+### User Feedback Flow
 
-**Current:** Returns full ID arrays: `downloaded_ids` (20-40 IDs), `notes_ids` (15-25 IDs), `no_content` (5-20 IDs), `abstract_only` (0-10 IDs). These arrays are useful for debugging but the orchestrator only needs counts.
+When the user runs `/deep-research-revision` with feedback:
 
-**Change:** Add `--brief` flag that replaces ID arrays with counts:
-- `downloaded_ids` → `sources_downloaded` (count, already present)
-- `notes_ids` → `sources_with_notes` (count, already present)
-- `no_content` → `no_content_count`
-- `abstract_only` → `abstract_only_count`
-- Keep: `degraded_quality` and `mismatched_content` as arrays (small, and the orchestrator needs to know *which* sources are problematic)
-- Keep: `findings_by_question`, `sparse_questions`, `gaps`, `methodology`, `warnings` (all decision-relevant)
+```
+/deep-research-revision ./deep-research-credit-cards
+User: "Section 3 is too detailed — cut it to 2 paragraphs.
+       Also, the recommendation to use X ignores the cost constraint I mentioned."
+```
 
-**Why keep degraded/mismatched as arrays:** The orchestrator passes mismatched source IDs to the gap-mode source-acquisition agent (step 13 in SKILL.md). These are typically 0-5 IDs — small, and the orchestrator needs the specific IDs, not just a count.
+The revision orchestrator:
+1. Parses user feedback into structured directives
+2. Adds them to the Pass 1 revision instructions under a "User feedback" header
+3. The reviser treats user feedback as highest priority (above reviewer issues)
+4. The manifest explicitly tracks which user feedback items were addressed
 
-### 5. Update SKILL.md
+This also means the user can run `/deep-research-revision` with *only* user feedback (no automated review) for quick iterations. The orchestrator should detect "no automated review needed" when the user's feedback is purely about content direction, not accuracy.
 
-Update workflow references to use compact variants:
-- Step 8 (mark-read): Note that `state sources --compact` is sufficient for source listing
-- Step 12 (audit): Recommend `state audit --brief` for the pre-synthesis check
-- Step 14a (synthesis handoff): Use `state summary --write-handoff` instead of `state summary`, pass the file path to the synthesis-writer
-- "Keep in your context" section: Note compact variants
+## What Stays the Same
 
-### 6. Update source-acquisition.md
+- All research infrastructure (state.py, search, download scripts)
+- All research-phase agents (source-acquisition, research-reader, findings-logger, brief-writer)
+- The synthesis-writer agent (still does initial drafting)
+- The three reviewer agents (synthesis-reviewer, research-verifier, style-reviewer)
+- Session directory structure
+- State database schema
 
-The source-acquisition agent runs in its own context, so it can use the full (non-compact) variants. No changes needed — but add a note that `--compact` exists in case the agent wants to use it for its own context management on large sessions.
+## File Changes
 
-## Expected Impact
+### New files:
+- `skills/deep-research-revision/SKILL.md` — revision orchestrator prompt
+- `agents/report-reviser.md` — dedicated revision agent prompt
 
-| Command | Current output | With compaction | Savings per call |
-|---------|---------------|-----------------|------------------|
-| `state sources` (30 sources) | ~15KB | ~3KB (`--compact`) | ~12KB |
-| `state sources` (50 sources) | ~30KB | ~5KB (`--compact`) | ~25KB |
-| `state summary` (20 findings) | ~10KB | ~1.5KB (`--compact`) | ~8.5KB |
-| `state summary` (synthesis handoff) | ~10KB in context | ~200B in context | ~10KB |
-| `state audit` (25 sources) | ~4KB | ~2KB (`--brief`) | ~2KB |
+### Modified files:
+- `skills/deep-research/SKILL.md` — remove steps 14b-14d, add "draft complete" ending
+- `copy-to-skills.sh` — add the new skill directory to the copy list
 
-Over a full session (3-5 `sources` calls + 1-2 `summary` calls + 1 `audit` call): **~50-100KB total savings** from the orchestrator's context. At ~4 tokens per character, that's **~12-25K tokens** freed — enough for several more tool calls or agent coordination rounds.
+### Unchanged files:
+- `agents/synthesis-writer.md` — still does initial drafting only
+- `agents/synthesis-reviewer.md` — unchanged
+- `agents/style-reviewer.md` — unchanged
+- `agents/research-verifier.md` — unchanged
+- `agents/brief-writer.md` — unchanged
+- `agents/source-acquisition.md` — unchanged
+- `agents/research-reader.md` — unchanged
+- `agents/findings-logger.md` — unchanged
+- All scripts in `skills/deep-research/scripts/` — unchanged
 
-## Implementation Order
+## Open Questions
 
-1. `state sources --compact` + `--fields` — highest frequency, biggest per-call savings
-2. `state summary --write-handoff` — biggest single-call savings, directly unblocks the synthesis bottleneck
-3. `state summary --compact` — used for coverage assessment between read/synthesis phases
-4. `state audit --brief` — smallest impact but trivial to implement
-5. SKILL.md updates — reference new flags in the workflow
-6. Copy to `.claude/` via `./copy-to-skills.sh` and test
+1. **Should `/deep-research-revision` support multiple rounds?** E.g., user reviews the revised report, gives more feedback, runs revision again. The current design supports this naturally (it just reads whatever `report.md` is on disk), but should we explicitly version drafts (`report_v1.md`, `report_v2.md`) for audit trail?
+
+2. **Should the revision orchestrator auto-detect when to skip style review?** If the accuracy pass found zero issues and the user's feedback was content-only, the style pass might be redundant if it already ran once. But this adds complexity — probably better to always run both passes and let the style reviewer return zero issues if the text is clean.
+
+3. **Should the reviser have access to source files?** The current design gives it Read access to `notes/` and `sources/metadata/` so it can verify claims when fixing accuracy issues. But giving it access to full source text (`sources/src-NNN.md`) risks context bloat. Probably: metadata + notes yes, full source text no — if it needs the full source, flag as unresolved.
