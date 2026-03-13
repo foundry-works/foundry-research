@@ -166,6 +166,7 @@ def _handle_retry_sync(session_dir: str) -> None:
         # Recover quality from metadata JSON if available
         metadata_dir = os.path.join(sources_dir, "metadata")
         meta_file = os.path.join(metadata_dir, f"{sid}.json")
+        meta = {}
         if os.path.exists(meta_file):
             try:
                 meta = json.loads(Path(meta_file).read_text(encoding="utf-8"))
@@ -174,6 +175,44 @@ def _handle_retry_sync(session_dir: str) -> None:
                 result["quality"] = "ok"
         else:
             result["quality"] = "ok"
+
+        # Re-verify content for sources that look "ok" — catches files
+        # downloaded before mismatch/paywall detection was added.
+        if result["quality"] == "ok" and os.path.exists(md_file):
+            try:
+                content = Path(md_file).read_text(encoding="utf-8")
+                # Paywall / structural quality check
+                qa = assess_quality(content)
+                if qa["quality"] != "ok":
+                    result["quality"] = qa["quality"]
+                    result["quality_details"] = qa["quality_details"]
+                    meta["quality"] = qa["quality"]
+                    meta["quality_details"] = qa["quality_details"]
+                # Semantic mismatch check against expected metadata
+                title = meta.get("title", "")
+                authors = meta.get("authors")
+                if result["quality"] == "ok" and (title or authors):
+                    mismatch = check_content_mismatch(
+                        content, title=title, authors=authors,
+                        abstract=meta.get("abstract", ""),
+                    )
+                    if mismatch["mismatched"]:
+                        result["quality"] = "mismatched"
+                        meta["quality"] = "mismatched"
+                        meta["quality_details"] = {
+                            "reason": mismatch["reason"],
+                            "title_hits": mismatch["title_hits"],
+                            "author_hits": mismatch["author_hits"],
+                        }
+                        log(f"Retry-sync mismatch for {sid}: {mismatch['reason']}", level="warn")
+                # Persist updated quality back to metadata JSON
+                if meta.get("quality") and os.path.exists(meta_file):
+                    Path(meta_file).write_text(
+                        json.dumps(meta, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+            except OSError:
+                pass  # content unreadable — keep whatever quality we had
 
         if _sync_to_state(session_dir, result):
             synced.append(sid)
@@ -418,6 +457,11 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
         meta["pdf_url"] = meta.get("pdf_url") or ""
     if result.get("content_file"):
         meta["content_file"] = result["content_file"]
+    # Persist quality assessment so retry-sync can recover it from the JSON
+    if result.get("quality"):
+        meta["quality"] = result["quality"]
+    if result.get("quality_details"):
+        meta["quality_details"] = result["quality_details"]
     write_source_metadata(metadata_dir, source_id, meta)
 
     # Auto-enrich from Crossref if DOI available and metadata is sparse

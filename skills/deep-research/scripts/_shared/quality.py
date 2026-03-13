@@ -9,11 +9,32 @@ _MIN_SENTENCE_COUNT = 3  # at least 3 sentences for "ok"
 _MIN_LINEBREAKS_PER_CHARS = 500  # <1 break per 500 chars → degraded
 _MAX_NON_ALPHA_RATIO = 0.20  # >20% non-alphanumeric → degraded
 
+# Paywall / access-gate markers — case-insensitive substrings scanned in first 50 lines.
+# These appear on publisher landing pages served in place of actual paper content.
+_PAYWALL_MARKERS = [
+    "buy article", "buy this article",
+    "subscribe", "subscription required",
+    "log in via an institution", "log in via your institution",
+    "access this article", "access through your institution",
+    "purchase this article", "rent this article",
+    "add to cart",
+    "USD", "EUR", "GBP",  # price tags
+]
+
 # Sentence pattern: starts with uppercase, ends with sentence-ending punctuation
 _SENTENCE_RE = re.compile(r"[A-Z][^.!?]*[.!?]")
 
 # Common punctuation that should NOT count as "non-alphanumeric junk"
 _NORMAL_PUNCT = set(" \t\n\r.,;:!?'\"-()[]{}/#@&*+=<>|~`^%$_\\")
+
+
+def _detect_paywall(text: str, max_lines: int = 50) -> str:
+    """Return the first paywall marker found in the first *max_lines* lines, or ""."""
+    head = "\n".join(text.split("\n", max_lines)[:max_lines]).lower()
+    for marker in _PAYWALL_MARKERS:
+        if marker.lower() in head:
+            return marker
+    return ""
 
 
 def assess_quality(text: str) -> dict:
@@ -94,12 +115,21 @@ def assess_quality(text: str) -> dict:
         if non_alpha_ratio > _MAX_NON_ALPHA_RATIO:
             reasons.append(f"high non-alphanumeric ratio ({non_alpha_ratio:.2f} > {_MAX_NON_ALPHA_RATIO})")
 
+    # 6. Paywall / access-gate detection (first 50 lines)
+    paywall_hit = _detect_paywall(check_text)
+
     details = {
         "content_length": content_length,
         "alpha_ratio": round(alpha_ratio, 3),
         "sentence_count": sentence_count,
         "reasons": reasons,
     }
+
+    # Paywall pages get their own quality label so downstream can distinguish
+    # access-gate pages from genuinely degraded conversions.
+    if paywall_hit:
+        details["reasons"] = reasons + [f"paywall_page ({paywall_hit})"]
+        return {"quality": "degraded", "quality_details": details}
 
     if not reasons:
         return {"quality": "ok", "quality_details": details}

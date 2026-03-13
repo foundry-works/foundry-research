@@ -123,7 +123,14 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 1. Run `state download-pending --auto-download --batch-size 15` in a loop until `"remaining": 0`. Cap at 3 batch loops to avoid runaway downloads. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
-4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). Use `--min-citations 30` to adjust the threshold. **Important:** `recover-failed` now filters by topical relevance — sources with `relevance_score < 0.3` or zero keyword hits are skipped automatically. This prevents wasting recovery attempts on high-citation but off-topic papers (e.g., eating disorder scales, COVID depression measures that happen to have thousands of citations). If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
+4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
+   - `--min-relevance 0.3` — skips sources whose LLM relevance score is below threshold
+   - `--title-keywords <comma-separated>` — derive 5-10 domain-specific terms from the brief's scope/questions and pass them here; sources whose title contains none of these keywords are skipped
+   - `--min-citations 30` — adjust the citation threshold as needed
+
+   Example: `state recover-failed --min-relevance 0.3 --title-keywords "uncanny,valley,perception,humanoid,robot" --min-citations 30`
+
+   If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
@@ -258,8 +265,8 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 
 ### Recovery
 ```
-{cli_dir}/state recover-failed             # retry failed sources via CORE, Tavily, DOI landing
-{cli_dir}/state recover-failed --min-citations 30
+{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
+{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2" --min-citations 30
 ```
 
 All CLI commands exit 0 and return JSON: `{"status": "ok", ...}` or `{"status": "error", "errors": [...]}`. Parse the JSON — don't grep for text patterns.

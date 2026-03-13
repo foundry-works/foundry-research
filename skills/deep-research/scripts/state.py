@@ -1657,6 +1657,11 @@ def cmd_recover_failed(args):
     conn.close()
 
     sources_dir = os.path.join(args.session_dir, "sources")
+    # Parse CLI-supplied title keywords for filtering
+    min_relevance = getattr(args, "min_relevance", 0.3)
+    title_kw_arg = getattr(args, "title_keywords", "") or ""
+    title_keywords = [k.strip().lower() for k in title_kw_arg.split(",") if k.strip()]
+
     failed = []
     for r in rows:
         sid_val = r["id"]
@@ -1672,11 +1677,17 @@ def cmd_recover_failed(args):
         rel_score = r["relevance_score"]
         keyword_hits = sum(1 for t in question_terms if t in title) if question_terms else 0
 
-        # Skip sources that LLM relevance scoring identified as off-topic.
+        # --min-relevance gate: skip sources scored below threshold.
         # Without an LLM score, fall back to keyword hits as a weaker signal.
-        if rel_score is not None and rel_score < 0.3:
+        if rel_score is not None and rel_score < min_relevance:
             continue
         if rel_score is None and keyword_hits == 0 and question_terms:
+            continue
+
+        # --title-keywords gate: if caller supplied keywords, require at
+        # least one match in the source title to avoid recovering off-topic
+        # high-citation papers (e.g., PRISMA guidelines, COVID burden studies).
+        if title_keywords and not any(kw in title for kw in title_keywords):
             continue
 
         # High-priority: citation_count > threshold OR high title relevance
@@ -2191,6 +2202,10 @@ def main():
     # recover-failed
     p = sub.add_parser("recover-failed")
     p.add_argument("--min-citations", type=int, default=50, help="Minimum citations to consider high-priority (default 50)")
+    p.add_argument("--min-relevance", type=float, default=0.3,
+                   help="Skip sources with relevance_score below this threshold (default 0.3)")
+    p.add_argument("--title-keywords", type=str, default="",
+                   help="Comma-separated keywords; require at least one match in source title to attempt recovery")
     p.add_argument("--session-dir", **_sd)
 
     # sync-files
