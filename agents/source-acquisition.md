@@ -22,6 +22,10 @@ These rules prevent the most common token-wasting failure modes. Follow them str
 
 5. **When a command fails, inspect before retrying** — Run the command once, read the raw output, then adjust. Don't retry with different arguments hoping something sticks.
 
+6. **Never query state.db directly** — Don't run `python3 -c "import sqlite3; ..."` to read from the database. Every query you need is available through `state` subcommands (`state sources`, `state searches`, `state triage`, `state manifest`, etc.). Raw sqlite bypasses the CLI's JSON envelope, skips on-disk consistency checks, and wastes tokens on boilerplate connection code.
+
+7. **Don't pre-filter CLI output with `grep '^{'`** — The CLI always prints JSON to stdout and logs to stderr. Just run the command and parse stdout directly. If you need a specific field, use a single `python3 -c "import sys,json; print(json.load(sys.stdin)['results']['field'])"` pipe — not `grep | python3 -c` chains.
+
 **Why you exist:** Search is the biggest token sink in the research pipeline. Each search returns 2-80KB of JSON that persists in the orchestrator's context through compression. With 15-20 searches plus repeated `state sources` queries, search-phase data accounts for ~60% of the orchestrator's input tokens. By running searches in your own context, you save the orchestrator ~120K tokens per session.
 
 ## What you receive
@@ -388,52 +392,36 @@ These are the actual JSON structures returned by the commands you parse most oft
 
 After completing all search rounds, triage, and downloads, return a **compact JSON manifest only**. Do not narrate what you did — the journal has the details, state.db has the data.
 
-**How to build the manifest:** Run a single command:
-```
-{cli_dir}/state manifest --mode initial --top 30
-```
-This queries all tables in one readonly connection and returns the complete manifest JSON (searches, sources, downloads, triage tiers, top papers, coverage assessment, gaps, citation chasing). For gap mode, use `--mode gap`. The examples below document what the command returns — add `content_validation` results from your post-download validation step.
+**How to build the manifest:**
+
+1. Run `{cli_dir}/state manifest --mode initial --top 30` (or `--mode gap` for gap mode). This is a single readonly query that returns all the numbers you need — do NOT run separate `state sources`, `state triage`, `state searches` commands to assemble the manifest yourself.
+2. Parse the `results` object from the command output.
+3. Add `"mode": "initial"` (or `"gap"`) and your `content_validation` results from the post-download validation step.
+4. Return the merged JSON as your response. That's it — no manual assembly needed.
 
 ### Initial mode manifest
+
+The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode` and `content_validation`:
+
 ```json
 {
-  "status": "ok",
   "mode": "initial",
   "searches_run": 18,
   "sources_found": 142,
   "sources_after_dedup": 89,
-  "provider_distribution": {
-    "semantic_scholar": 34,
-    "openalex": 28,
-    "pubmed": 19,
-    "tavily": 8
-  },
-  "downloads": {
-    "success": 52,
-    "failed": 12,
-    "remaining": 0
-  },
-  "triage_tiers": {
-    "high": 22,
-    "medium": 18,
-    "low": 31,
-    "skip": 18
-  },
+  "provider_distribution": {"semantic_scholar": 34, "openalex": 28, "pubmed": 19, "tavily": 8},
+  "downloads": {"success": 52, "failed": 12, "remaining": 0},
+  "triage_tiers": {"high": 22, "medium": 18, "low": 31, "skip": 18},
   "top_papers": [
-    {"id": "src-012", "title": "...", "citations": 340, "provider": "semantic_scholar"},
-    {"id": "src-045", "title": "...", "citations": 210, "provider": "openalex"}
+    {"id": "src-012", "title": "...", "citations": 340, "provider": "semantic_scholar"}
   ],
   "coverage_assessment": {
-    "Q1: What mechanisms drive X?": "strong (8 candidate sources)",
+    "Q1: What mechanisms drive X?": "strong (8 sources)",
     "Q2: How does Y vary across Z?": "moderate (4 sources)",
-    "Q4: What are the tradeoffs?": "thin (1 source, gap logged)"
+    "Q4: What are the tradeoffs?": "thin (1 source)"
   },
   "gaps_logged": ["gap-1: Q4 has insufficient coverage after 2 search rounds"],
-  "citation_chasing": {
-    "papers_chased": 4,
-    "traversals_run": 6,
-    "sources_from_chasing": 23
-  },
+  "citation_chasing": {"traversals_run": 6, "sources_from_chasing": 23},
   "content_validation": {
     "checked": 25,
     "valid": 18,
@@ -445,9 +433,11 @@ This queries all tables in one readonly connection and returns the complete mani
 ```
 
 ### Gap mode manifest
+
+The `state manifest --mode gap` command returns `gaps_addressed`, `gaps_potentially_resolved`, `gaps_potentially_resolved_ids`, `gaps_unresolvable`, `new_sources`, `new_downloads`. You add `mode`, `known_mismatches_excluded` (from your input), and `applicability_searches` (count of searches you ran for applicability targets):
+
 ```json
 {
-  "status": "ok",
   "mode": "gap",
   "gaps_addressed": 3,
   "gaps_potentially_resolved": 2,
