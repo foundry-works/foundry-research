@@ -133,6 +133,8 @@ This scores source abstracts against the research brief using Haiku, writing `re
 
 **If it fails:** The script exits with a JSON error envelope. Triage will fall back to keyword matching automatically — LLM scoring is an enhancement, not a hard requirement.
 
+---
+
 ## Triage
 
 After LLM relevance scoring, run `state triage` to rank sources by citation count × relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
