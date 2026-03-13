@@ -2,11 +2,11 @@
 
 ## 1. Download Content Mismatch Detection
 
-- [ ] **1a.** Add `brief_keywords: list[str] | None = None` parameter to `check_content_mismatch()` in `quality.py`
-- [ ] **1b.** Add brief-keyword gate: if `brief_keywords` provided and zero match in `text[:2000]` AND `title_hits < 3`, set `mismatched = True`
-- [ ] **1c.** Lower abstract-overlap threshold from `title_hits < 3` to `title_hits < 2` (line 239)
-- [ ] **1d.** In `download.py`, read brief keywords from state.db (query brief JSON, extract scope/questions, run `_extract_keywords`)
-- [ ] **1e.** Pass extracted brief keywords to `check_content_mismatch()` calls (3 call sites: lines ~195, ~551, ~845)
+- [x] **1a.** Add `brief_keywords: list[str] | None = None` parameter to `check_content_mismatch()` in `quality.py`
+- [x] **1b.** Add brief-keyword gate: if `brief_keywords` provided and zero match in `text[:2000]` AND `title_hits < 3`, set `mismatched = True`
+- [x] **1c.** Lower abstract-overlap threshold from `title_hits < 3` to `title_hits < 2` (line 239)
+- [x] **1d.** In `download.py`, read brief keywords from state.db (query brief JSON, extract scope/questions, run `_extract_keywords`)
+- [x] **1e.** Pass extracted brief keywords to `check_content_mismatch()` calls (3 call sites: lines ~195, ~551, ~845)
 - [ ] **1f.** Add test: mock a brief with domain keywords, download content with zero domain overlap → expect mismatched
 - [ ] **1g.** Add test: on-topic content with brief keyword hits → expect not mismatched
 

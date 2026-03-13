@@ -163,6 +163,7 @@ def check_content_mismatch(
     title: str = "",
     authors: list[str] | None = None,
     abstract: str = "",
+    brief_keywords: list[str] | None = None,
 ) -> dict:
     """Check if extracted text plausibly matches expected metadata.
 
@@ -233,11 +234,23 @@ def check_content_mismatch(
     # Abstract-keyword gate: even if title/author passed, flag as mismatched
     # when abstract overlap is very low AND title match is weak.
     # This catches papers that share generic title words but are off-topic.
-    # Threshold: title_hits < 3 because generic words (children, behavior,
-    # measurement) easily produce 2 hits on completely wrong papers.
+    # Threshold: title_hits < 2 because even 2 hits from generic words
+    # (children, behavior, measurement) appear on completely wrong papers.
     if (not mismatched and abstract_overlap is not None
-            and abstract_overlap < 0.2 and title_hits < 3):
+            and abstract_overlap < 0.2 and title_hits < 2):
         mismatched = True
+
+    # Brief-keyword gate: if the research brief's domain-specific keywords
+    # don't appear anywhere in the first 2000 chars, the paper is likely
+    # off-topic — even if title words matched (common domain words cause
+    # false passes, e.g. "uncanny valley" in geology vs. psychology).
+    # Only flags when title match is also weak to avoid false positives
+    # on genuinely relevant papers with unusual introductions.
+    if (not mismatched and brief_keywords and title_hits < 3):
+        text_head = text[:2000].lower()
+        brief_hits = sum(1 for kw in brief_keywords if kw.lower() in text_head)
+        if brief_hits == 0:
+            mismatched = True
 
     reason = ""
     if mismatched:
@@ -248,6 +261,8 @@ def check_content_mismatch(
         )
         if abstract_overlap is not None:
             parts.append(f"abstract keyword overlap {abstract_overlap:.0%}")
+        if brief_keywords:
+            parts.append(f"0/{len(brief_keywords)} brief keywords in first 2000 chars")
         reason = f"content may be from wrong paper: {', '.join(parts)}"
 
     return {

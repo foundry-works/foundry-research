@@ -40,6 +40,62 @@ _CAPTCHA_MARKERS = (b"<html", b"captcha", b"<!doctype")
 CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "annas_archive", "scihub"]
 
 
+def _get_brief_keywords(session_dir: str) -> list[str]:
+    """Extract domain-specific keywords from the research brief in state.db.
+
+    Returns a short list of high-signal terms drawn from the brief's scope
+    and questions. These are used by check_content_mismatch() to catch
+    off-topic papers that slip past title/author matching (e.g., a geology
+    paper matching "uncanny valley" title words in a psychology session).
+    """
+    import sqlite3
+    from _shared.quality import _extract_keywords
+
+    db_path = os.path.join(session_dir, "state.db")
+    if not os.path.exists(db_path):
+        return []
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT scope, questions FROM brief LIMIT 1"
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return []
+
+    if not row:
+        return []
+
+    # Combine scope + question text into one blob for keyword extraction
+    parts = [row["scope"] or ""]
+    try:
+        questions = json.loads(row["questions"]) if row["questions"] else []
+        for q in questions:
+            if isinstance(q, str):
+                parts.append(q)
+            elif isinstance(q, dict):
+                parts.append(q.get("question", "") or q.get("text", ""))
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    combined = " ".join(parts)
+    if not combined.strip():
+        return []
+
+    # Extract keywords, deduplicate, prefer longer (more domain-specific) terms
+    kws = _extract_keywords(combined)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for kw in sorted(kws, key=len, reverse=True):
+        if kw not in seen:
+            seen.add(kw)
+            unique.append(kw)
+    # Cap at 15 — enough to cover domain terms without noise
+    return unique[:15]
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Download web content, PDFs, or run multi-source PDF cascade.",
@@ -129,6 +185,7 @@ def _handle_retry_sync(session_dir: str) -> None:
         return
 
     sources_dir = os.path.join(session_dir, "sources")
+    brief_keywords = _get_brief_keywords(session_dir)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
@@ -148,7 +205,7 @@ def _handle_retry_sync(session_dir: str) -> None:
         md_file = os.path.join(sources_dir, f"{sid}.md")
         pdf_file = os.path.join(sources_dir, f"{sid}.pdf")
 
-        result = {"source_id": sid}
+        result = {"source_id": sid, "_brief_keywords": brief_keywords}
         has_file = False
 
         if os.path.exists(md_file):
@@ -195,6 +252,7 @@ def _handle_retry_sync(session_dir: str) -> None:
                     mismatch = check_content_mismatch(
                         content, title=title, authors=authors,
                         abstract=meta.get("abstract", ""),
+                        brief_keywords=brief_keywords,
                     )
                     if mismatch["mismatched"]:
                         result["quality"] = "mismatched"
@@ -331,6 +389,11 @@ def main() -> None:
         _handle_retry_sync(session_dir)
         return
 
+    # Fetch brief keywords once for content mismatch detection
+    brief_keywords = _get_brief_keywords(session_dir)
+    if brief_keywords:
+        log(f"Brief keywords for mismatch detection: {brief_keywords[:5]}...")
+
     # Sources directory
     sources_dir = os.path.join(session_dir, "sources")
     metadata_dir = os.path.join(sources_dir, "metadata")
@@ -340,11 +403,13 @@ def main() -> None:
     if args.local_dir:
         result = _handle_local_dir(args, session_dir, sources_dir, metadata_dir)
     elif args.from_json:
-        result = _handle_batch(args, session_dir, sources_dir, metadata_dir, config)
+        result = _handle_batch(args, session_dir, sources_dir, metadata_dir, config,
+                               brief_keywords=brief_keywords)
     else:
         client = create_session(session_dir)
         try:
-            result = _handle_single(args, client, session_dir, sources_dir, metadata_dir, config)
+            result = _handle_single(args, client, session_dir, sources_dir, metadata_dir, config,
+                                    brief_keywords=brief_keywords)
         finally:
             client.close()
 
@@ -392,7 +457,8 @@ def main() -> None:
 
 def _handle_single(args, client, _session_dir: str, sources_dir: str,
                    metadata_dir: str, config: dict,
-                   cancel: threading.Event | None = None) -> dict:
+                   cancel: threading.Event | None = None,
+                   brief_keywords: list[str] | None = None) -> dict:
     """Handle a single download (URL, PDF URL, DOI, or arXiv)."""
     source_id = args.source_id
     if not source_id:
@@ -427,6 +493,7 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
     result["_expected_title"] = meta.get("title", "")
     result["_expected_authors"] = meta.get("authors", [])
     result["_expected_abstract"] = meta.get("abstract", "")
+    result["_brief_keywords"] = brief_keywords or []
 
     if args.url:
         _download_web(args.url, source_id, client, sources_dir, meta, result)
@@ -548,7 +615,11 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
         title = meta.get("title", "")
         authors = meta.get("authors")
         if result["quality"] == "ok" and (title or authors):
-            mismatch = check_content_mismatch(content, title=title, authors=authors, abstract=meta.get("abstract", ""))
+            mismatch = check_content_mismatch(
+                content, title=title, authors=authors,
+                abstract=meta.get("abstract", ""),
+                brief_keywords=result.get("_brief_keywords"),
+            )
             if mismatch["mismatched"]:
                 result["quality"] = "mismatched"
                 details = result.get("quality_details") or {}
@@ -842,7 +913,10 @@ def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result:
             try:
                 from pathlib import Path as _Path
                 md_text = _Path(md_path).read_text(encoding="utf-8")
-                mismatch = check_content_mismatch(md_text, title=title, authors=authors, abstract=abstract)
+                mismatch = check_content_mismatch(
+                    md_text, title=title, authors=authors, abstract=abstract,
+                    brief_keywords=result.get("_brief_keywords"),
+                )
                 if mismatch["mismatched"]:
                     result["quality"] = "mismatched"
                     details = result.get("quality_details") or {}
@@ -1161,7 +1235,7 @@ def _make_batch_args(item: dict, to_md: bool) -> argparse.Namespace:
 
 
 def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
-                  config: dict) -> list:
+                  config: dict, brief_keywords: list[str] | None = None) -> list:
     """Handle batch downloads from a JSON file.
 
     Supports --parallel N for concurrent downloads (default 1 = serial).
@@ -1181,7 +1255,8 @@ def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
     parallel = getattr(args, "parallel", 1) or 1
 
     if parallel > 1 and len(items) > 1:
-        return _handle_batch_parallel(items, args, session_dir, sources_dir, metadata_dir, config, parallel)
+        return _handle_batch_parallel(items, args, session_dir, sources_dir, metadata_dir, config, parallel,
+                                      brief_keywords=brief_keywords)
 
     # Serial path
     results = []
@@ -1190,7 +1265,8 @@ def _handle_batch(args, session_dir: str, sources_dir: str, metadata_dir: str,
         for i, item in enumerate(items):
             log(f"Batch download {i + 1}/{len(items)}")
             batch_args = _make_batch_args(item, args.to_md)
-            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config)
+            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config,
+                                    brief_keywords=brief_keywords)
             results.append(result)
     finally:
         client.close()
@@ -1202,7 +1278,8 @@ _BATCH_ITEM_TIMEOUT = 300  # 5 minutes max per item in parallel batch
 
 
 def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str,
-                           metadata_dir: str, config: dict, max_workers: int) -> list:
+                           metadata_dir: str, config: dict, max_workers: int,
+                           brief_keywords: list[str] | None = None) -> list:
     """Download batch items in parallel using ThreadPoolExecutor."""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 
@@ -1217,7 +1294,8 @@ def _handle_batch_parallel(items: list, args, session_dir: str, sources_dir: str
             item_start = time.monotonic()
             log(f"Batch download {index + 1}/{len(items)} (parallel)")
             batch_args = _make_batch_args(item, args.to_md)
-            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config, cancel=cancel)
+            result = _handle_single(batch_args, client, session_dir, sources_dir, metadata_dir, config,
+                                   cancel=cancel, brief_keywords=brief_keywords)
             elapsed = time.monotonic() - item_start
             if elapsed > _BATCH_ITEM_TIMEOUT:
                 log(f"Batch item {index + 1} took {elapsed:.0f}s (>{_BATCH_ITEM_TIMEOUT}s limit)", level="warn")
