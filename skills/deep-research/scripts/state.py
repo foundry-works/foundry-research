@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS sources (
     pdf_file TEXT,
     is_read INTEGER DEFAULT 0,
     tags TEXT DEFAULT '[]',
-    quality REAL,
+    quality TEXT,
     relevance_score REAL,
     relevance_rationale TEXT,
     status TEXT DEFAULT 'pending',
@@ -502,13 +502,15 @@ def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict) -> dic
     source_id = _next_id(conn, "sources", "src", session_id)
     conn.execute(
         """INSERT INTO sources (id, session_id, title, authors, year, abstract, doi, url,
-           pdf_url, venue, citation_count, type, provider, content_file, pdf_file, added_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           pdf_url, venue, citation_count, type, provider, content_file, pdf_file,
+           relevance_score, added_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (source_id, session_id, title, json.dumps(authors), year,
          data.get("abstract"), doi, url, data.get("pdf_url"),
          data.get("venue"), data.get("citation_count"),
          data.get("type", "academic"), data.get("provider", "unknown"),
-         data.get("content_file"), data.get("pdf_file"), _now())
+         data.get("content_file"), data.get("pdf_file"),
+         data.get("relevance_score"), _now())
     )
     return {"id": source_id, "title": title, "duplicate": False}
 
@@ -2148,7 +2150,7 @@ def main():
     # set-quality
     p = sub.add_parser("set-quality")
     p.add_argument("--id", required=True)
-    p.add_argument("--quality", type=float, required=True)
+    p.add_argument("--quality", type=str, choices=["ok", "abstract_only", "degraded", "mismatched"], required=True)
     p.add_argument("--session-dir", **_sd)
 
     # log-metric

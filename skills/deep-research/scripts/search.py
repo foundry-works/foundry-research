@@ -52,6 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--search-type", default="manual",
                         choices=["manual", "recovery", "citation"],
                         help="Search type for state tracking (default: manual)")
+    parser.add_argument("--brief-keywords", default=None,
+                        help="Comma-separated domain terms from the research brief for title-relevance scoring at ingestion")
     return parser
 
 
@@ -250,6 +252,16 @@ def _add_sources_to_state(args, result: dict) -> None:
 
     if not sources:
         return
+
+    # Compute title-keyword relevance scores when brief keywords are provided
+    brief_kw = getattr(args, "brief_keywords", None)
+    if brief_kw:
+        terms = [t.strip().lower() for t in brief_kw.split(",") if t.strip()]
+        if terms:
+            for src in sources:
+                title_lower = (src.get("title") or "").lower()
+                hits = sum(1 for t in terms if t in title_lower)
+                src["relevance_score"] = round(min(hits / max(len(terms), 1), 1.0), 3)
 
     resp = call_state(
         args.session_dir, "add-sources",

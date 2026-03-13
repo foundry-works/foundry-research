@@ -10,6 +10,22 @@ from _shared.output import error_response, log, success_response
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 RECS_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 
+# Regex for DOI format: 10.NNNN/... — S2 API requires "DOI:" prefix for these
+_DOI_RE = __import__("re").compile(r"^10\.\d{4,}/")
+
+
+def _normalize_paper_id(paper_id: str) -> str:
+    """Ensure paper IDs are in the format S2 API expects.
+
+    S2 accepts its own hex IDs as-is, but DOIs must be prefixed with 'DOI:'.
+    Raw DOIs (e.g. '10.1234/abc') get auto-prefixed; already-prefixed IDs
+    like 'DOI:10.1234/abc' or 'ARXIV:2301.12345' pass through unchanged.
+    """
+    if _DOI_RE.match(paper_id):
+        return f"DOI:{paper_id}"
+    return paper_id
+
+
 PAPER_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,tldr,venue,journal"
 # Citations, references, and recommendations endpoints don't support tldr
 CITATION_FIELDS = "paperId,title,abstract,authors,citationCount,year,externalIds,url,openAccessPdf,venue,journal"
@@ -94,7 +110,7 @@ def _keyword_search(client, args) -> dict:
 
 
 def _forward_citations(client, args) -> dict:
-    paper_id = args.cited_by
+    paper_id = _normalize_paper_id(args.cited_by)
     url = f"{BASE_URL}/paper/{paper_id}/citations"
     params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
 
@@ -134,7 +150,7 @@ def _forward_citations(client, args) -> dict:
 
 
 def _backward_references(client, args) -> dict:
-    paper_id = args.references
+    paper_id = _normalize_paper_id(args.references)
     url = f"{BASE_URL}/paper/{paper_id}/references"
     params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
 
@@ -163,7 +179,7 @@ def _backward_references(client, args) -> dict:
 
 
 def _get_recommendations(client, args) -> dict:
-    paper_id = args.recommendations
+    paper_id = _normalize_paper_id(args.recommendations)
     url = f"{RECS_URL}/forpaper/{paper_id}"
     params = {"fields": CITATION_FIELDS, "limit": args.limit}
 

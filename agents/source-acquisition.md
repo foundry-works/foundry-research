@@ -46,9 +46,12 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 
 ### Round 2: Citation chasing (mandatory if round 1 found papers with >50 citations)
 - Identify 3-5 high-impact papers from round 1 (high citation count, seminal reviews)
-- Run **minimum 3 citation traversal searches** before proceeding
+- **Run both directions on each paper:** For each high-impact paper, run `--cited-by` (forward) AND `--references` (backward). These are complementary — references find the paper's intellectual lineage, cited-by finds how the field evolved after it. Running only one direction misses half the network.
+- Run **minimum 3 citation traversal searches** before proceeding (e.g., 2 papers × 2 directions = 4 searches)
 - **`--references`** (backward) — the paper's own bibliography. High precision, stable. Default strategy.
 - **`--cited-by`** (forward) — papers that cited it. Recency-biased. For foundational papers (200+ citations), use `--min-citations N` to filter noise.
+- **For literature review topics** (systematic reviews, state-of-the-field, measurement/instrument research), citation chasing should account for **30-50% of total search effort.** These topics have well-connected citation networks where traversal finds more relevant sources per search than keyword queries. A session with 20 searches should have 6-10 citation traversals.
+- **Paper ID format:** Pass the S2 paper ID (40-char hex, visible in the `id` field of Semantic Scholar results) or a DOI. Raw DOIs like `10.1234/abc` are auto-prefixed to `DOI:10.1234/abc` by the search CLI. S2 hex IDs and already-prefixed identifiers (`DOI:...`, `ARXIV:...`) pass through unchanged.
 - **Fallback tree** when citation traversal returns 0: retry `--cited-by` without `--min-citations` → try `--references` → fall back to keyword search with paper's exact title
 - **CORE title lookups:** When searching CORE by exact paper title (citation chasing fallback), always pass `--title-mode`. CORE's full-text tokenizer chokes on colons, hyphens, and long subtitles — `--title-mode` strips these before querying, improving hit rate from ~50% to ~90%.
 
@@ -86,6 +89,8 @@ Before running broad searches, extract 5-8 key domain terms from the research br
 After each search round, spot-check result titles against these domain terms. If a search returned mostly titles with zero domain-term overlap, the query was too broad — refine it rather than running more broad searches. A 100-source database with 80% relevance is far more useful than a 724-source database with 10% relevance.
 
 **Why filter early:** Off-topic sources pollute triage rankings, waste download bandwidth, and inflate source counts that give false confidence about coverage. LLM relevance scoring (run later) catches subtler mismatches, but early query refinement catches the obvious 90% of noise for free. The goal is fewer, better searches — not more searches with post-hoc cleanup.
+
+**Pass `--brief-keywords` on every search call.** After extracting 5-8 domain terms above, join them comma-separated and pass as `--brief-keywords "term1,term2,term3"` to every `search.py` invocation. This scores each result's title against the brief at ingestion time, writing `relevance_score` into `state.db`. Sources with zero keyword overlap still get ingested (no data loss), but their low `relevance_score` deprioritizes them in triage and download rankings. This replaces manual spot-checking for obvious noise — if you see a batch where most sources scored 0.0, refine the query rather than running more broad searches.
 
 ### Provider selection
 - **Biomedical/clinical:** PubMed + bioRxiv; add Semantic Scholar for citation context
@@ -228,6 +233,20 @@ Citation traversal (Semantic Scholar, PubMed only) — `--compact` applies here 
 {cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --limit 10 --compact
 {cli_dir}/search --provider semantic_scholar --references PAPER_ID --limit 10 --compact
 {cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --min-citations 20 --limit 10 --compact
+```
+
+**Citation chasing workflow example:** After round 1 finds a seminal paper (e.g., src-012, "Uncanny Valley Revisited", 440 citations, S2 ID `a1b2c3d4...`):
+```
+# Forward: who cited this paper? (filter for quality with --min-citations)
+{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --min-citations 20 --limit 20 --compact
+# Backward: what did this paper cite? (its bibliography)
+{cli_dir}/search --provider semantic_scholar --references a1b2c3d4e5f6... --limit 20 --compact
+# If you only have a DOI (raw DOIs are auto-prefixed to DOI:10.xxx):
+{cli_dir}/search --provider semantic_scholar --cited-by 10.1016/j.cognition.2012.04.007 --limit 20 --compact
+# If --cited-by returns 0 with --min-citations, retry without the filter:
+{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --limit 20 --compact
+# Last resort: keyword search with the paper's exact title
+{cli_dir}/search --provider semantic_scholar --query "Uncanny Valley Revisited" --limit 10 --compact
 ```
 
 Common flags: `--limit N`, `--offset N`, `--year-range YYYY-YYYY`, `--open-access-only`, `--min-citations N`

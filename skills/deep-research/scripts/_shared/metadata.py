@@ -107,6 +107,7 @@ def normalize_paper(raw: dict, provider: str) -> dict:
 
 
 def _normalize_semantic_scholar(paper: dict, raw: dict) -> dict:
+    paper["id"] = raw.get("paperId", "")
     paper["title"] = raw.get("title", "")
     paper["doi"] = (raw.get("externalIds") or {}).get("DOI", "") or raw.get("doi", "")
     paper["url"] = raw.get("url", "")

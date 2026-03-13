@@ -74,9 +74,20 @@ Structure:
 [Honest accounting of sources, coverage, approach]
 
 ## References
-[1] Author(s). "Title." Venue, Year. URL
+[1] Author(s). "Title." Venue, Year. URL/DOI
 [2] ...
 ```
+
+### Building the references list
+
+**Every field must come from `sources/metadata/src-NNN.json` — never from memory or training data.** Author names, titles, venues, and years are especially prone to subtle hallucination (e.g., inventing co-authors, slightly altering a title). Even if you "know" the paper, the metadata file is the single source of truth because the user downloaded and verified it.
+
+For each cited source:
+1. Read the corresponding `sources/metadata/src-NNN.json`
+2. Extract `authors`, `title`, `year`, `venue`, and `doi`/`url` directly from the JSON fields
+3. Format the reference using exactly those values
+
+If a metadata file is missing or has incomplete fields (e.g., no authors, no venue), write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
 
 ## Return value
 
