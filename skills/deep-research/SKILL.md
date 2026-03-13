@@ -76,7 +76,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
 10. **Delegate findings logging to findings-logger agents (one per question, parallel, foreground — see rule 1).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently and all return before your next turn. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
 11. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
-12. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
+12. `${CLAUDE_SKILL_DIR}/state audit --brief` — check coverage, identify gaps, get methodology stats. The `--brief` flag returns counts instead of full ID arrays, saving context. Use full `audit` (without `--brief`) only when you need to debug specific source IDs.
 13. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
 
     **When to skip gap-mode:** If ALL of the following are true, gap-mode may be skipped:
@@ -119,14 +119,16 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     All synthesis agents must be **foreground** (see rule 1). The reviewer and verifier can take 5-10 minutes each — foreground calls handle this gracefully. To parallelize the reviewer + verifier + style-reviewer, put all three Agent calls in one response message.
 
-    **a. Hand off to synthesis-writer.** Spawn a `synthesis-writer` subagent with:
+    **a. Hand off to synthesis-writer.** First, run `${CLAUDE_SKILL_DIR}/state summary --write-handoff` — this writes the full structured data (findings, gaps, sources, brief) to `synthesis-handoff.json` and returns only the file path and counts. Then spawn a `synthesis-writer` subagent with:
     - The session directory path (absolute)
     - The research brief (scope, questions, completeness criteria)
-    - The **raw `state summary` JSON output** — specifically the `findings` array with source citations and the `gaps` array. This is the evidence backbone; don't compress it into a narrative paragraph.
-    - A **narrative key findings summary** alongside the structured data — your interpretation of patterns, contradictions, and relative strength of evidence across questions.
+    - The **path to `synthesis-handoff.json`** — tell the writer to read this file for the structured findings array with source citations and the gaps array. This is the evidence backbone.
+    - A **narrative key findings summary** — your interpretation of patterns, contradictions, and relative strength of evidence across questions. You write this from what you already know (reader manifests, gap analysis, quality report, journal entries) — you don't need to re-read the raw findings.
     - Audit stats (from step 12) for the Methodology section
 
-    **Why both structured and narrative:** The structured findings array gives the writer precise evidence with source IDs for citation. The narrative summary gives interpretive context — which findings are strongest, where sources conflict, what the evidence pattern means. Either alone is insufficient: structured data without interpretation produces a list, not a synthesis; narrative without structured data loses citation precision and risks the writer misattributing claims.
+    **Why `--write-handoff`:** The full summary JSON is 5-20KB (findings text, source lists, gap details). The synthesis-writer needs all of it for citation precision, but you don't — you've already lived the research journey and can write your narrative interpretation from memory. `--write-handoff` keeps the structured data out of your context entirely: the writer reads it from disk, you pass only the path (~200 bytes vs. 5-20KB).
+
+    **Why both structured and narrative:** The structured findings in `synthesis-handoff.json` give the writer precise evidence with source IDs for citation. The narrative summary gives interpretive context — which findings are strongest, where sources conflict, what the evidence pattern means. Either alone is insufficient: structured data without interpretation produces a list, not a synthesis; narrative without structured data loses citation precision and risks the writer misattributing claims.
 
     The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
 
@@ -174,7 +176,11 @@ get-source --id src-003           # get source metadata
 update-source --id src-003 --from-json FILE
 searches                          # list all searches
 sources                           # list all sources
+sources --compact                 # return only id, title, quality, content_file (80% smaller)
+sources --fields id,title,doi     # return only specified columns
 summary                           # brief + sources + findings + gaps
+summary --compact                 # counts + coverage indicators only (no findings text/source list)
+summary --write-handoff           # write full summary to synthesis-handoff.json, return path + counts
 download-pending                  # list sources without on-disk content
 download-pending --auto-download  # download pending (--batch-size 15, --parallel 3)
                                   # loop until response "remaining": 0
@@ -183,6 +189,7 @@ triage --top 30                   # adjust how many sources to mark high+medium 
 recover-failed                    # retry failed high-priority sources via CORE, Tavily, DOI landing page
 recover-failed --min-citations 30 # lower citation threshold for recovery eligibility
 audit                             # pre-report coverage & quality check
+audit --brief                     # counts only (no ID arrays except degraded/mismatched)
 audit --strict                    # exit non-zero if warnings found
 ```
 
@@ -221,7 +228,7 @@ audit --strict                    # exit non-zero if warnings found
 
 Each entry should be 3-5 lines, not paragraphs. The goal is breadcrumbs for a compressed context, not a narrative log. **Why mandatory, not "aggressive":** Past sessions logged zero orchestrator-level journal entries despite the "use aggressively" guidance. Vague instructions get optimized away under time pressure. Specific trigger points make the habit structural — you know exactly when to write and what to capture.
 
-**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit` to check source coverage. The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
+**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit --brief` to check source coverage. The `--brief` flag returns counts instead of full ID arrays, saving context — you still get `degraded_quality` and `mismatched_content` as arrays (you need specific IDs for gap-mode). The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
 **Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer, synthesis-reviewer, and research-verifier agents (see step 14 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). The synthesis-reviewer audits for contradictions, unsupported claims, and missing caveats. The research-verifier checks load-bearing claims against primary sources. Your job is to prepare the handoff materials, route feedback between agents, and deliver the final report. **Why delegate:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context focused entirely on integration and narrative, producing better synthesis than you could in a degraded context.
 
@@ -318,7 +325,7 @@ done
 
 **Wait for all reader subagents before spawning findings-loggers or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Spawn findings-logger agents (step 10) only after all readers have completed and you have marked sources as read.
 
-**Keep in your context:** Research brief, agent manifests, coverage assessment, contradiction analysis, and orchestration state. Search data, source content, and report writing are all delegated — keep only the compact returns.
+**Keep in your context:** Research brief, agent manifests, coverage assessment, contradiction analysis, and orchestration state. Search data, source content, and report writing are all delegated — keep only the compact returns. **Use `--compact` and `--brief` variants** for `state sources`, `state summary`, and `state audit` when querying from the orchestrator. Full output variants are for agents that need complete data (source-acquisition, synthesis-writer) or for debugging specific issues.
 
 For small sessions (< 10 sources), do everything inline. Delegation is a scaling strategy, not a requirement.
 

@@ -705,6 +705,27 @@ def cmd_sources(args):
         success_response({p["provider"]: p["count"] for p in rows})
         return
 
+    # Determine which columns to SELECT
+    _all_source_cols = ("id", "title", "type", "provider", "doi", "url",
+                        "citation_count", "content_file", "pdf_file", "quality", "added_at")
+    _compact_cols = ("id", "title", "quality", "content_file")
+
+    fields = getattr(args, "fields", None)
+    compact = getattr(args, "compact", False)
+
+    if compact and not fields:
+        select_cols = _compact_cols
+    elif fields:
+        requested = [f.strip() for f in fields.split(",")]
+        invalid = [f for f in requested if f not in _all_source_cols]
+        if invalid:
+            conn.close()
+            error_response([f"Invalid field(s): {', '.join(invalid)}. Allowed: {', '.join(_all_source_cols)}"])
+            return
+        select_cols = tuple(requested)
+    else:
+        select_cols = _all_source_cols
+
     # Build query with optional filters
     clauses = ["session_id = ?"]
     params: list = [sid]
@@ -721,7 +742,7 @@ def cmd_sources(args):
 
     where = " AND ".join(clauses)
     rows = conn.execute(
-        f"SELECT id, title, type, provider, doi, url, citation_count, content_file, pdf_file, quality, added_at FROM sources WHERE {where} ORDER BY id",
+        f"SELECT {', '.join(select_cols)} FROM sources WHERE {where} ORDER BY id",
         params
     ).fetchall()
     conn.close()
@@ -845,7 +866,8 @@ def cmd_summary(args):
     metrics_list = [dict(r) for r in metric_rows]
 
     conn.close()
-    success_response({
+
+    full_result = {
         "brief": brief_data,
         "search_count": search_count,
         "source_count": source_count,
@@ -855,7 +877,43 @@ def cmd_summary(args):
         "findings": findings_list,
         "gaps": gaps_list,
         "metrics": metrics_list,
-    })
+    }
+
+    # --write-handoff: write full summary to file, return only path + counts
+    if getattr(args, "write_handoff", False):
+        handoff_path = os.path.join(args.session_dir, "synthesis-handoff.json")
+        with open(handoff_path, "w") as f:
+            json.dump(full_result, f, indent=2)
+        rel_path = os.path.relpath(handoff_path)
+        success_response({
+            "path": rel_path,
+            "findings_count": len(findings_list),
+            "gaps_count": len(gaps_list),
+            "source_count": source_count,
+        })
+        return
+
+    # --compact: counts and coverage indicators only
+    if getattr(args, "compact", False):
+        # Build findings-per-question count map
+        findings_by_question: dict[str, int] = {}
+        for f in findings_list:
+            q = f.get("question") or "unassigned"
+            findings_by_question[q] = findings_by_question.get(q, 0) + 1
+
+        success_response({
+            "brief": {"questions": brief_data["questions"]} if brief_data else None,
+            "search_count": search_count,
+            "source_count": source_count,
+            "sources_by_type": sources_by_type,
+            "sources_by_provider": sources_by_provider,
+            "findings_count": len(findings_list),
+            "findings_by_question": findings_by_question,
+            "gaps": gaps_list,
+        })
+        return
+
+    success_response(full_result)
 
 
 # ---------------------------------------------------------------------------
@@ -1525,16 +1583,14 @@ def cmd_audit(args):
     log(f"  Web sources: {web_sources}")
 
     # JSON result
+    use_brief = getattr(args, "brief", False)
+
     audit_result = {
         "sources_tracked": len(sources),
         "sources_downloaded": total_downloaded,
-        "downloaded_ids": downloaded,
         "sources_with_notes": deep_reads,
-        "notes_ids": with_notes,
         "degraded_quality": degraded,
         "mismatched_content": mismatched,
-        "abstract_only": abstract_only,
-        "no_content": no_content,
         "findings_count": len(findings),
         "findings_by_question": {k: len(v) for k, v in findings_by_question.items()},
         "open_gaps": len(gaps),
@@ -1551,6 +1607,17 @@ def cmd_audit(args):
         },
         "warnings": warnings,
     }
+
+    # --brief: omit large ID arrays, use counts only
+    # (degraded_quality and mismatched_content stay as arrays — orchestrator needs specific IDs)
+    if not use_brief:
+        audit_result["downloaded_ids"] = downloaded
+        audit_result["notes_ids"] = with_notes
+        audit_result["abstract_only"] = abstract_only
+        audit_result["no_content"] = no_content
+    else:
+        audit_result["abstract_only_count"] = len(abstract_only)
+        audit_result["no_content_count"] = len(no_content)
 
     # --strict: exit non-zero if warnings exist
     if getattr(args, "strict", False) and warnings:
@@ -2378,6 +2445,8 @@ def main():
     p.add_argument("--title-contains", default=None, help="Filter sources by title substring (case-insensitive)")
     p.add_argument("--min-citations", type=int, default=None, help="Only sources with >= N citations")
     p.add_argument("--providers", action="store_true", help="Return only provider distribution counts (no source list)")
+    p.add_argument("--compact", action="store_true", help="Return only id, title, quality, content_file (shorthand for --fields id,title,quality,content_file)")
+    p.add_argument("--fields", default=None, help="Comma-separated list of columns to return (e.g. --fields id,title,doi)")
     p.add_argument("--session-dir", **_sd)
 
     # get-source
@@ -2395,6 +2464,8 @@ def main():
 
     # summary
     p = sub.add_parser("summary")
+    p.add_argument("--compact", action="store_true", help="Return counts and coverage indicators only (omit full findings/sources/metrics)")
+    p.add_argument("--write-handoff", action="store_true", help="Write full summary to synthesis-handoff.json, return only path and counts")
     p.add_argument("--session-dir", **_sd)
 
     # mark-read
@@ -2470,6 +2541,7 @@ def main():
     # audit
     p = sub.add_parser("audit")
     p.add_argument("--strict", action="store_true", help="Exit non-zero if audit finds warnings")
+    p.add_argument("--brief", action="store_true", help="Replace ID arrays with counts (keep degraded/mismatched as arrays)")
     p.add_argument("--session-dir", **_sd)
 
     # triage
