@@ -153,6 +153,8 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
    Example: `state recover-failed --min-relevance 0.3 --title-keywords "uncanny,valley,perception,humanoid,robot" --min-citations 30`
 
+   **`recover-failed` is slow** — it tries multiple download channels per source and can take 3-5 minutes for 20+ sources. Set `timeout: 600000` on the Bash call so it doesn't hit the default 2-minute timeout. If it times out, the agent loses the result and cannot retrieve it (see rule 4).
+
    If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
