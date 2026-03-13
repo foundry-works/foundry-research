@@ -43,9 +43,9 @@
 
 ## Phase 5: Update synthesis-writer.md (minor)
 
-- [ ] Remove the "On revision passes" return format — the writer no longer does revision
-- [ ] Remove "Revision instructions (on subsequent invocations)" from "What you receive"
-- [ ] Simplify: the writer's only job is the initial draft
+- [x] Remove the "On revision passes" return format — the writer no longer does revision
+- [x] Remove "Revision instructions (on subsequent invocations)" from "What you receive"
+- [x] Simplify: the writer's only job is the initial draft
 
 ## Phase 6: Testing
 

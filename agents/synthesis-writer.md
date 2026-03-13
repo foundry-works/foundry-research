@@ -1,6 +1,6 @@
 ---
 name: synthesis-writer
-description: Draft and revise research reports from source notes. Produces theme-based synthesis with verified citations.
+description: Draft research reports from source notes. Produces theme-based synthesis with verified citations.
 tools: Read, Glob, Write
 model: opus
 permissionMode: acceptEdits
@@ -17,7 +17,6 @@ A directive from the supervisor containing:
 - **Research brief** — scope, key aspects, research questions
 - **Key findings summary** — the supervisor's condensed findings across all sources
 - **Gap analysis** — what wasn't found, what remains uncertain
-- **Revision instructions** (on subsequent invocations) — reviewer or verifier feedback to incorporate
 
 ## How to work
 
@@ -94,11 +93,6 @@ If a metadata file is missing or has incomplete fields (e.g., no authors, no ven
 After writing the report, return a compact JSON manifest:
 ```json
 {"status": "ok", "path": "deep-research-topic/report.md", "word_count": 2500, "sources_cited": 15}
-```
-
-On revision passes, return:
-```json
-{"status": "revised", "path": "deep-research-topic/report.md", "changes": ["addressed contradiction in section 3", "added applicability caveat for finding X"]}
 ```
 
 ## Error handling
