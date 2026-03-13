@@ -38,8 +38,8 @@
 
 ## Phase 4: Update copy-to-skills.sh
 
-- [ ] Add `skills/deep-research-revision/` to the copy targets
-- [ ] Verify the new skill directory gets copied to `.claude/skills/deep-research-revision/`
+- [x] Add `skills/deep-research-revision/` to the copy targets — no changes needed, script already globs `skills/*/`
+- [x] Verify the new skill directory gets copied to `.claude/skills/deep-research-revision/`
 
 ## Phase 5: Update synthesis-writer.md (minor)
 
