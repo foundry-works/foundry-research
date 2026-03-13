@@ -12,12 +12,12 @@
 
 ## 2. Quality Flag Granularity
 
-- [ ] **2a.** Add `reader_validated` to quality choices in `state.py` `set-quality` argparse (line ~2500)
-- [ ] **2b.** In `mark-read` handler: if source quality is `degraded` AND note file exists in `notes/`, auto-upgrade quality to `reader_validated`
-- [ ] **2c.** Update `audit` output: split `degraded_quality` into `degraded_unread` and `reader_validated` arrays
-- [ ] **2d.** Update audit warnings: "do not claim deep reading" only for `degraded_unread`, not `reader_validated`
-- [ ] **2e.** Update `audit --brief` to report `reader_validated` count separately
-- [ ] **2f.** Update SKILL.md audit interpretation guidance (lines ~222-223) to reflect new categories
+- [x] **2a.** Add `reader_validated` to quality choices in `state.py` `set-quality` argparse (line ~2500)
+- [x] **2b.** In `mark-read` handler: if source quality is `degraded` AND note file exists in `notes/`, auto-upgrade quality to `reader_validated`
+- [x] **2c.** Update `audit` output: split `degraded_quality` into `degraded_unread` and `reader_validated` arrays
+- [x] **2d.** Update audit warnings: "do not claim deep reading" only for `degraded_unread`, not `reader_validated`
+- [x] **2e.** Update `audit --brief` to report `reader_validated` count separately
+- [x] **2f.** Update SKILL.md audit interpretation guidance (lines ~222-223) to reflect new categories
 - [ ] **2g.** Add test: `mark-read` on a degraded source with existing note → quality becomes `reader_validated`
 - [ ] **2h.** Add test: `mark-read` on an `ok` source → quality stays `ok` (no spurious downgrade)
 

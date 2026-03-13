@@ -931,10 +931,32 @@ def cmd_mark_read(args):
     if cur.rowcount == 0:
         conn.close()
         error_response([f"Source {args.id} not found"])
+
+    # Auto-upgrade degraded → reader_validated if a note file exists.
+    # A reader that successfully extracted content and wrote a note is strong
+    # evidence that the source is usable despite initial quality concerns
+    # (e.g., PDF raw-text fallback that's actually readable).
+    quality_upgraded = False
+    row = conn.execute(
+        "SELECT quality FROM sources WHERE id = ? AND session_id = ?",
+        (args.id, sid)
+    ).fetchone()
+    if row and row["quality"] == "degraded":
+        note_path = os.path.join(args.session_dir, "notes", f"{args.id}.md")
+        if os.path.exists(note_path):
+            conn.execute(
+                "UPDATE sources SET quality = 'reader_validated' WHERE id = ? AND session_id = ?",
+                (args.id, sid)
+            )
+            quality_upgraded = True
+
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": args.id, "is_read": True})
+    result = {"id": args.id, "is_read": True}
+    if quality_upgraded:
+        result["quality_upgraded"] = "degraded → reader_validated"
+    success_response(result)
 
 
 def cmd_set_status(args):
@@ -1450,7 +1472,8 @@ def cmd_audit(args):
 
     downloaded = []
     with_notes = []
-    degraded = []
+    degraded_unread = []
+    reader_validated = []
     mismatched = []
     no_content = []
     abstract_only = []
@@ -1485,13 +1508,15 @@ def cmd_audit(args):
         quality = s.get("quality")
         if isinstance(quality, str):
             if quality == "degraded":
-                degraded.append(sid_val)
+                degraded_unread.append(sid_val)
+            elif quality == "reader_validated":
+                reader_validated.append(sid_val)
             elif quality == "mismatched":
                 mismatched.append(sid_val)
             elif quality == "abstract_only":
                 abstract_only.append(sid_val)
         elif isinstance(quality, (int, float)) and quality < 0.5:
-            degraded.append(sid_val)
+            degraded_unread.append(sid_val)
 
     # Build question text list from brief
     question_texts = []
@@ -1547,7 +1572,7 @@ def cmd_audit(args):
 
     # Build warnings
     warnings = []
-    for sid_val in degraded:
+    for sid_val in degraded_unread:
         warnings.append(f"{sid_val} has degraded PDF quality — do not claim deep reading")
     for sid_val in mismatched:
         warnings.append(f"{sid_val} has mismatched content — downloaded PDF may be wrong paper")
@@ -1563,7 +1588,8 @@ def cmd_audit(args):
     log(f"Sources tracked:     {len(sources)}")
     log(f"Sources downloaded:  {total_downloaded}  ({', '.join(downloaded[:10])}{'...' if len(downloaded) > 10 else ''})")
     log(f"Sources with notes:  {deep_reads}  ({', '.join(with_notes[:10])}{'...' if len(with_notes) > 10 else ''})")
-    log(f"Degraded quality:    {len(degraded)}  ({', '.join(degraded)})" if degraded else "Degraded quality:    0")
+    log(f"Degraded (unread):   {len(degraded_unread)}  ({', '.join(degraded_unread)})" if degraded_unread else "Degraded (unread):   0")
+    log(f"Reader validated:    {len(reader_validated)}  ({', '.join(reader_validated)})" if reader_validated else "Reader validated:    0")
     log(f"Mismatched content:  {len(mismatched)}  ({', '.join(mismatched)})" if mismatched else "Mismatched content:  0")
     log(f"Abstract only:       {len(abstract_only)}  ({', '.join(abstract_only)})" if abstract_only else "Abstract only:       0")
     log(f"Findings logged:     {len(findings)}")
@@ -1589,7 +1615,8 @@ def cmd_audit(args):
         "sources_tracked": len(sources),
         "sources_downloaded": total_downloaded,
         "sources_with_notes": deep_reads,
-        "degraded_quality": degraded,
+        "degraded_unread": degraded_unread,
+        "reader_validated": reader_validated,
         "mismatched_content": mismatched,
         "findings_count": len(findings),
         "findings_by_question": {k: len(v) for k, v in findings_by_question.items()},
@@ -1609,7 +1636,7 @@ def cmd_audit(args):
     }
 
     # --brief: omit large ID arrays, use counts only
-    # (degraded_quality and mismatched_content stay as arrays — orchestrator needs specific IDs)
+    # (degraded_unread, reader_validated, and mismatched_content stay as arrays — orchestrator needs specific IDs)
     if not use_brief:
         audit_result["downloaded_ids"] = downloaded
         audit_result["notes_ids"] = with_notes
@@ -2551,7 +2578,7 @@ def main():
     # set-quality
     p = sub.add_parser("set-quality")
     p.add_argument("--id", required=True)
-    p.add_argument("--quality", type=str, choices=["ok", "abstract_only", "degraded", "mismatched"], required=True)
+    p.add_argument("--quality", type=str, choices=["ok", "abstract_only", "degraded", "mismatched", "reader_validated"], required=True)
     p.add_argument("--session-dir", **_sd)
 
     # log-metric
@@ -2595,7 +2622,7 @@ def main():
     # audit
     p = sub.add_parser("audit")
     p.add_argument("--strict", action="store_true", help="Exit non-zero if audit finds warnings")
-    p.add_argument("--brief", action="store_true", help="Replace ID arrays with counts (keep degraded/mismatched as arrays)")
+    p.add_argument("--brief", action="store_true", help="Replace ID arrays with counts (keep degraded_unread/reader_validated/mismatched as arrays)")
     p.add_argument("--session-dir", **_sd)
 
     # triage

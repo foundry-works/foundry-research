@@ -52,7 +52,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
 5. **Triage sources for reading.** The source-acquisition agent already ran triage, but you make the final reading allocation. Use the manifest's `triage_tiers` and `top_papers` to decide which sources get reader agents.
    - **Allocate readers to the top 15-20 sources** by triage tier. For small sessions (<15 downloaded sources), read all good-quality sources.
-   - **Skip:** Sources with `quality: "mismatched"` or `quality: "degraded"`. Also deprioritize sources with <5 citations and no keyword match to brief questions unless they fill a specific gap.
+   - **Skip:** Sources with `quality: "mismatched"` or `quality: "degraded"`. Sources with `quality: "reader_validated"` are usable — they were initially flagged as degraded but a reader successfully extracted content. Also deprioritize sources with <5 citations and no keyword match to brief questions unless they fill a specific gap.
 
 6. **Batch pre-read validation (mandatory).** Before spawning any reader agent, validate every candidate source:
    - Read the first 30 lines of each source's content file
@@ -180,7 +180,7 @@ triage --top 30                   # adjust how many sources to mark high+medium 
 recover-failed                    # retry failed high-priority sources via CORE, Tavily, DOI landing page
 recover-failed --min-citations 30 # lower citation threshold for recovery eligibility
 audit                             # pre-report coverage & quality check
-audit --brief                     # counts only (no ID arrays except degraded/mismatched)
+audit --brief                     # counts only (no ID arrays except degraded_unread/reader_validated/mismatched)
 audit --strict                    # exit non-zero if warnings found
 ```
 
@@ -205,7 +205,7 @@ audit --strict                    # exit non-zero if warnings found
 
 **Sources on disk before synthesis.** Downloaded `.md` and PDF files let you verify claims against exact content rather than relying on search snippets or abstracts. Metadata files (`sources/metadata/src-NNN.json`) provide compact triage info (abstract, venue, citations) without reading full text. `.toc` files enable targeted section reads via `offset`/`limit`.
 
-**Citation rules.** Only sources with on-disk `.md` content (quality != degraded) and reader notes in `notes/` may appear in the main References section. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read.
+**Citation rules.** Only sources with on-disk `.md` content (quality not `degraded` or `mismatched`) and reader notes in `notes/` may appear in the main References section. Sources with `quality: "reader_validated"` are citable — `mark-read` auto-upgrades degraded sources when a reader successfully writes a note. Sources known only from abstracts go in a "Further Reading" section, explicitly marked as not deeply read.
 
 **Selective deep reading.** Not every source needs cover-to-cover reading. Reader subagent summaries in `notes/` provide compressed understanding. Spawn reader subagents for all good-quality sources — summaries may surface details not visible in abstracts.
 
@@ -219,7 +219,7 @@ audit --strict                    # exit non-zero if warnings found
 
 Each entry should be 3-5 lines, not paragraphs. The goal is breadcrumbs for a compressed context, not a narrative log. **Why mandatory, not "aggressive":** Past sessions logged zero orchestrator-level journal entries despite the "use aggressively" guidance. Vague instructions get optimized away under time pressure. Specific trigger points make the habit structural — you know exactly when to write and what to capture.
 
-**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit --brief` to check source coverage. The `--brief` flag returns counts instead of full ID arrays, saving context — you still get `degraded_quality` and `mismatched_content` as arrays (you need specific IDs for gap-mode). The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
+**Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit --brief` to check source coverage. The `--brief` flag returns counts instead of full ID arrays, saving context — you still get `degraded_unread`, `reader_validated`, and `mismatched_content` as arrays (you need specific IDs for gap-mode). The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, quality breakdown, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). `degraded_unread` sources have quality issues and no successful reader pass — do not claim deep reading. `reader_validated` sources were initially flagged as degraded but a reader successfully extracted content and wrote a note — these are citable as deep reads. Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
 **Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer agent (see step 14 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). Your job is to prepare the handoff materials, present the draft to the user, and suggest `/deep-research-revision` for review and revision. Review agents (synthesis-reviewer, research-verifier, style-reviewer) and the report-reviser are orchestrated by the separate `/deep-research-revision` skill — they no longer run in this pipeline. **Why the split:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context for drafting, and the revision skill gets its own fresh context focused entirely on quality — no search artifacts, no reader coordination, just the draft and the reviewer feedback.
 
@@ -373,4 +373,4 @@ Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`,
 - Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
 - Sources known only from abstracts or search metadata go in **Further Reading**
 - The Methodology section must honestly report deep reads vs. abstract-only counts (use `${CLAUDE_SKILL_DIR}/state audit` output)
-- Never claim to have "deeply read" a source that only has degraded or abstract-only content
+- Never claim to have "deeply read" a source that has `degraded` (unread) or abstract-only content. Sources upgraded to `reader_validated` by `mark-read` can be claimed as deep reads.
