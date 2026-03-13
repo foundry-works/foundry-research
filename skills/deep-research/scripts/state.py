@@ -1138,21 +1138,70 @@ def cmd_download_pending(args):
 
     batch_size = getattr(args, "batch_size", None)
     total_pending = len(pending)
+    max_batches = getattr(args, "max_batches", None)
 
     if args.auto_download and pending:
-        # Apply batch-size limit: process only the first N, caller loops until remaining=0
+        timeout_override = getattr(args, "timeout", None)
+
+        if max_batches and max_batches > 1 and batch_size:
+            # Multi-batch loop: run up to N iterations, re-querying pending each time
+            total_downloaded = 0
+            total_failed_sources: list[str] = []
+            batches_run = 0
+
+            for batch_num in range(max_batches):
+                if not pending:
+                    break
+                batch = pending[:batch_size] if batch_size < len(pending) else pending
+                if batch_num > 0:
+                    log(f"Batch {batch_num + 1}/{max_batches}: {len(batch)} sources")
+
+                result = _auto_download_pending(args.session_dir, batch, args.parallel, timeout_override, total_pending)
+                batches_run += 1
+                total_downloaded += result["downloaded"]
+
+                # Re-query pending from disk (not DB) to see what's still missing
+                if batch_num < max_batches - 1:
+                    new_pending = []
+                    for item in pending[len(batch):]:  # items we haven't tried yet
+                        sid_val = item["source_id"]
+                        on_disk = any(
+                            os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}"))
+                            for ext in (".md", ".pdf")
+                        )
+                        if not on_disk:
+                            new_pending.append(item)
+                    pending = new_pending
+                    total_pending = len(pending) + total_downloaded
+                else:
+                    total_failed_sources = result["failed_sources"]
+
+            remaining_after = total_pending - total_downloaded
+            if remaining_after < 0:
+                remaining_after = 0
+            success_response({
+                "downloaded": total_downloaded,
+                "failed": len(total_failed_sources),
+                "failed_sources": total_failed_sources,
+                "batch_size": batch_size,
+                "batches_run": batches_run,
+                "remaining": remaining_after,
+            })
+            return
+
+        # Single batch (original behavior)
         if batch_size and batch_size < len(pending):
             log(f"Batch size {batch_size}: processing first {batch_size} of {len(pending)} pending")
             pending = pending[:batch_size]
 
-        timeout_override = getattr(args, "timeout", None)
-        _auto_download_pending(args.session_dir, pending, args.parallel, timeout_override, total_pending)
+        result = _auto_download_pending(args.session_dir, pending, args.parallel, timeout_override, total_pending)
+        success_response(result)
         return
 
     success_response(pending, total_results=total_pending)
 
 
-def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None, total_pending: int | None = None) -> None:
+def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeout_override: int | None = None, total_pending: int | None = None) -> dict:
     """Auto-download all pending sources with fallback across identifier types.
 
     Runs up to 3 passes: DOI cascade first, then pdf_url for failures, then url.
@@ -1184,8 +1233,7 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
         source_attempts[sid] = attempts
 
     if not source_attempts:
-        success_response({"downloaded": 0, "message": "No downloadable sources found"})
-        return
+        return {"downloaded": 0, "failed": 0, "failed_sources": [], "batch_size": 0, "remaining": total_pending or 0}
 
     all_results = []
     remaining = set(source_attempts.keys())
@@ -1274,13 +1322,13 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
 
     downloaded = len(source_attempts) - len(remaining)
     remaining_pending = (total_pending - downloaded) if total_pending is not None else len(remaining)
-    success_response({
+    return {
         "downloaded": downloaded,
         "failed": len(remaining),
         "failed_sources": sorted(remaining),
         "batch_size": len(source_attempts),
         "remaining": remaining_pending,
-    })
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1507,36 +1555,32 @@ def cmd_audit(args):
 # triage
 # ---------------------------------------------------------------------------
 
-def cmd_triage(args):
-    """Rank sources by citation count × title-keyword-relevance to brief questions.
+def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, title_filter: str | None = None) -> tuple[list[dict], int]:
+    """Score and tier-rank sources by citation count × relevance to brief questions.
 
-    Outputs sources in priority tiers (high/medium/low) to help the agent decide
-    which sources to download and read. Sources with quality issues are flagged.
+    Returns (scored_list, brief_keywords_count). Each scored dict has 'priority'
+    assigned (high/medium/low/skip). Reusable by both cmd_triage and cmd_manifest.
     """
-    conn = _connect(args.session_dir, readonly=True)
-    sid = _get_session_id(conn)
+    import math
 
     # Load brief questions for relevance scoring
-    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (sid,)).fetchone()
+    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (session_id,)).fetchone()
     question_terms = _extract_question_terms(json.loads(brief_row["questions"])) if brief_row else []
 
     # Load sources (with optional title filter)
-    title_filter = getattr(args, "title_contains", None)
     _src_cols = ("id, title, authors, year, doi, url, pdf_url, citation_count, type, provider, "
                  "content_file, pdf_file, is_read, quality, relevance_score, relevance_rationale, status")
     if title_filter:
         sources = [dict(r) for r in conn.execute(
             f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND title LIKE ? ORDER BY id",
-            (sid, f"%{title_filter}%")
+            (session_id, f"%{title_filter}%")
         ).fetchall()]
     else:
         sources = [dict(r) for r in conn.execute(
-            f"SELECT {_src_cols} FROM sources WHERE session_id = ? ORDER BY id", (sid,)
+            f"SELECT {_src_cols} FROM sources WHERE session_id = ? ORDER BY id", (session_id,)
         ).fetchall()]
-    conn.close()
 
     # Score each source
-    import math
     scored = []
     for s in sources:
         title = (s.get("title") or "").lower()
@@ -1559,10 +1603,10 @@ def cmd_triage(args):
         score = cite_score * (0.1 + relevance)
 
         # Check on-disk status
-        sources_dir = os.path.join(args.session_dir, "sources")
+        sources_dir = os.path.join(session_dir, "sources")
         has_content = False
         if s.get("content_file"):
-            has_content = os.path.exists(os.path.join(args.session_dir, s["content_file"]))
+            has_content = os.path.exists(os.path.join(session_dir, s["content_file"]))
         if not has_content:
             for ext in (".md", ".pdf"):
                 if os.path.exists(os.path.join(sources_dir, f"{s['id']}{ext}")):
@@ -1587,13 +1631,13 @@ def cmd_triage(args):
             "quality_flag": quality_flag,
             "doi": s.get("doi"),
             "type": s.get("type", "academic"),
+            "provider": s.get("provider"),
         })
 
     # Sort by score descending
     scored.sort(key=lambda x: x["score"], reverse=True)
 
     # Assign priority tiers
-    top_n = getattr(args, "top", 25)
     for i, item in enumerate(scored):
         if item["quality_flag"]:
             item["priority"] = "skip"
@@ -1603,6 +1647,23 @@ def cmd_triage(args):
             item["priority"] = "medium"
         else:
             item["priority"] = "low"
+
+    return scored, len(question_terms)
+
+
+def cmd_triage(args):
+    """Rank sources by citation count × title-keyword-relevance to brief questions.
+
+    Outputs sources in priority tiers (high/medium/low) to help the agent decide
+    which sources to download and read. Sources with quality issues are flagged.
+    """
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    top_n = getattr(args, "top", 25)
+    title_filter = getattr(args, "title_contains", None)
+
+    scored, brief_keywords_used = _score_sources(conn, sid, args.session_dir, top_n, title_filter)
+    conn.close()
 
     # Summary stats
     high = [s for s in scored if s["priority"] == "high"]
@@ -1616,12 +1677,215 @@ def cmd_triage(args):
             "high_priority": len(high),
             "medium_priority": len(medium),
             "skip_quality": len(skip),
-            "brief_keywords_used": len(question_terms),
+            "brief_keywords_used": brief_keywords_used,
         },
         "top_sources": [
             {"id": s["id"], "title": s["title"], "citation_count": s["citation_count"], "tier": s["priority"], "score": s["score"]}
             for s in scored if s["priority"] in ("high", "medium")
         ],
+    })
+
+
+# ---------------------------------------------------------------------------
+# manifest
+# ---------------------------------------------------------------------------
+
+def cmd_manifest(args):
+    """Pre-assembled manifest for the source-acquisition agent.
+
+    Single readonly query that gathers data from all tables and returns the
+    compact JSON the agent used to assemble manually from 4-5 separate commands.
+    Supports --mode initial (full pipeline summary) and --mode gap (targeted
+    follow-up summary).
+    """
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    mode = getattr(args, "mode", "initial")
+    top_n = getattr(args, "top", 30)
+
+    if mode == "gap":
+        _manifest_gap(conn, sid, args.session_dir, top_n)
+    else:
+        _manifest_initial(conn, sid, args.session_dir, top_n)
+
+
+def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
+    """Build the initial-mode manifest."""
+    # --- Searches ---
+    search_rows = conn.execute(
+        "SELECT provider, query, search_mode, result_count, ingested_count FROM searches WHERE session_id = ?",
+        (session_id,)
+    ).fetchall()
+    searches_run = len(search_rows)
+    sources_found = sum(r["result_count"] or 0 for r in search_rows)
+
+    # --- Sources ---
+    source_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM sources WHERE session_id = ?", (session_id,)
+    ).fetchone()["cnt"]
+
+    provider_rows = conn.execute(
+        "SELECT provider, COUNT(*) as count FROM sources WHERE session_id = ? GROUP BY provider ORDER BY count DESC",
+        (session_id,)
+    ).fetchall()
+    provider_distribution = {r["provider"]: r["count"] for r in provider_rows}
+
+    # --- Downloads ---
+    sources_dir = os.path.join(session_dir, "sources")
+    all_sources = conn.execute(
+        "SELECT id, content_file, pdf_file, quality FROM sources WHERE session_id = ?",
+        (session_id,)
+    ).fetchall()
+
+    success_count = 0
+    failed_count = 0
+    for s in all_sources:
+        has_content = False
+        if s["content_file"]:
+            has_content = os.path.exists(os.path.join(session_dir, s["content_file"]))
+        if not has_content:
+            for ext in (".md", ".pdf"):
+                if os.path.exists(os.path.join(sources_dir, f"{s['id']}{ext}")):
+                    has_content = True
+                    break
+        quality = s["quality"]
+        is_quality_flagged = isinstance(quality, str) and quality in ("mismatched", "degraded", "empty")
+        if has_content and not is_quality_flagged:
+            success_count += 1
+        elif not has_content and not is_quality_flagged:
+            failed_count += 1
+        # quality-flagged sources are neither success nor failed — they're excluded
+
+    remaining = failed_count  # sources without content and not quality-flagged
+
+    # --- Triage tiers ---
+    scored, _ = _score_sources(conn, session_id, session_dir, top_n)
+    triage_tiers = {"high": 0, "medium": 0, "low": 0, "skip": 0}
+    for s in scored:
+        tier = s.get("priority", "low")
+        triage_tiers[tier] = triage_tiers.get(tier, 0) + 1
+
+    # --- Top papers ---
+    top_papers = [
+        {"id": s["id"], "title": s["title"], "citations": s["citation_count"], "provider": s.get("provider", "")}
+        for s in scored[:5]
+    ]
+
+    # --- Coverage assessment ---
+    brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (session_id,)).fetchone()
+    coverage_assessment = {}
+    if brief_row:
+        questions = json.loads(brief_row["questions"])
+        high_medium = [s for s in scored if s["priority"] in ("high", "medium")]
+        for i, q in enumerate(questions):
+            q_text = q if isinstance(q, str) else q.get("text", str(q))
+            q_terms = _extract_terms([q_text])
+            matching = sum(
+                1 for s in high_medium
+                if any(t in (s.get("title") or "").lower() for t in q_terms)
+            )
+            if matching >= 5:
+                strength = "strong"
+            elif matching >= 3:
+                strength = "moderate"
+            else:
+                strength = "thin"
+            label = f"Q{i+1}: {q_text}"
+            # Truncate long question text for readability
+            if len(label) > 80:
+                label = label[:77] + "..."
+            coverage_assessment[label] = f"{strength} ({matching} sources)"
+
+    # --- Gaps ---
+    gap_rows = conn.execute(
+        "SELECT id, text, status FROM gaps WHERE session_id = ? ORDER BY id", (session_id,)
+    ).fetchall()
+    gaps_logged = [f"{r['id']}: {r['text']}" for r in gap_rows if r["status"] == "open"]
+
+    # --- Citation chasing ---
+    citation_searches = conn.execute(
+        "SELECT result_count, ingested_count FROM searches WHERE session_id = ? AND search_mode IN ('cited_by', 'references')",
+        (session_id,)
+    ).fetchall()
+    traversals_run = len(citation_searches)
+    sources_from_chasing = sum(r["ingested_count"] or 0 for r in citation_searches)
+
+    conn.close()
+
+    success_response({
+        "searches_run": searches_run,
+        "sources_found": sources_found,
+        "sources_after_dedup": source_count,
+        "provider_distribution": provider_distribution,
+        "downloads": {
+            "success": success_count,
+            "failed": failed_count,
+            "remaining": remaining,
+        },
+        "triage_tiers": triage_tiers,
+        "top_papers": top_papers,
+        "coverage_assessment": coverage_assessment,
+        "gaps_logged": gaps_logged,
+        "citation_chasing": {
+            "traversals_run": traversals_run,
+            "sources_from_chasing": sources_from_chasing,
+        },
+    })
+
+
+def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):
+    """Build the gap-mode manifest."""
+    # All gaps
+    gap_rows = conn.execute(
+        "SELECT id, text, status FROM gaps WHERE session_id = ? ORDER BY id", (session_id,)
+    ).fetchall()
+
+    gaps_addressed = sum(1 for r in gap_rows if r["status"] == "resolved")
+
+    # For open gaps, check if any new high/medium sources match their terms
+    scored, _ = _score_sources(conn, session_id, session_dir, top_n)
+    high_medium = [s for s in scored if s["priority"] in ("high", "medium")]
+
+    potentially_resolved = []
+    unresolvable = []
+    for gap in gap_rows:
+        if gap["status"] == "resolved":
+            continue
+        gap_terms = _extract_terms([gap["text"]])
+        matching = sum(
+            1 for s in high_medium
+            if s["has_content"] and any(t in (s.get("title") or "").lower() for t in gap_terms)
+        )
+        if matching > 0:
+            potentially_resolved.append(gap["id"])
+        else:
+            unresolvable.append({"gap_id": gap["id"], "reason": f"No new high/medium sources with content match gap terms"})
+
+    # New sources/downloads — count sources added after initial acquisition
+    # (approximation: sources whose id number is higher than the gap threshold)
+    new_source_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM sources WHERE session_id = ?", (session_id,)
+    ).fetchone()["cnt"]
+
+    sources_dir = os.path.join(session_dir, "sources")
+    all_sources = conn.execute(
+        "SELECT id, content_file, pdf_file FROM sources WHERE session_id = ?", (session_id,)
+    ).fetchall()
+    new_downloads = sum(
+        1 for s in all_sources
+        if s["content_file"] and os.path.exists(os.path.join(session_dir, s["content_file"]))
+        or any(os.path.exists(os.path.join(sources_dir, f"{s['id']}{ext}")) for ext in (".md", ".pdf"))
+    )
+
+    conn.close()
+
+    success_response({
+        "gaps_addressed": gaps_addressed,
+        "gaps_potentially_resolved": len(potentially_resolved),
+        "gaps_potentially_resolved_ids": potentially_resolved,
+        "gaps_unresolvable": unresolvable,
+        "new_sources": new_source_count,
+        "new_downloads": new_downloads,
     })
 
 
@@ -2188,6 +2452,7 @@ def main():
     p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
     p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: min(480, max(300, batch*30)))")
     p.add_argument("--prioritize-gaps", action="store_true", default=False, help="Reorder pending sources so gap-relevant ones download first")
+    p.add_argument("--max-batches", type=int, default=None, help="Loop up to N batch iterations (re-querying pending between each). Returns aggregate totals with batches_run field.")
     p.add_argument("--session-dir", **_sd)
 
     # audit
@@ -2208,6 +2473,12 @@ def main():
                    help="Skip sources with relevance_score below this threshold (default 0.3)")
     p.add_argument("--title-keywords", type=str, default="",
                    help="Comma-separated keywords; require at least one match in source title to attempt recovery")
+    p.add_argument("--session-dir", **_sd)
+
+    # manifest
+    p = sub.add_parser("manifest")
+    p.add_argument("--mode", choices=["initial", "gap"], default="initial", help="Manifest mode (default: initial)")
+    p.add_argument("--top", type=int, default=30, help="Number of top sources to include in triage scoring (default 30)")
     p.add_argument("--session-dir", **_sd)
 
     # sync-files
@@ -2256,6 +2527,7 @@ def main():
         "triage": cmd_triage,
         "recover-failed": cmd_recover_failed,
         "sync-files": cmd_sync_files,
+        "manifest": cmd_manifest,
     }
 
     commands[args.command](args)

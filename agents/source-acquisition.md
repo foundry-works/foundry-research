@@ -8,6 +8,20 @@ permissionMode: acceptEdits
 
 You are a source acquisition agent. You run the entire search-to-download pipeline for a deep research session: search rounds, citation chasing, provider diversity, triage, downloads, and recovery. The orchestrator never sees raw search JSON or source list dumps — you absorb all of that and return a compact manifest.
 
+## Command execution rules
+
+These rules prevent the most common token-wasting failure modes. Follow them strictly:
+
+1. **Never pipe JSON through `tail` or `head`** — Truncated JSON is unparseable. If output is large, parse the full JSON and extract what you need: `cmd | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d['results']['summary'], indent=2))"`.
+
+2. **Never write multi-statement inline Python parsers** — If you need to parse CLI output, read the JSON schema from the Response Schemas section below. If a command returns an unexpected shape, run it once and pipe through `python3 -m json.tool | head -40` to see the structure, then run again with targeted extraction.
+
+3. **Never read internal Claude files** — Paths under `/tmp/claude-*`, `/home/*/.claude/projects/*/tool-results/`, or `/home/*/.claude/projects/*/tasks/` are internal to the Claude runtime. If you need command output, run the command in the foreground.
+
+4. **Never sleep-poll** — Don't use `sleep N && cat` loops or background polling. Run commands in the foreground and read output directly.
+
+5. **When a command fails, inspect before retrying** — Run the command once, read the raw output, then adjust. Don't retry with different arguments hoping something sticks.
+
 **Why you exist:** Search is the biggest token sink in the research pipeline. Each search returns 2-80KB of JSON that persists in the orchestrator's context through compression. With 15-20 searches plus repeated `state sources` queries, search-phase data accounts for ~60% of the orchestrator's input tokens. By running searches in your own context, you save the orchestrator ~120K tokens per session.
 
 ## What you receive
@@ -125,7 +139,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --batch-size 15` in a loop until `"remaining": 0`. Cap at 3 batch loops to avoid runaway downloads. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
+1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
 4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
@@ -264,8 +278,10 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state triage --top 30            # focus on top 30
 {cli_dir}/state triage --title-contains "keyword"  # pre-filter before scoring
 {cli_dir}/state download-pending           # list sources without content
-{cli_dir}/state download-pending --auto-download --batch-size 15
-{cli_dir}/state download-pending --auto-download --batch-size 15 --prioritize-gaps  # gap mode
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps  # gap mode
+{cli_dir}/state manifest --mode initial --top 30   # pre-assembled manifest (single command)
+{cli_dir}/state manifest --mode gap --top 30       # gap-mode manifest
 {cli_dir}/state log-gap --text "..."       # record coverage gap
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 {cli_dir}/state summary                    # brief + sources + findings + gaps
@@ -290,6 +306,80 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 
 All CLI commands exit 0 and return JSON: `{"status": "ok", ...}` or `{"status": "error", "errors": [...]}`. Parse the JSON — don't grep for text patterns.
 
+### Response Schemas
+
+These are the actual JSON structures returned by the commands you parse most often. Use these to extract values directly — don't guess at key paths.
+
+**`state triage --top N`**
+```json
+{
+  "status": "ok",
+  "results": {
+    "sources": [
+      {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "keyword_hits": 3}
+    ],
+    "summary": {"total": 89, "high_priority": 15, "medium_priority": 15, "skip_quality": 4, "brief_keywords_used": 8},
+    "top_sources": [
+      {"id": "src-001", "title": "...", "citation_count": 340, "tier": "high", "score": 5.21}
+    ]
+  }
+}
+```
+
+**`state download-pending --auto-download --batch-size N --max-batches M`**
+```json
+{
+  "status": "ok",
+  "results": {"downloaded": 12, "failed": 3, "failed_sources": ["src-044", "src-071", "src-089"], "batch_size": 15, "batches_run": 3, "remaining": 0}
+}
+```
+
+**`state recover-failed --min-relevance 0.3 --title-keywords "..."`**
+```json
+{
+  "status": "ok",
+  "results": {"recovered": 3, "recovered_sources": ["src-044", "src-071"], "still_failed": 2, "still_failed_sources": ["src-089", "src-102"], "attempted": 5}
+}
+```
+
+**`triage-relevance --top N --batch-size M`**
+```json
+{
+  "status": "ok",
+  "results": {"scored": 45, "failed": 3, "batches": 4, "total_candidates": 48}
+}
+```
+
+**`state manifest --mode initial --top N`**
+```json
+{
+  "status": "ok",
+  "results": {
+    "searches_run": 18, "sources_found": 142, "sources_after_dedup": 89,
+    "provider_distribution": {"semantic_scholar": 34, "openalex": 28},
+    "downloads": {"success": 52, "failed": 12, "remaining": 0},
+    "triage_tiers": {"high": 22, "medium": 18, "low": 31, "skip": 4},
+    "top_papers": [{"id": "src-012", "title": "...", "citations": 340, "provider": "semantic_scholar"}],
+    "coverage_assessment": {"Q1: What mechanisms drive X?": "strong (8 sources)", "Q2: How does Y vary?": "thin (1 source)"},
+    "gaps_logged": ["gap-1: Q4 has insufficient coverage"],
+    "citation_chasing": {"traversals_run": 6, "sources_from_chasing": 23}
+  }
+}
+```
+
+**`state manifest --mode gap --top N`**
+```json
+{
+  "status": "ok",
+  "results": {
+    "gaps_addressed": 3, "gaps_potentially_resolved": 2,
+    "gaps_potentially_resolved_ids": ["gap-1", "gap-2"],
+    "gaps_unresolvable": [{"gap_id": "gap-3", "reason": "No new sources match gap terms"}],
+    "new_sources": 12, "new_downloads": 8
+  }
+}
+```
+
 **PubMed quirk:** If PubMed returns 0 results, retry with simpler terms. PubMed interprets multi-word queries as MeSH lookups — unrecognized phrases return empty. Simplify by removing hyphens, using fewer terms, or trying `--mesh` explicitly.
 
 ---
@@ -298,13 +388,11 @@ All CLI commands exit 0 and return JSON: `{"status": "ok", ...}` or `{"status": 
 
 After completing all search rounds, triage, and downloads, return a **compact JSON manifest only**. Do not narrate what you did — the journal has the details, state.db has the data.
 
-**How to build the manifest:** Run these commands to get the numbers:
-- `state searches` — count rows for `searches_run`
-- `state sources --providers` — get `provider_distribution` and sum for total source count
-- `state sources --min-citations 100` — get `top_papers` (use the internal `src-NNN` IDs from state.db, not provider IDs from search results)
-- `state triage --top 30` — the response `summary` field has tier counts
-- The download loop's final response has `downloaded` and `failed` counts
-- For `coverage_assessment`, use title-keyword matching from triage results against each brief question — estimate based on how many high/medium-tier sources have titles relevant to each question
+**How to build the manifest:** Run a single command:
+```
+{cli_dir}/state manifest --mode initial --top 30
+```
+This queries all tables in one readonly connection and returns the complete manifest JSON (searches, sources, downloads, triage tiers, top papers, coverage assessment, gaps, citation chasing). For gap mode, use `--mode gap`. The examples below document what the command returns — add `content_validation` results from your post-download validation step.
 
 ### Initial mode manifest
 ```json
