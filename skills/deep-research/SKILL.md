@@ -115,9 +115,9 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     **Why this matters:** In past sessions, the orchestrator called `resolve-gap` based solely on the acquisition manifest — then reader agents discovered the "resolving" sources were mismatched content or unreadable stubs. This created false confidence that coverage gaps were filled when they weren't, leading to thin or missing sections in the final report. The extra reader step costs one agent invocation per source (~20-50K tokens each) but prevents wasting an entire synthesis cycle on illusory coverage.
 
-14. **Synthesis — writer → reviewer → verifier flow.** You are the supervisor. Do NOT write the report yourself. Instead, orchestrate the three synthesis agents:
+14. **Synthesis — draft the report.** You are the supervisor. Do NOT write the report yourself. Instead, hand off to the synthesis-writer agent.
 
-    All synthesis agents must be **foreground** (see rule 1). The reviewer and verifier can take 5-10 minutes each — foreground calls handle this gracefully. To parallelize the reviewer + verifier + style-reviewer, put all three Agent calls in one response message.
+    The synthesis-writer must be **foreground** (see rule 1).
 
     **a. Hand off to synthesis-writer.** First, run `${CLAUDE_SKILL_DIR}/state summary --write-handoff` — this writes the full structured data (findings, gaps, sources, brief) to `synthesis-handoff.json` and returns only the file path and counts. Then spawn a `synthesis-writer` subagent with:
     - The session directory path (absolute)
@@ -132,21 +132,12 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
 
-    **b. Launch reviewer + verifier + style-reviewer in parallel.** Once the writer returns, spawn **all three** of these in the **same response message** (three Agent tool calls in one turn). They run concurrently and you receive all results before your next turn — no polling, no sleeping, no checking output files.
+    **b. Present the draft and hand off to the user.** Once the writer returns:
+    1. Read and present `report.md` to the user
+    2. Log the draft completion in journal.md (sources used, coverage summary)
+    3. Tell the user: "Draft is at `report.md`. Review it, then run `/deep-research-revision <session-dir>` to review and revise — you can include feedback like 'section 3 is too long' or 'the conclusion ignores cost constraints'."
 
-    - **`synthesis-reviewer`** subagent with: the session directory path, the path to `report.md`, and the research brief. The reviewer audits the draft against five dimensions (contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity) and returns a structured issues list.
-    - **`research-verifier`** subagent with: the session directory path, the path to `report.md`, and the research brief. The verifier identifies 5-10 load-bearing claims, checks them against primary sources via web search, and returns a verification report with verdicts (confirmed/contradicted/partially supported/unverifiable).
-    - **`style-reviewer`** subagent with: the session directory path, the path to `report.md`, and the research brief. The style reviewer audits the draft for plain-language clarity — passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and missed list opportunities — without changing meaning or weakening scientific accuracy. Returns a structured issues list.
-
-    **Why include style review here:** Running the style-reviewer in parallel with the content reviewers costs no extra time and lets the writer handle all feedback — factual corrections, verification issues, and clarity improvements — in a single revision pass. This avoids an additional writer round-trip while still giving style its own focused reviewer that won't compete with accuracy auditing.
-
-    **c. Writer revision pass.** After all three reviewers return, collect all high and medium severity issues from the synthesis-reviewer, all contradicted or partially supported claims from the verifier, and all high and medium style issues from the style-reviewer. If any exist, **rename `report.md` to `report_draft.md`** before spawning the revision (so you can diff later), then spawn the `synthesis-writer` one more time with:
-    - The original handoff materials
-    - The combined issues from all three reviewers as revision instructions
-    - **Important:** frame style issues separately from factual issues so the writer can prioritize accuracy fixes first, then apply clarity improvements. A suggested framing: "The following are factual/accuracy issues (fix these first): [...] The following are style/clarity issues (apply these without changing meaning): [...]"
-    The writer incorporates corrections and writes the final `report.md`. The prior draft is preserved as `report_draft.md` for comparison.
-
-    **d. Deliver the report.** Read the final `report.md` and present it to the user. Note any unresolved verifier issues or reviewer concerns in your delivery.
+    **Why stop here:** The draft is a natural handoff point. The user can read it and redirect before spending tokens on revision. They might be happy with the draft as-is. And the revision orchestrator gets a fresh context focused entirely on quality — by this point your context is polluted with search manifests, reader coordination, and gap analysis, which degrades review quality.
 
 ---
 
@@ -230,7 +221,7 @@ Each entry should be 3-5 lines, not paragraphs. The goal is breadcrumbs for a co
 
 **Pre-report audit.** Before writing `report.md`, run `${CLAUDE_SKILL_DIR}/state audit --brief` to check source coverage. The `--brief` flag returns counts instead of full ID arrays, saving context — you still get `degraded_quality` and `mismatched_content` as arrays (you need specific IDs for gap-mode). The JSON output (stdout) contains structured data: sources tracked vs. downloaded vs. with notes, degraded quality sources, `findings_by_question` counts, and `methodology` stats (deep reads vs. abstract-only). Use the JSON, not the stderr log lines — don't pipe through `grep`. Use the methodology stats in your report's Methodology section — they enforce honest reporting. Use `--strict` to fail if any source is cited without on-disk content.
 
-**Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer, synthesis-reviewer, and research-verifier agents (see step 14 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). The synthesis-reviewer audits for contradictions, unsupported claims, and missing caveats. The research-verifier checks load-bearing claims against primary sources. Your job is to prepare the handoff materials, route feedback between agents, and deliver the final report. **Why delegate:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context focused entirely on integration and narrative, producing better synthesis than you could in a degraded context.
+**Synthesis is delegated, not done by you.** You are the supervisor — you orchestrate the synthesis-writer agent (see step 14 in the workflow). Do NOT write `report.md` yourself. The synthesis-writer produces theme-based synthesis (by research question, not source-by-source). Your job is to prepare the handoff materials, present the draft to the user, and suggest `/deep-research-revision` for review and revision. Review agents (synthesis-reviewer, research-verifier, style-reviewer) and the report-reviser are orchestrated by the separate `/deep-research-revision` skill — they no longer run in this pipeline. **Why the split:** By the time synthesis happens, your context is polluted with search state, download logs, and tool coordination. The writer gets a fresh context for drafting, and the revision skill gets its own fresh context focused entirely on quality — no search artifacts, no reader coordination, just the draft and the reviewer feedback.
 
 **Garbled PDF awareness.** Converted PDFs may have scrambled text around tables, figures, and equations. When text looks garbled, note the limitation and seek the information elsewhere rather than interpreting nonsense.
 
@@ -309,11 +300,10 @@ Use the **Agent tool** to spawn subagents for:
 **Brief writing** (step 3 in the workflow).
 - **`brief-writer`** (Opus) — generates the research brief with tradeoffs and adversarial questions. Receives the query, assumption surfacing results, and session directory. Returns `brief.json`. Spawn via Agent tool and include the `agents/brief-writer.md` prompt in your directive.
 
-**Synthesis & verification** (step 14 in the workflow). Foreground, per rule 1. To parallelize, put multiple Agent calls in one response message.
-- **`synthesis-writer`** (Opus) — drafts and revises `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
-- **`synthesis-reviewer`** (Sonnet) — audits the draft for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, and citation integrity. Returns a structured issues list. Spawn via Agent tool and include the `agents/synthesis-reviewer.md` prompt.
-- **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns a verification report with per-claim verdicts. Spawn via Agent tool and include the `agents/research-verifier.md` prompt.
-- **`style-reviewer`** (Sonnet) — audits the draft for plain-language clarity: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and missed list opportunities. Returns a structured issues list. Spawn via Agent tool and include the `agents/style-reviewer.md` prompt.
+**Synthesis** (step 14 in the workflow). Foreground, per rule 1.
+- **`synthesis-writer`** (Opus) — drafts `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
+
+**Review & revision** is handled by the separate `/deep-research-revision` skill, which orchestrates the `synthesis-reviewer`, `research-verifier`, `style-reviewer`, and `report-reviser` agents. The user runs it after reviewing the draft.
 
 **After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. Run them in a single bash loop — no grep needed, the JSON output confirms each update:
 

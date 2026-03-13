@@ -25,16 +25,16 @@
 
 ## Phase 3: Trim `/deep-research` SKILL.md
 
-- [ ] **Remove steps 14b-14d** from `skills/deep-research/SKILL.md`:
+- [x] **Remove steps 14b-14d** from `skills/deep-research/SKILL.md`:
   - 14b (launch reviewer + verifier + style-reviewer in parallel) — moves to revision skill
   - 14c (writer revision pass) — replaced by report-reviser in revision skill
   - 14d (deliver report) — replaced by simple "draft complete" message
-- [ ] **Update step 14a ending**: After synthesis-writer returns, the orchestrator:
+- [x] **Update step 14a ending**: After synthesis-writer returns, the orchestrator:
   - Reads and presents the draft to the user
   - Notes: "Run `/deep-research-revision` to review and revise, or provide feedback"
   - Logs completion in journal.md
-- [ ] **Update the Delegation section**: Remove synthesis-reviewer, research-verifier, style-reviewer from the delegation list (they move to the revision skill). Keep synthesis-writer.
-- [ ] **Update the "Synthesis is delegated" paragraph** in "What Good Research Looks Like" to reflect the new split
+- [x] **Update the Delegation section**: Remove synthesis-reviewer, research-verifier, style-reviewer from the delegation list (they move to the revision skill). Keep synthesis-writer.
+- [x] **Update the "Synthesis is delegated" paragraph** in "What Good Research Looks Like" to reflect the new split
 
 ## Phase 4: Update copy-to-skills.sh
 
