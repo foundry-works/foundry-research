@@ -18,7 +18,7 @@ These rules prevent the most common token-wasting failure modes. Follow them str
 
 3. **Never read internal Claude files** — Paths under `/tmp/claude-*`, `/home/*/.claude/projects/*/tool-results/`, or `/home/*/.claude/projects/*/tasks/` are internal to the Claude runtime and may be cleared between turns. Run commands in the foreground to get their output directly.
 
-4. **Never sleep-poll** — Don't use `sleep N && cat` loops. Commands run synchronously — when they return, the result is already in your context. Sleep loops burn tokens on empty turns and can stall your entire run if the timeout is too long.
+4. **Never sleep-poll or background commands** — Don't use `sleep N && cat` loops, and never set `run_in_background: true` on Bash calls. All CLI commands here run synchronously — when they return, the result is already in your context. If a command is slow (e.g., `recover-failed` processing 50 sources), set a long `timeout` (up to 600000ms) instead of backgrounding it. Backgrounding creates a task ID you can't retrieve (you don't have the TaskOutput tool), which leads to reading internal `/tmp/claude-*` files and sleep-polling — both of which waste 5-15 tool calls and produce garbled output.
 
 5. **Inspect before retrying** — When a command fails, run it once bare and read the raw output before adjusting. Retrying with different arguments blind wastes 2-5 tool calls per failure and often compounds the original problem (e.g., wrong key path → wrong extraction → wrong retry).
 
