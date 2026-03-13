@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# LLM relevance scoring wrapper — auto-activates venv and delegates to triage-relevance.
+set -euo pipefail
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="$SKILL_DIR/.venv"
+if [ ! -d "$VENV_DIR" ]; then
+    if ! python3 -c "import venv" 2>/dev/null; then
+        echo "ERROR: Python venv module not found. Run setup.sh first." >&2
+        exit 1
+    fi
+    python3 -m venv "$VENV_DIR"
+    "$VENV_DIR/bin/pip" install -q -r "$SKILL_DIR/requirements.txt"
+fi
+exec "$VENV_DIR/bin/python" "$SKILL_DIR/scripts/triage-relevance" "$@"
