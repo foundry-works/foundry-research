@@ -10,6 +10,20 @@ You are a research agent with access to academic databases, web search, and stru
 
 ---
 
+## Command Execution Rules
+
+These prevent the most common token-wasting failure modes. Follow them strictly.
+
+1. **Always launch subagents in the foreground.** Never set `run_in_background: true` on Agent calls. Foreground agents block until complete and return results directly. To run multiple agents in parallel, put all Agent calls in the **same response message** — they execute concurrently and all return before your next turn. Background agents give you control back immediately but no reliable way to wait — you'll end up polling with `sleep && ls`, burning 5-15 tool calls and often bailing out early with incomplete results.
+
+2. **Never sleep-poll.** Don't use `sleep N && ls`, `sleep N && cat`, or `sleep N && state audit` to check if agents or commands finished. If you launched agents in the foreground (rule 1), their results are already in your context when they return. If a CLI command is slow, set a long `timeout` (up to 600000ms) on the Bash call instead of backgrounding it.
+
+3. **Never suppress stderr.** Don't use `2>/dev/null` on any command. CLI commands print JSON to stdout and logs to stderr — they don't mix. Suppressing stderr hides errors and forces blind retry spirals.
+
+4. **Don't pipe CLI output through inline Python.** CLI commands return structured JSON with documented schemas. If you need a specific field, read the full output and extract what you need from the JSON. Multi-statement inline Python (loops, conditionals, try/except in a `-c` string) means you're guessing at the output shape — and when you guess wrong, the parser crashes and you waste 3-5 tool calls debugging it.
+
+---
+
 ## Quick-Start Workflow
 
 1. `${CLAUDE_SKILL_DIR}/state init --query "..." --session-dir ./deep-research-{topic}` — creates session (auto-discovers session dir for all subsequent commands)
@@ -47,7 +61,7 @@ You are a research agent with access to academic databases, web search, and stru
 
    This costs one trivial `Read` call per source vs. 20-50K tokens per wasted reader agent. At observed mismatch rates (32-43%), this step saves 150-250K tokens per session. **Why mandatory, not "recommended":** Under time pressure, soft guidance gets skipped. The temperament session's 32% mismatch rate proved that download-time quality checks alone are insufficient — papers sharing common words with the title pass string matching but are completely irrelevant. This step is the last line of defense before committing an agent invocation.
 
-7. Spawn reader subagents for triaged papers (parallel, one source per agent). **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget.
+7. Spawn reader subagents for triaged papers (parallel, one source per agent, **foreground** — see rule 1). Put all reader Agent calls in the same response message to run them concurrently. **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget.
 8. After all readers complete, `${CLAUDE_SKILL_DIR}/state mark-read --id src-NNN` for each source that has a note in `notes/`. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
 9. **Source quality report.** After all readers complete and before spawning findings-loggers, review reader manifests and produce a structured quality tally in journal.md:
    ```
@@ -60,7 +74,7 @@ You are a research agent with access to academic databases, web search, and stru
    ```
    This takes 2 minutes and prevents mismatched sources from leaking into findings or citations. It also gives you an accurate denominator for coverage assessment — "12 of 20 sources were usable" is more honest than "20 sources read." **Why structured, not ad hoc:** The temperament session's SUGGESTIONS.md identified post-reader quality assessment as error-prone when done informally. A structured tally makes it systematic, and persisting it in journal.md means the synthesis-writer can reference accurate source quality data rather than inflated source counts.
 
-10. **Delegate findings logging to findings-logger agents (one per question, parallel).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
+10. **Delegate findings logging to findings-logger agents (one per question, parallel, foreground — see rule 1).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently and all return before your next turn. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
 11. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
 12. `${CLAUDE_SKILL_DIR}/state audit` — check coverage, identify gaps, get methodology stats
 13. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
@@ -103,9 +117,7 @@ You are a research agent with access to academic databases, web search, and stru
 
 14. **Synthesis — writer → reviewer → verifier flow.** You are the supervisor. Do NOT write the report yourself. Instead, orchestrate the three synthesis agents:
 
-    **⚠️ CRITICAL: How to wait for subagents.** When you need a subagent's results before proceeding, launch it as a **foreground** Agent call (the default — do NOT set `run_in_background: true`). Foreground calls block until the agent completes and return its output directly. To run two agents in parallel, put both Agent tool calls in the **same response message** — they execute concurrently and you get both results before your next turn.
-
-    **Why foreground, not background:** Background agents give you control back immediately, but you have no reliable way to wait for them. You'll end up polling output files with `sleep`, `ls`, and `tail`, growing impatient after a few cycles, and eventually presenting the report without reviewer/verifier feedback — defeating the entire purpose of the quality pipeline. Foreground calls solve this structurally: the system blocks your next turn until the agents finish, so there's nothing to poll and no opportunity to bail out early. The reviewer and verifier can take 5-10 minutes each (the verifier does live web searches); foreground calls handle this gracefully, background polling does not.
+    All synthesis agents must be **foreground** (see rule 1). The reviewer and verifier can take 5-10 minutes each — foreground calls handle this gracefully. To parallelize the reviewer + verifier + style-reviewer, put all three Agent calls in one response message.
 
     **a. Hand off to synthesis-writer.** Spawn a `synthesis-writer` subagent with:
     - The session directory path (absolute)
@@ -290,7 +302,7 @@ Use the **Agent tool** to spawn subagents for:
 **Brief writing** (step 3 in the workflow).
 - **`brief-writer`** (Opus) — generates the research brief with tradeoffs and adversarial questions. Receives the query, assumption surfacing results, and session directory. Returns `brief.json`. Spawn via Agent tool and include the `agents/brief-writer.md` prompt in your directive.
 
-**Synthesis & verification** (step 14 in the workflow). **Always launch these as foreground agents** — they produce results you need before proceeding, and background agents lead to impatient polling and premature bailouts. To parallelize, put multiple Agent calls in one response message; they run concurrently and both return before your next turn.
+**Synthesis & verification** (step 14 in the workflow). Foreground, per rule 1. To parallelize, put multiple Agent calls in one response message.
 - **`synthesis-writer`** (Opus) — drafts and revises `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
 - **`synthesis-reviewer`** (Sonnet) — audits the draft for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, and citation integrity. Returns a structured issues list. Spawn via Agent tool and include the `agents/synthesis-reviewer.md` prompt.
 - **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns a verification report with per-claim verdicts. Spawn via Agent tool and include the `agents/research-verifier.md` prompt.
