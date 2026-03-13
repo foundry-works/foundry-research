@@ -1,126 +1,239 @@
-# Plan: Two-Stage Research Pipeline & Dedicated Revision
+# Deep Research Pipeline Improvement Plan
 
-## Problem
+Based on the uncanny valley session (2026-03-13), this plan addresses six areas where the pipeline underperformed despite having mitigations in place. Each section explains what exists, why it didn't work, and the proposed fix.
 
-The current `/deep-research` skill tries to do everything in one session: research gathering, initial draft, review, and revision. By the time synthesis happens, the orchestrator's context is polluted with search manifests, reader coordination, and gap analysis. The revision step reuses the synthesis-writer agent — but drafting and revising are fundamentally different tasks, and cramming all reviewer feedback (factual + style) into one pass forces the writer to triage competing priorities on the fly.
+---
 
-## Design
+## 1. Download Content Mismatch Detection
 
-Split the pipeline into two independent skills with a clean handoff point, and create a dedicated revision agent that makes surgical edits rather than regenerating the report.
+### Problem
+~40% of downloaded content was the wrong paper. Three validation layers exist but the mismatch rate remains unacceptably high.
 
-### Stage 1: `/deep-research` — Research & Draft
+### What exists
+- **Layer A** (`quality.py:check_content_mismatch`): Title keyword matching + author surname matching + abstract keyword overlap (20% threshold). Runs at download time.
+- **Layer B** (`source-acquisition.md` §Post-download content validation): Agent reads first 10 lines of top 20-30 sources. Manual spot-check.
+- **Layer C** (SKILL.md step 6): Orchestrator reads first 30 lines of each candidate before spawning readers.
 
-Everything up to and including the initial draft. This is the current SKILL.md steps 1-14a, ending when `report.md` is written to disk. The orchestrator's job is done once the synthesis-writer returns a draft.
+### Why it didn't work
+Layer A's keyword approach fails when: (a) titles share common domain words ("uncanny valley" appears in geology, law, and game design papers), (b) metadata has sparse/missing abstracts (common for CORE and OpenAlex), or (c) author names are common. The `title_hits < 3` threshold on the abstract gate (line 238-240 of quality.py) is too permissive — 2 hits from generic words passes papers that are completely off-topic.
 
-**What changes:**
-- Remove steps 14b-14d (review/revise/deliver) from the current SKILL.md
-- The skill ends by telling the user: "Draft is at `report.md`. Review it, then run `/deep-research-revision` when ready."
-- All research infrastructure (state.py, search, download, agents for acquisition/reading/findings/brief/synthesis-writer) stays exactly as-is
+Layer B only checks the top 20-30 sources, letting lower-ranked mismatches through. Layer C catches them but by then download bandwidth and triage effort are wasted.
 
-**Why stop here:** The draft is the natural handoff point. The user has something to read and react to. They might want to redirect the report before spending tokens on revision. They might be happy with the draft as-is. And the revision orchestrator gets a fresh context focused entirely on quality.
+### Proposed fix
 
-### Stage 2: `/deep-research-revision` — Review & Revise
+**A. Add brief-keyword content check in `quality.py`.** After the existing title/author/abstract checks, add a new gate: check whether the first 2000 chars of content contain *any* of the brief's domain-specific keywords. This is passed down from the `--brief-keywords` flag that's already threaded through the search pipeline.
 
-A new skill that takes an existing session directory with a `report.md` and runs a structured review→revise cycle.
+Implementation: `check_content_mismatch()` gains an optional `brief_keywords: list[str]` parameter. If provided, check how many appear in `text[:2000]`. If zero brief keywords match AND title_hits < 3, flag as mismatched.
 
-**Required input:** Session directory path — the user must provide this as an argument (e.g., `/deep-research-revision ./deep-research-credit-cards`). The skill validates that `report.md`, `notes/`, and `sources/metadata/` exist at that path. No auto-discovery — the user explicitly tells us what to revise.
+**Why this helps:** The brief keywords are the highest-signal domain terms (e.g., "uncanny", "perception", "humanoid", "eeriness"). A paper about alpine tree line formation contains none of them. This catches the class of mismatches that keyword matching misses — off-topic papers that slip through because they share generic words with the target title.
 
-**Why required, not auto-discovered:** Auto-discovery via `.deep-research-session` marker files is fragile when the user has multiple sessions, or when running revision in a different working directory than where research happened. An explicit path removes ambiguity and makes the skill work regardless of where the user invokes it from.
+**B. Thread `brief_keywords` through `download.py`.** The brief is already in state.db after `set-brief`. At download time, `download.py` can read the brief's scope/questions, extract keywords, and pass them to `check_content_mismatch()`. No new CLI flags needed — the brief is in the database.
 
-**Optional input:** User feedback — free-text direction like "section 3 is too long" or "I disagree with the conclusion about X". This gets incorporated into the revision instructions alongside automated review findings.
+**C. Lower the abstract-overlap threshold.** Change `title_hits < 3` to `title_hits < 2` in the abstract gate (quality.py line 239). Two generic keyword hits from a wrong paper is the most common false-negative pattern.
 
-**Pass 1 — Accuracy:**
-1. Launch `synthesis-reviewer` + `research-verifier` in parallel (same response message, foreground)
-2. Collect all high/medium issues from reviewer + all contradicted/partially-supported claims from verifier
-3. If user provided feedback, add it as a separate "User feedback" section in the revision instructions
-4. Rename `report.md` → `report_draft.md` (preserve original for diffing)
-5. Launch `report-reviser` with: the draft path, the accuracy issues list, user feedback, session directory
-6. Reviser makes targeted edits, writes updated `report.md`
+### Files to change
+- `skills/deep-research/scripts/_shared/quality.py` — add `brief_keywords` parameter to `check_content_mismatch()`, add brief-keyword gate, lower abstract threshold
+- `skills/deep-research/scripts/download.py` — read brief keywords from state.db, pass to mismatch check
 
-**Pass 2 — Style:**
-1. Launch `style-reviewer` on the corrected `report.md`
-2. Collect all high/medium style issues
-3. Launch `report-reviser` with: the corrected draft, the style issues list, session directory
-4. Reviser makes targeted edits to final `report.md`
+### Risk
+False positives (flagging correct papers as mismatched) if brief keywords are too generic. Mitigated by requiring zero brief keyword hits, not just low overlap — a paper that's truly on-topic will contain at least one domain term in its first 2000 chars.
 
-**Why two passes, not parallel:** Style fixes applied to text containing factual errors are wasted work — the text will change when errors are fixed. Running accuracy first means the style reviewer sees correct text, and the reviser has a simpler job each time. The cost is ~2-3 minutes of sequential execution, which is trivial compared to the research phase.
+---
 
-**Why user feedback in Pass 1:** User direction is closer to "accuracy" than "style" — it's about content, emphasis, and conclusions. Incorporating it in the accuracy pass means the style reviewer sees text that already reflects the user's intent.
+## 2. Quality Flag Granularity
 
-### New Agent: `report-reviser`
+### Problem
+The `degraded` quality flag is set for both "PDF conversion was imperfect but content is fully readable" and "actual paywall stub / garbled content." The audit warns "do not claim deep reading" for sources that were successfully deep-read (src-054, src-060, src-065, etc. in this session), creating noise that undermines trust in the audit.
 
-A dedicated agent for making targeted edits to an existing report based on a structured issues list.
+### What exists
+- Four flags: `ok`, `abstract_only`, `degraded`, `mismatched` (state.py line 2500)
+- `quality.py:assess_quality()` sets degraded for: low alpha ratio, few sentences, low linebreak density, high non-alphanumeric ratio, paywall markers
+- The audit treats all `degraded` sources identically
 
-**Key differences from synthesis-writer:**
+### Why it didn't work
+PDF raw-text fallback (the `<!-- WARNING: PDF conversion fell back to raw text extraction -->` header) often produces content that passes all quality thresholds — the text is readable, has good alpha ratio, plenty of sentences — but was flagged `degraded` during initial download before quality checks ran, or a minor heuristic (linebreak density) triggered on the raw extraction format.
 
-| Dimension | synthesis-writer | report-reviser |
-|-----------|-----------------|----------------|
-| Input | Notes, findings, metadata, brief | Existing draft + issue list |
-| Operation | Blank-page synthesis | Surgical edits to flagged sections |
-| Tools | Read, Glob, Write | Read, Glob, **Edit** |
-| Core rule | Build coherent narrative from evidence | Fix what's broken, leave the rest alone |
-| Risk to mitigate | Missing evidence, weak structure | Collateral damage to unflagged sections |
+The reader agent successfully extracts content, writes a detailed note, and returns `status: "ok"` — but the state.db quality flag was never updated. The audit reads state.db, not reader manifests.
 
-**Why Edit, not Write:** The synthesis-writer uses `Write` because it generates the whole file. The reviser uses `Edit` because it should only touch specific passages. This is a structural constraint that prevents the "regenerate everything" failure mode — `Edit` requires specifying exact text to replace, which forces targeted changes.
+### Proposed fix
 
-**Agent prompt design principles:**
-- "Do not modify any section that has no flagged issues" — explicit constraint
-- Each edit must trace to a specific issue ID from the review
-- Return a manifest mapping issue IDs to the edits made (for audit trail)
-- If an issue requires context the reviser doesn't have (e.g., needs to check a source), flag it as unresolved rather than guessing
+**A. Add `reader_validated` quality flag.** When the orchestrator calls `mark-read --id src-NNN` after a reader returns with `status: "ok"`, automatically upgrade the source's quality from `degraded` to `reader_validated` in state.db.
 
-### User Feedback Flow
+Implementation: In `state.py`'s `mark-read` handler, check if the source currently has `quality = "degraded"` AND a note file exists in `notes/`. If both true, set quality to `reader_validated`.
 
-When the user runs `/deep-research-revision` with feedback:
+**B. Update audit to distinguish reader-validated from truly degraded.** The audit warning "do not claim deep reading" should only fire for sources that are `degraded` AND NOT `reader_validated`. Reader-validated sources can be claimed as deep reads.
 
-```
-/deep-research-revision ./deep-research-credit-cards
-User: "Section 3 is too detailed — cut it to 2 paragraphs.
-       Also, the recommendation to use X ignores the cost constraint I mentioned."
+**C. Split degraded reasons in audit output.** Instead of a flat `degraded_quality` array, return:
+```json
+{
+  "degraded_unread": ["src-074", "src-098"],
+  "reader_validated": ["src-054", "src-060", "src-065"]
+}
 ```
 
-The revision orchestrator:
-1. Parses user feedback into structured directives
-2. Adds them to the Pass 1 revision instructions under a "User feedback" header
-3. The reviser treats user feedback as highest priority (above reviewer issues)
-4. The manifest explicitly tracks which user feedback items were addressed
+### Files to change
+- `skills/deep-research/scripts/state.py` — add `reader_validated` to quality choices, update `mark-read` to auto-upgrade, update `audit` output structure
+- `skills/deep-research/SKILL.md` — update audit interpretation guidance
+- `agents/source-acquisition.md` — no changes (doesn't interact with reader_validated)
 
-This also means the user can run `/deep-research-revision` with *only* user feedback (no automated review) for quick iterations. The orchestrator should detect "no automated review needed" when the user's feedback is purely about content direction, not accuracy.
+### Risk
+Low. The `mark-read` + note-file-exists combination is a strong signal that content was usable. The only edge case is a reader that returns `"ok"` for thin content — but reader.md's status determination rules (lines 64-81) explicitly address this.
 
-## What Stays the Same
+---
 
-- All research infrastructure (state.py, search, download scripts)
-- All research-phase agents (source-acquisition, research-reader, findings-logger, brief-writer)
-- The synthesis-writer agent (still does initial drafting)
-- The three reviewer agents (synthesis-reviewer, research-verifier, style-reviewer)
-- Session directory structure
-- State database schema
+## 3. Recovery Search Budget and Domain-Aware Early Exit
 
-## File Changes
+### Problem
+61 of 83 searches were recovery attempts (mostly CORE queries) with negligible yield for psychology literature. Recovery searches aren't governed by the same budget discipline as primary searches.
 
-### New files:
-- `skills/deep-research-revision/SKILL.md` — revision orchestrator prompt
-- `agents/report-reviser.md` — dedicated revision agent prompt
+### What exists
+- `source-acquisition.md` line 55: "Aim for 15-25 total searches in initial mode"
+- `recover-failed` command loops until all eligible sources are attempted
+- `--min-relevance` and `--title-keywords` filters exist but only filter which sources are *attempted*, not total recovery effort
 
-### Modified files:
-- `skills/deep-research/SKILL.md` — remove steps 14b-14d, add "draft complete" ending
-- `copy-to-skills.sh` — add the new skill directory to the copy list
+### Why it didn't work
+The 15-25 budget applies to primary searches. Recovery runs as a separate phase with no budget cap — `recover-failed` tries every eligible failed source across multiple channels (CORE title search, Tavily, DOI landing page). For psychology papers behind APA/Wiley paywalls, CORE almost never has them, and each attempt costs a search. With 50+ failed sources eligible, recovery spirals to 50-60+ searches with near-zero yield.
 
-### Unchanged files:
-- `agents/synthesis-writer.md` — still does initial drafting only
-- `agents/synthesis-reviewer.md` — unchanged
-- `agents/style-reviewer.md` — unchanged
-- `agents/research-verifier.md` — unchanged
-- `agents/brief-writer.md` — unchanged
-- `agents/source-acquisition.md` — unchanged
-- `agents/research-reader.md` — unchanged
-- `agents/findings-logger.md` — unchanged
-- All scripts in `skills/deep-research/scripts/` — unchanged
+The `source-acquisition.md` guidance (lines 149-158) says to use `--min-relevance` and `--title-keywords` to reduce recovery candidates, but the agent interpreted these as quality filters on *which* sources to try, not as a mechanism to limit total recovery effort.
 
-## Open Questions
+### Proposed fix
 
-1. **Should `/deep-research-revision` support multiple rounds?** E.g., user reviews the revised report, gives more feedback, runs revision again. The current design supports this naturally (it just reads whatever `report.md` is on disk), but should we explicitly version drafts (`report_v1.md`, `report_v2.md`) for audit trail?
+**A. Add `--max-attempts N` flag to `recover-failed`.** Default 15. After N total recovery attempts across all channels, stop and return results so far. This is the hard budget cap that's missing.
 
-2. **Should the revision orchestrator auto-detect when to skip style review?** If the accuracy pass found zero issues and the user's feedback was content-only, the style pass might be redundant if it already ran once. But this adds complexity — probably better to always run both passes and let the style reviewer return zero issues if the text is clean.
+**B. Add domain-aware channel skipping to `recover-failed`.** Track per-channel success rates during recovery. If a channel (e.g., CORE) has 0 successes after 5 attempts, skip it for remaining sources. This is the early-exit that prevents 50 failed CORE queries in a row.
 
-3. **Should the reviser have access to source files?** The current design gives it Read access to `notes/` and `sources/metadata/` so it can verify claims when fixing accuracy issues. But giving it access to full source text (`sources/src-NNN.md`) risks context bloat. Probably: metadata + notes yes, full source text no — if it needs the full source, flag as unresolved.
+Implementation: In `state.py`'s `recover-failed` handler, maintain a dict `{channel: {"attempts": N, "successes": M}}`. After each attempt, check if the channel's success rate is 0% with 5+ attempts. If so, skip that channel for remaining sources and log the skip.
+
+**C. Update `source-acquisition.md` to frame recovery as budgeted.** Add: "Recovery has a budget too. Default --max-attempts 15. If CORE returns 0 results after 5 tries, stop using CORE for this session — the papers aren't there. Switch to Tavily author-page searches for the remaining high-priority failures."
+
+### Files to change
+- `skills/deep-research/scripts/state.py` — add `--max-attempts` flag, add per-channel success tracking and early-exit
+- `agents/source-acquisition.md` — add recovery budget guidance, update CLI reference
+
+### Risk
+Some recoverable sources may be missed by the budget cap. Mitigated by: (a) the cap applies per channel, so switching channels is still allowed, (b) 15 attempts covers the highest-priority sources, (c) gap-mode can do targeted recovery later.
+
+---
+
+## 4. Findings Deduplication Across Questions
+
+### Problem
+84 findings from 17 sources, but the distinct evidence base was closer to 40-50 unique claims. Cross-question duplicates aren't caught because each findings-logger runs in isolation.
+
+### What exists
+- Within-question dedup rules in `findings-logger.md` lines 42-47
+- Warning about the problem in `findings-logger.md` line 49
+- Each logger runs in parallel with no shared state
+
+### Why it didn't work
+The dedup rules only apply within a single question's scope. A finding about "categorical perception at the 60% boundary" is genuinely relevant to Q1 (theories), Q4 (categorical perception), and Q5 (methodology), so three independent loggers each log it. The rules say "if two sources report the same conclusion independently, that's one finding with two source citations" — but they don't say "if another logger already logged this finding for a different question, skip it."
+
+Parallel execution makes cross-question dedup impossible without shared state or a post-processing step.
+
+### Proposed fix
+
+**A. Add a `deduplicate-findings` subcommand to `state.py`.** After all findings-loggers complete, run `state deduplicate-findings` which:
+1. Groups findings by source citations (findings citing the same source set are candidates)
+2. Computes text similarity (simple token overlap ratio) between candidate pairs
+3. Merges findings with >70% token overlap: keeps the one with more source citations, adds a `also_relevant_to` field with the other question(s)
+4. Returns: `{"merged": N, "remaining": M, "original": K}`
+
+**B. Call this from the orchestrator after step 10 (findings-loggers), before step 11 (gap review).** One additional CLI call, no agent needed.
+
+**C. Update `findings-logger.md` to add cross-reference hints.** When a logger encounters a finding that's primarily about another question, instead of logging a full finding, it should log a lightweight cross-reference: `--text "See Q4 findings on categorical perception boundary — also relevant here" --sources "" --question "Q1: ..."`. This gives the synthesis-writer the connection without creating a duplicate finding. Add guidance: "If a finding's primary evidence is about another question's core topic (e.g., you're logging for Q1 but the finding is really about Q4's categorical perception mechanism), log a 1-sentence cross-reference instead of a full finding."
+
+### Files to change
+- `skills/deep-research/scripts/state.py` — add `deduplicate-findings` subcommand
+- `agents/findings-logger.md` — add cross-reference guidance
+- `skills/deep-research/SKILL.md` — add dedup step after findings-loggers (between steps 10 and 11)
+
+### Risk
+Over-merging: two genuinely distinct findings from the same sources could be merged if they use similar vocabulary. Mitigated by: (a) the 70% threshold is conservative, (b) only candidates with overlapping source citations are compared, (c) merged findings preserve both question associations.
+
+---
+
+## 5. Citation Chasing Enforcement
+
+### Problem
+5 citation traversals out of 83 total searches (6%), well below the 30-50% target for a literature review topic. The guidance exists but wasn't enforced.
+
+### What exists
+- `source-acquisition.md` lines 63-74: Detailed citation chasing requirements — bidirectional traversal, minimum 3 traversals, 30-50% allocation for literature review topics, fallback tree
+- SKILL.md line 51: "Validate citation chasing in the manifest... If the agent ran only 1-2 traversals, push back in gap mode"
+- The manifest includes a `citation_chasing` block
+
+### Why it didn't work
+The 30-50% target is prose guidance that competes with the agent's drive to move through the pipeline. When broad searches return hundreds of sources, the agent sees "coverage" and moves to triage/download rather than investing in traversals. The minimum-3-traversals requirement was met (5 > 3), but the 30-50% aspiration was ignored.
+
+The orchestrator's validation (SKILL.md line 51) says to "push back in gap mode" — but I correctly judged gap mode wasn't worth the cost. So the enforcement mechanism (gap-mode pushback) was bypassed by a legitimate skip decision.
+
+### Proposed fix
+
+**A. Make the `state manifest` command compute and report the citation-chasing ratio.** Add `citation_chasing_ratio` to the manifest output: `traversals_run / (total_searches - recovery_searches)`. This makes the ratio visible without manual calculation.
+
+**B. Add a manifest warning when the ratio is below threshold.** If the brief contains 5+ questions (indicating a review-depth topic) and the citation-chasing ratio is below 25%, the manifest should include a `warnings` array with: `"Citation chasing ratio (X%) below recommended minimum (25%) for review-depth topics. Consider additional traversals before proceeding."` This surfaces the gap even when the orchestrator has already decided to skip gap-mode.
+
+**C. Update `source-acquisition.md` with a hard gate.** After round 2, before proceeding to round 3+, check: "Have I run at least `floor(searches_so_far * 0.25)` citation traversals?" If not, run more traversals before moving to refinement searches. This converts the aspiration into a checkpoint.
+
+### Files to change
+- `skills/deep-research/scripts/state.py` — add `citation_chasing_ratio` computation to `manifest` subcommand, add ratio-based warning
+- `agents/source-acquisition.md` — add hard checkpoint between rounds 2 and 3
+
+### Risk
+Low. Worst case is a few extra citation traversals that return low-yield results, but citation chasing is the highest-precision search strategy for connected literatures — the expected failure mode is too few traversals, not too many.
+
+---
+
+## 6. SKILL.md and Prompt Organization
+
+### Problem
+SKILL.md is 377 lines; source-acquisition.md is 474 lines. Total prompt surface across all agents is ~1200+ lines. The "why" explanations are valuable but some sections read as post-incident retrospectives that could live elsewhere.
+
+### What exists
+- Delegation keeps agent-specific detail out of SKILL.md
+- Step-by-step numbered workflow
+- Cross-references to agent prompts
+- "Why" blocks after each decision point
+
+### Why it's a concern (not a failure)
+This didn't cause a failure in this session — the prompts were followed. But the length increases the risk that under context pressure, the model skims rather than reads closely. The longest sections are incident-specific narratives (e.g., "the temperament session's 32% mismatch rate," "the temperament session's SUGGESTIONS.md identified...") that provide context for decisions but aren't needed on every run.
+
+### Proposed fix
+
+**A. Create `skills/deep-research/LESSONS.md`.** Move incident-specific context and extended rationale into a standalone file. Each entry has a short ID (e.g., `#mismatch-cascade`, `#recovery-spiral`, `#gap-false-confidence`) that SKILL.md can reference. Format:
+
+```markdown
+## mismatch-cascade
+**Session:** temperament measurement (2025-XX)
+**What happened:** Gap agent trusted title matches on content-mismatched sources, leaving 8/12 gaps unresolved.
+**Lesson:** Always verify gap resolution with readers before calling resolve-gap.
+**Applied in:** SKILL.md step 13, source-acquisition.md §gap-mode
+```
+
+**B. Replace inline narratives in SKILL.md with one-line references.** Example: instead of the 5-line explanation in step 6 about the temperament session's 32% mismatch rate, write: "**Why mandatory:** See LESSONS.md#pre-read-validation for the incident that motivated this step."
+
+**C. Keep "why" blocks that explain *the principle*, remove ones that explain *the incident*.** "Why: category-boundary ambiguity doesn't always produce negative affect, so pre-read validation catches false matches that keyword checks miss" stays. "Why: the temperament session's 32% mismatch rate proved that download-time quality checks alone are insufficient" moves to LESSONS.md.
+
+### Files to change
+- Create `skills/deep-research/LESSONS.md`
+- `skills/deep-research/SKILL.md` — replace ~15 incident-specific narrative blocks with LESSONS.md references
+- `agents/source-acquisition.md` — same treatment for ~5 incident-specific blocks
+
+### Risk
+The model may not read LESSONS.md unless explicitly told to. Mitigated by: (a) the principles remain inline — only the incidents move, (b) LESSONS.md is in the skill directory and could be loaded with the skill context, (c) the references are clear enough that the model can follow them when debugging a failure.
+
+### Open question
+Does the Claude Code skill loader include all files in the skill directory, or only SKILL.md? If only SKILL.md, LESSONS.md would need to be referenced via Read tool calls, which adds friction. Need to verify this before implementing.
+
+---
+
+## Implementation Order
+
+Recommended sequence based on impact and independence:
+
+1. **Recovery budget** (§3) — standalone code change, immediate token savings
+2. **Download mismatch detection** (§1) — standalone code change, highest impact on data quality
+3. **Quality flag granularity** (§2) — standalone code change, fixes audit noise
+4. **Findings dedup** (§4) — new subcommand + prompt updates, moderate impact
+5. **Citation chasing enforcement** (§5) — manifest computation + prompt update, low risk
+6. **Prompt organization** (§6) — editorial, no code changes, lowest urgency

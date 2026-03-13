@@ -1,59 +1,64 @@
 # Implementation Checklist
 
-## Phase 1: Create the report-reviser agent
+## 1. Download Content Mismatch Detection
 
-- [ ] **`agents/report-reviser.md`**: Write the agent prompt. Key design points:
-  - Tools: Read, Glob, Edit (NOT Write — surgical edits only)
-  - Input: existing draft path, structured issues list (with IDs), optional user feedback, session directory
-  - Core constraint: "Do not modify any section that has no flagged issues"
-  - Each edit traces to a specific issue ID
-  - Returns manifest: `{status, edits: [{issue_id, location, description}], unresolved: [...]}`
-  - Can read `notes/` and `sources/metadata/` for verification context, but NOT full source text
-  - User feedback items treated as highest priority
+- [ ] **1a.** Add `brief_keywords: list[str] | None = None` parameter to `check_content_mismatch()` in `quality.py`
+- [ ] **1b.** Add brief-keyword gate: if `brief_keywords` provided and zero match in `text[:2000]` AND `title_hits < 3`, set `mismatched = True`
+- [ ] **1c.** Lower abstract-overlap threshold from `title_hits < 3` to `title_hits < 2` (line 239)
+- [ ] **1d.** In `download.py`, read brief keywords from state.db (query brief JSON, extract scope/questions, run `_extract_keywords`)
+- [ ] **1e.** Pass extracted brief keywords to `check_content_mismatch()` calls (3 call sites: lines ~195, ~551, ~845)
+- [ ] **1f.** Add test: mock a brief with domain keywords, download content with zero domain overlap → expect mismatched
+- [ ] **1g.** Add test: on-topic content with brief keyword hits → expect not mismatched
 
-## Phase 2: Create `/deep-research-revision` skill
+## 2. Quality Flag Granularity
 
-- [ ] **`skills/deep-research-revision/SKILL.md`**: Write the revision orchestrator prompt. Sections:
-  - Activation: user runs `/deep-research-revision <session-dir>`
-  - Required argument: session directory path (e.g., `./deep-research-credit-cards`). Fail with clear error if not provided.
-  - Input validation: check session directory has `report.md`, `notes/`, `sources/metadata/`
-  - User feedback handling: parse free-text into structured directives
-  - Pass 1 (Accuracy): spawn synthesis-reviewer + research-verifier in parallel → collect issues → spawn report-reviser
-  - Pass 2 (Style): spawn style-reviewer on corrected text → collect issues → spawn report-reviser
-  - Delivery: present final report, note any unresolved issues
-  - Quick mode: if user provides only content feedback (no automated review needed), skip reviewers and go straight to reviser
+- [ ] **2a.** Add `reader_validated` to quality choices in `state.py` `set-quality` argparse (line ~2500)
+- [ ] **2b.** In `mark-read` handler: if source quality is `degraded` AND note file exists in `notes/`, auto-upgrade quality to `reader_validated`
+- [ ] **2c.** Update `audit` output: split `degraded_quality` into `degraded_unread` and `reader_validated` arrays
+- [ ] **2d.** Update audit warnings: "do not claim deep reading" only for `degraded_unread`, not `reader_validated`
+- [ ] **2e.** Update `audit --brief` to report `reader_validated` count separately
+- [ ] **2f.** Update SKILL.md audit interpretation guidance (lines ~222-223) to reflect new categories
+- [ ] **2g.** Add test: `mark-read` on a degraded source with existing note → quality becomes `reader_validated`
+- [ ] **2h.** Add test: `mark-read` on an `ok` source → quality stays `ok` (no spurious downgrade)
 
-## Phase 3: Trim `/deep-research` SKILL.md
+## 3. Recovery Search Budget and Domain-Aware Early Exit
 
-- [x] **Remove steps 14b-14d** from `skills/deep-research/SKILL.md`:
-  - 14b (launch reviewer + verifier + style-reviewer in parallel) — moves to revision skill
-  - 14c (writer revision pass) — replaced by report-reviser in revision skill
-  - 14d (deliver report) — replaced by simple "draft complete" message
-- [x] **Update step 14a ending**: After synthesis-writer returns, the orchestrator:
-  - Reads and presents the draft to the user
-  - Notes: "Run `/deep-research-revision` to review and revise, or provide feedback"
-  - Logs completion in journal.md
-- [x] **Update the Delegation section**: Remove synthesis-reviewer, research-verifier, style-reviewer from the delegation list (they move to the revision skill). Keep synthesis-writer.
-- [x] **Update the "Synthesis is delegated" paragraph** in "What Good Research Looks Like" to reflect the new split
+- [ ] **3a.** Add `--max-attempts N` flag to `recover-failed` in `state.py` (default 15)
+- [ ] **3b.** Implement attempt counter: increment per recovery attempt (each channel per source = 1 attempt), stop when counter reaches max
+- [ ] **3c.** Add per-channel success tracking dict: `{channel: {"attempts": N, "successes": M}}`
+- [ ] **3d.** Implement channel early-exit: if a channel has 0 successes after 5 attempts, skip it for remaining sources; log the skip in the JSON response
+- [ ] **3e.** Add `skipped_channels` to `recover-failed` response schema
+- [ ] **3f.** Update `source-acquisition.md` recovery section (lines 149-158): add budget framing, document `--max-attempts`, add channel-skip behavior
+- [ ] **3g.** Update `source-acquisition.md` CLI reference (line ~300-301) with new flag
+- [ ] **3h.** Add test: 20 sources eligible, max-attempts=5 → only 5 attempts run
+- [ ] **3i.** Add test: channel with 0/5 success rate → channel skipped for source #6
 
-## Phase 4: Update copy-to-skills.sh
+## 4. Findings Deduplication
 
-- [x] Add `skills/deep-research-revision/` to the copy targets — no changes needed, script already globs `skills/*/`
-- [x] Verify the new skill directory gets copied to `.claude/skills/deep-research-revision/`
+- [ ] **4a.** Add `deduplicate-findings` subcommand to `state.py`
+- [ ] **4b.** Implement: query all findings, group by overlapping source citations
+- [ ] **4c.** Implement: for candidate pairs, compute token overlap ratio on `--text`
+- [ ] **4d.** Implement: merge findings with >70% overlap — keep the one with more source citations, add `also_relevant_to` field with the merged question(s)
+- [ ] **4e.** Return JSON: `{"merged": N, "remaining": M, "original": K}`
+- [ ] **4f.** Update `findings-logger.md`: add cross-reference guidance (lines ~47-49 area)
+- [ ] **4g.** Update SKILL.md: add dedup step between steps 10 and 11
+- [ ] **4h.** Add test: two findings with 80% text overlap citing same sources → merged
+- [ ] **4i.** Add test: two findings with 40% overlap → not merged
+- [ ] **4j.** Add test: two findings with different source citations → not merged even if text is similar
 
-## Phase 5: Update synthesis-writer.md (minor)
+## 5. Citation Chasing Enforcement
 
-- [x] Remove the "On revision passes" return format — the writer no longer does revision
-- [x] Remove "Revision instructions (on subsequent invocations)" from "What you receive"
-- [x] Simplify: the writer's only job is the initial draft
+- [ ] **5a.** In `state.py` `manifest` handler: compute `citation_chasing_ratio = traversals_run / max(1, total_searches - recovery_searches)`
+- [ ] **5b.** Add `citation_chasing_ratio` to manifest output
+- [ ] **5c.** If brief has 5+ questions AND ratio < 0.25, add warning to manifest `warnings` array
+- [ ] **5d.** Update `source-acquisition.md`: add hard checkpoint between rounds 2 and 3 — "Before proceeding to round 3+, verify: `traversals_run >= floor(primary_searches * 0.25)`. If not, run more traversals."
+- [ ] **5e.** Update manifest response schema in `source-acquisition.md` (line ~384) to include `citation_chasing_ratio`
 
-## Phase 6: Testing
+## 6. Prompt Organization
 
-- [ ] Run `./copy-to-skills.sh` — verify new skill and agent are deployed
-- [ ] Verify `/deep-research-revision` activates on an existing session with a report.md
-- [ ] Test Pass 1: reviewer + verifier find issues → reviser fixes them → report.md updated
-- [ ] Test Pass 2: style-reviewer finds issues → reviser fixes them → report.md updated
-- [ ] Test user feedback: provide free-text feedback → reviser incorporates it
-- [ ] Test user-feedback-only mode: skip automated review, just apply user direction
-- [ ] Verify `report_draft.md` is preserved for diffing
-- [ ] End-to-end: run `/deep-research` on a test query → review draft → run `/deep-research-revision` with feedback
+- [ ] **6a.** Create `skills/deep-research/LESSONS.md` with entry format (ID, session, what happened, lesson, applied-in)
+- [ ] **6b.** Extract ~15 incident-specific narrative blocks from SKILL.md into LESSONS.md entries
+- [ ] **6c.** Replace extracted blocks with one-line references: "See LESSONS.md#entry-id"
+- [ ] **6d.** Extract ~5 incident-specific blocks from `source-acquisition.md` into LESSONS.md
+- [ ] **6e.** Verify: does Claude Code skill loader include LESSONS.md automatically, or only SKILL.md? If only SKILL.md, add a Read instruction at the top of SKILL.md pointing to LESSONS.md for debugging context.
+- [ ] **6f.** Review: ensure all inline "why" blocks that explain *principles* (not incidents) remain in place
