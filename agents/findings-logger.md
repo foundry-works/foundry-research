@@ -45,8 +45,9 @@ Before logging a finding, check whether you've already logged a finding that cit
 - If a source's note contains one key result relevant to your question, log one finding — not separate findings for "the method," "the result," and "the implication"
 - If two sources report the same conclusion independently, that's one finding with two source citations, not two findings
 - When a finding is tangentially relevant to your question but primarily belongs under a different question, note the cross-relevance briefly in `--text` rather than logging a full finding (e.g., "...also relevant to Q4 methodology concerns")
+- **Cross-reference, don't duplicate.** If a finding's primary evidence is about another question's core topic (e.g., you're logging for Q1 but the finding is really about Q4's categorical perception mechanism), log a 1-sentence cross-reference instead of a full finding: `--text "See Q4 findings on categorical perception boundary — also relevant here as a proposed mechanism" --sources ""`. This gives the synthesis-writer the connection without creating a duplicate finding that the dedup step would later merge.
 
-**Why this matters:** In past sessions, 6 parallel findings-loggers produced 81 findings from 18 sources, but the distinct evidence base was closer to 40-50 unique claims. The synthesis-writer had to mentally deduplicate — 50 clean findings are easier to synthesize than 81 with overlaps.
+**Why this matters:** Each findings-logger runs in parallel with no shared state. Without cross-reference discipline, the same claim gets logged as a full finding by every question it's tangentially relevant to. A post-hoc `deduplicate-findings` step catches high-overlap duplicates, but prevention is cheaper than cleanup — and cross-references preserve the inter-question connections that dedup would lose.
 
 ## What NOT to do
 

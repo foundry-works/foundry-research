@@ -75,9 +75,10 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
    This takes 2 minutes and prevents mismatched sources from leaking into findings or citations. It also gives you an accurate denominator for coverage assessment — "12 of 20 sources were usable" is more honest than "20 sources read." **Why structured, not ad hoc:** The temperament session's SUGGESTIONS.md identified post-reader quality assessment as error-prone when done informally. A structured tally makes it systematic, and persisting it in journal.md means the synthesis-writer can reference accurate source quality data rather than inflated source counts.
 
 10. **Delegate findings logging to findings-logger agents (one per question, parallel, foreground — see rule 1).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently and all return before your next turn. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
-11. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
-12. `${CLAUDE_SKILL_DIR}/state audit --brief` — check coverage, identify gaps, get methodology stats. The `--brief` flag returns counts instead of full ID arrays, saving context. Use full `audit` (without `--brief`) only when you need to debug specific source IDs.
-13. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
+11. **Deduplicate findings across questions.** Run `${CLAUDE_SKILL_DIR}/state deduplicate-findings`. This merges cross-question duplicates: findings that cite overlapping sources and have >70% token overlap are merged — the one with more source citations is kept, and the absorbed finding's question is added as an `also_relevant_to` annotation. No agent needed — one CLI call. **Why here:** Findings-loggers run in parallel with no shared state, so the same claim logged under multiple questions can't be caught at extraction time. Deduplication before gap review ensures the gap assessment isn't inflated by duplicate coverage.
+12. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
+13. `${CLAUDE_SKILL_DIR}/state audit --brief` — check coverage, identify gaps, get methodology stats. The `--brief` flag returns counts instead of full ID arrays, saving context. Use full `audit` (without `--brief`) only when you need to debug specific source IDs.
+14. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
 
     **When to skip gap-mode:** If ALL of the following are true, gap-mode may be skipped:
     - Every research question has 5+ findings
@@ -115,7 +116,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     **Why this matters:** In past sessions, the orchestrator called `resolve-gap` based solely on the acquisition manifest — then reader agents discovered the "resolving" sources were mismatched content or unreadable stubs. This created false confidence that coverage gaps were filled when they weren't, leading to thin or missing sections in the final report. The extra reader step costs one agent invocation per source (~20-50K tokens each) but prevents wasting an entire synthesis cycle on illusory coverage.
 
-14. **Synthesis — draft the report.** You are the supervisor. Do NOT write the report yourself. Instead, hand off to the synthesis-writer agent.
+15. **Synthesis — draft the report.** You are the supervisor. Do NOT write the report yourself. Instead, hand off to the synthesis-writer agent.
 
     The synthesis-writer must be **foreground** (see rule 1).
 
@@ -124,7 +125,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
     - The research brief (scope, questions, completeness criteria)
     - The **path to `synthesis-handoff.json`** — tell the writer to read this file for the structured findings array with source citations and the gaps array. This is the evidence backbone.
     - A **narrative key findings summary** — your interpretation of patterns, contradictions, and relative strength of evidence across questions. You write this from what you already know (reader manifests, gap analysis, quality report, journal entries) — you don't need to re-read the raw findings.
-    - Audit stats (from step 12) for the Methodology section
+    - Audit stats (from step 13) for the Methodology section
 
     **Why `--write-handoff`:** The full summary JSON is 5-20KB (findings text, source lists, gap details). The synthesis-writer needs all of it for citation precision, but you don't — you've already lived the research journey and can write your narrative interpretation from memory. `--write-handoff` keeps the structured data out of your context entirely: the writer reads it from disk, you pass only the path (~200 bytes vs. 5-20KB).
 
@@ -160,6 +161,7 @@ add-sources --from-json FILE      # batch dedup + insert (auto-called by search 
 check-dup --doi/--url/--title     # check before downloading
 check-dup-batch --from-json FILE  # batch dedup check
 log-finding --text "..." --sources "src-001,src-003" --question "Q1: What mechanisms drive X?"
+deduplicate-findings              # merge cross-question duplicate findings (run after all findings-loggers)
 log-gap --text "..."              # record coverage gap
 resolve-gap --gap-id "gap-1"      # mark gap resolved
 gap-search-plan                   # suggest searches for open gaps (terms + citation chase)

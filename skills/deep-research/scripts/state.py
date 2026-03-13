@@ -563,6 +563,93 @@ def cmd_log_finding(args):
     success_response({"id": finding_id, "text": args.text})
 
 
+def _token_overlap(a: str, b: str) -> float:
+    """Token-overlap ratio between two text strings (case-insensitive)."""
+    tokens_a = set(re.findall(r'\w+', a.lower()))
+    tokens_b = set(re.findall(r'\w+', b.lower()))
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    return len(intersection) / max(len(tokens_a), len(tokens_b))
+
+
+def cmd_deduplicate_findings(args):
+    """Merge cross-question duplicate findings based on source overlap and text similarity."""
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+
+    rows = conn.execute(
+        "SELECT id, text, sources, question FROM findings WHERE session_id = ? ORDER BY id",
+        (sid,)
+    ).fetchall()
+    findings = []
+    for r in rows:
+        sources = json.loads(r["sources"]) if r["sources"] else []
+        findings.append({
+            "id": r["id"],
+            "text": r["text"],
+            "sources": set(sources),
+            "question": r["question"] or "",
+        })
+
+    original_count = len(findings)
+    threshold = args.threshold
+
+    # Build candidate pairs: findings that share at least one source citation
+    merged_ids: set[str] = set()  # IDs absorbed into another finding
+    merge_map: dict[str, list[str]] = {}  # kept_id -> list of also_relevant_to questions
+
+    for i in range(len(findings)):
+        if findings[i]["id"] in merged_ids:
+            continue
+        for j in range(i + 1, len(findings)):
+            if findings[j]["id"] in merged_ids:
+                continue
+            fi, fj = findings[i], findings[j]
+            # Require overlapping source citations
+            if not (fi["sources"] & fj["sources"]):
+                continue
+            # Compute text similarity
+            overlap = _token_overlap(fi["text"], fj["text"])
+            if overlap < threshold:
+                continue
+            # Merge: keep the one with more source citations
+            if len(fj["sources"]) > len(fi["sources"]):
+                keeper, absorbed = fj, fi
+            else:
+                keeper, absorbed = fi, fj
+            merged_ids.add(absorbed["id"])
+            # Track cross-question relevance
+            if absorbed["question"] and absorbed["question"] != keeper["question"]:
+                merge_map.setdefault(keeper["id"], []).append(absorbed["question"])
+
+    # Delete merged findings and update keeper texts with also_relevant_to
+    if merged_ids:
+        placeholders = ",".join("?" for _ in merged_ids)
+        conn.execute(
+            f"DELETE FROM findings WHERE id IN ({placeholders}) AND session_id = ?",
+            [*merged_ids, sid]
+        )
+        # For keepers with cross-question relevance, append the info to their text
+        for keeper_id, questions in merge_map.items():
+            q_list = "; ".join(questions)
+            conn.execute(
+                "UPDATE findings SET text = text || ? WHERE id = ? AND session_id = ?",
+                (f" [Also relevant to: {q_list}]", keeper_id, sid)
+            )
+        conn.commit()
+        _regenerate_snapshot(args.session_dir, conn, sid)
+
+    merged_count = len(merged_ids)
+    remaining_count = original_count - merged_count
+    conn.close()
+    success_response({
+        "merged": merged_count,
+        "remaining": remaining_count,
+        "original": original_count,
+    })
+
+
 def cmd_log_gap(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
@@ -2513,6 +2600,11 @@ def main():
     p.add_argument("--gap-id", required=True)
     p.add_argument("--session-dir", **_sd)
 
+    # deduplicate-findings
+    p = sub.add_parser("deduplicate-findings")
+    p.add_argument("--threshold", type=float, default=0.7, help="Token overlap threshold for merging (default 0.7)")
+    p.add_argument("--session-dir", **_sd)
+
     # gap-search-plan
     p = sub.add_parser("gap-search-plan")
     p.add_argument("--session-dir", **_sd)
@@ -2674,6 +2766,7 @@ def main():
         "log-finding": cmd_log_finding,
         "log-gap": cmd_log_gap,
         "resolve-gap": cmd_resolve_gap,
+        "deduplicate-findings": cmd_deduplicate_findings,
         "gap-search-plan": cmd_gap_search_plan,
         "searches": cmd_searches,
         "sources": cmd_sources,

@@ -35,16 +35,16 @@
 
 ## 4. Findings Deduplication
 
-- [ ] **4a.** Add `deduplicate-findings` subcommand to `state.py`
-- [ ] **4b.** Implement: query all findings, group by overlapping source citations
-- [ ] **4c.** Implement: for candidate pairs, compute token overlap ratio on `--text`
-- [ ] **4d.** Implement: merge findings with >70% overlap — keep the one with more source citations, add `also_relevant_to` field with the merged question(s)
-- [ ] **4e.** Return JSON: `{"merged": N, "remaining": M, "original": K}`
-- [ ] **4f.** Update `findings-logger.md`: add cross-reference guidance (lines ~47-49 area)
-- [ ] **4g.** Update SKILL.md: add dedup step between steps 10 and 11
-- [ ] **4h.** Add test: two findings with 80% text overlap citing same sources → merged
-- [ ] **4i.** Add test: two findings with 40% overlap → not merged
-- [ ] **4j.** Add test: two findings with different source citations → not merged even if text is similar
+- [x] **4a.** Add `deduplicate-findings` subcommand to `state.py`
+- [x] **4b.** Implement: query all findings, group by overlapping source citations
+- [x] **4c.** Implement: for candidate pairs, compute token overlap ratio on `--text`
+- [x] **4d.** Implement: merge findings with >70% overlap — keep the one with more source citations, add `also_relevant_to` field with the merged question(s)
+- [x] **4e.** Return JSON: `{"merged": N, "remaining": M, "original": K}`
+- [x] **4f.** Update `findings-logger.md`: add cross-reference guidance (lines ~47-49 area)
+- [x] **4g.** Update SKILL.md: add dedup step between steps 10 and 11
+- [x] **4h.** Add test: two findings with 80% text overlap citing same sources → merged
+- [x] **4i.** Add test: two findings with 40% overlap → not merged
+- [x] **4j.** Add test: two findings with different source citations → not merged even if text is similar
 
 ## 5. Citation Chasing Enforcement
 
