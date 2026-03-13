@@ -297,7 +297,7 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state log-gap --text "..."       # record coverage gap
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 
-# Recovery
+# Recovery — ⚠ slow command, set Bash timeout to 600000
 {cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
 ```
 
