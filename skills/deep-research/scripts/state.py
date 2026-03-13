@@ -1140,6 +1140,18 @@ def cmd_download_pending(args):
     total_pending = len(pending)
     max_batches = getattr(args, "max_batches", None)
 
+    if args.auto_download and not pending:
+        success_response({
+            "downloaded": 0,
+            "failed": 0,
+            "failed_sources": [],
+            "batch_size": batch_size or 0,
+            "batches_run": 0,
+            "remaining": 0,
+            "message": "nothing_pending",
+        })
+        return
+
     if args.auto_download and pending:
         timeout_override = getattr(args, "timeout", None)
 
