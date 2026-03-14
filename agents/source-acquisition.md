@@ -73,6 +73,12 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 
 **Skip citation chasing** if: the topic is non-academic (product comparisons, financial analysis) or round 1 found no papers with >50 citations.
 
+### Checkpoint: Citation chasing ratio gate
+
+Before proceeding to round 3+, verify your citation chasing ratio: `traversals_run >= floor(primary_searches * 0.25)`. For example, if you've run 8 primary searches so far, you need at least 2 citation traversals before moving on. If below threshold, run more traversals on the highest-impact papers from rounds 1-2 before continuing to refinement searches.
+
+**Why this gate exists:** Without it, the agent's bias toward broad keyword coverage leads to sessions with 5% citation chasing when 30%+ is optimal for literature review topics. Citation chasing is the highest-precision search strategy for connected literatures — each traversal yields more relevant sources per search than keyword queries. The manifest now reports `citation_chasing_ratio` and warns when it's below 25% for review-depth topics, but this checkpoint catches the gap earlier, before the session's search budget is spent.
+
 ### Round 3+: Query refinement and provider diversity
 - **Check provider distribution** with `state sources --providers` (returns just counts, not full source list) — if any single provider >50% of sources, next searches must use underrepresented providers
 - **Refine queries** using terminology discovered in round 1-2 results (field-specific vocabulary from titles/abstracts)
@@ -386,10 +392,12 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
     "top_papers": [{"id": "src-012", "title": "...", "citations": 340, "provider": "semantic_scholar"}],
     "coverage_assessment": {"Q1: What mechanisms drive X?": "strong (8 sources)", "Q2: How does Y vary?": "thin (1 source)"},
     "gaps_logged": ["gap-1: Q4 has insufficient coverage"],
-    "citation_chasing": {"traversals_run": 6, "sources_from_chasing": 23}
+    "citation_chasing": {"traversals_run": 6, "sources_from_chasing": 23, "citation_chasing_ratio": 0.38}
   }
 }
 ```
+
+`citation_chasing_ratio` = traversals / primary searches (excluding recovery). If the brief has 5+ questions and ratio < 25%, a `warnings` array appears in the response — act on these warnings before returning the manifest to the orchestrator.
 
 **`state manifest --mode gap --top N`**
 ```json

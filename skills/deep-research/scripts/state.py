@@ -1906,11 +1906,12 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
     """Build the initial-mode manifest."""
     # --- Searches ---
     search_rows = conn.execute(
-        "SELECT provider, query, search_mode, result_count, ingested_count FROM searches WHERE session_id = ?",
+        "SELECT provider, query, search_mode, search_type, result_count, ingested_count FROM searches WHERE session_id = ?",
         (session_id,)
     ).fetchall()
     searches_run = len(search_rows)
     sources_found = sum(r["result_count"] or 0 for r in search_rows)
+    recovery_searches = sum(1 for r in search_rows if r["search_type"] == "recovery")
 
     # --- Sources ---
     source_count = conn.execute(
@@ -2002,10 +2003,25 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
     ).fetchall()
     traversals_run = len(citation_searches)
     sources_from_chasing = sum(r["ingested_count"] or 0 for r in citation_searches)
+    primary_searches = searches_run - recovery_searches
+    citation_chasing_ratio = round(traversals_run / max(1, primary_searches), 2)
+
+    # --- Warnings ---
+    warnings = []
+    num_questions = 0
+    if brief_row:
+        questions_list = json.loads(brief_row["questions"])
+        num_questions = len(questions_list)
+        if num_questions >= 5 and citation_chasing_ratio < 0.25:
+            warnings.append(
+                f"Citation chasing ratio ({citation_chasing_ratio:.0%}) below recommended minimum (25%) "
+                f"for review-depth topics ({num_questions} questions). "
+                f"Consider additional traversals before proceeding."
+            )
 
     conn.close()
 
-    success_response({
+    result = {
         "searches_run": searches_run,
         "sources_found": sources_found,
         "sources_after_dedup": source_count,
@@ -2022,8 +2038,12 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
         "citation_chasing": {
             "traversals_run": traversals_run,
             "sources_from_chasing": sources_from_chasing,
+            "citation_chasing_ratio": citation_chasing_ratio,
         },
-    })
+    }
+    if warnings:
+        result["warnings"] = warnings
+    success_response(result)
 
 
 def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):

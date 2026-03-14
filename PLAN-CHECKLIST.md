@@ -48,11 +48,11 @@
 
 ## 5. Citation Chasing Enforcement
 
-- [ ] **5a.** In `state.py` `manifest` handler: compute `citation_chasing_ratio = traversals_run / max(1, total_searches - recovery_searches)`
-- [ ] **5b.** Add `citation_chasing_ratio` to manifest output
-- [ ] **5c.** If brief has 5+ questions AND ratio < 0.25, add warning to manifest `warnings` array
-- [ ] **5d.** Update `source-acquisition.md`: add hard checkpoint between rounds 2 and 3 — "Before proceeding to round 3+, verify: `traversals_run >= floor(primary_searches * 0.25)`. If not, run more traversals."
-- [ ] **5e.** Update manifest response schema in `source-acquisition.md` (line ~384) to include `citation_chasing_ratio`
+- [x] **5a.** In `state.py` `manifest` handler: compute `citation_chasing_ratio = traversals_run / max(1, total_searches - recovery_searches)`
+- [x] **5b.** Add `citation_chasing_ratio` to manifest output
+- [x] **5c.** If brief has 5+ questions AND ratio < 0.25, add warning to manifest `warnings` array
+- [x] **5d.** Update `source-acquisition.md`: add hard checkpoint between rounds 2 and 3 — "Before proceeding to round 3+, verify: `traversals_run >= floor(primary_searches * 0.25)`. If not, run more traversals."
+- [x] **5e.** Update manifest response schema in `source-acquisition.md` (line ~384) to include `citation_chasing_ratio`
 
 ## 6. Prompt Organization
 
