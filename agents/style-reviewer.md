@@ -94,7 +94,7 @@ Write the full review to `revision/style-review.md` in the session directory usi
 **Suggested fix:** "These results only apply to adults over 65"
 ```
 
-Then return a compact JSON manifest to the supervisor:
+Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `style-N` prefix — the orchestrator uses these IDs to track issues through assembly, revision, and validation:
 
 ```json
 {
@@ -106,10 +106,12 @@ Then return a compact JSON manifest to the supervisor:
   "low": 3,
   "issues": [
     {
+      "issue_id": "style-1",
       "severity": "medium",
       "dimension": "passive_voice",
       "mechanical": false,
       "location": "Section 2, paragraph 3",
+      "description": "Passive voice obscures the actor in a key finding sentence",
       "text": "The correlation between sleep duration and cognitive performance was demonstrated by three independent studies",
       "suggested_fix": "Three independent studies demonstrated a correlation between sleep duration and cognitive performance"
     }

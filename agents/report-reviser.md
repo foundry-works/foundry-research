@@ -45,6 +45,8 @@ Before making any changes, mentally map each issue to the specific text passage 
 3. Medium-severity issues
 4. Low-severity issues (only if they don't risk collateral damage to clean text)
 
+**Opportunistic issues:** Some low-severity style issues may carry `"priority": "opportunistic"`. Apply these only when the target passage is already being edited for a higher-priority issue — do not make a standalone edit on an otherwise-clean passage for an opportunistic issue. **Why:** These are low-severity fixes that are valuable when the reviser is already in the neighborhood (e.g., expanding an acronym in a sentence being rewritten for accuracy), but not worth the risk of introducing edit conflicts on untouched text. If you're editing Section 3 paragraph 2 for a `review-N` issue and an opportunistic `style-N` issue targets the same paragraph, apply both in one Edit call. If the opportunistic issue targets a paragraph with no other edits, skip it and mark it as `"status": "skipped"` with `"reason": "no nearby edits"` in the manifest.
+
 **Mechanical vs. judgment style issues:** Style issues include a `mechanical` flag. Mechanical issues (acronym expansion, filler removal, unambiguous sentence splits) can be applied with minimal surrounding-context verification — a quick check that the sentence still reads correctly is sufficient. **Why:** These edits don't change meaning by definition (expanding "HMD" to "head-mounted display (HMD)" can't alter an argument), so the full re-read-after-editing step can be lighter. Non-mechanical style issues (paragraph restructuring, passive-to-active rewrites, list conversions) require the same careful re-read as accuracy edits, since they reshape how the reader processes the argument.
 
 ### Step 3: Make surgical edits
@@ -78,7 +80,24 @@ Some issues may require information you don't have access to. For these:
 
 After completing all edits, return a JSON manifest mapping each issue to the edit made (or explaining why it wasn't resolved).
 
-Each resolved edit must include `old_text_snippet` and `new_text_snippet` — the first 80 characters of the old and new strings used in the Edit call. **Why 80 characters:** Long enough to be unique in a ~200-line report (avoiding false-positive grep matches during post-revision validation), short enough to not bloat the manifest. These snippets let the orchestrator machine-verify that edits actually landed, rather than trusting the manifest at face value.
+**Required fields for every resolved edit** — the orchestrator uses these for machine validation. Omitting any field causes validation to fail and triggers a retry:
+
+```json
+{
+  "issue_id": "string — must match the ID from the issues list (e.g., review-1, verify-3, style-2, user-1)",
+  "status": "resolved | unresolved",
+  "location": "string — section and paragraph where the edit was made",
+  "action": "string — one-sentence description of what was changed and why",
+  "old_text_snippet": "string — REQUIRED — first 80 characters of the old_string passed to Edit",
+  "new_text_snippet": "string — REQUIRED — first 80 characters of the new_string passed to Edit"
+}
+```
+
+Each resolved edit MUST include `old_text_snippet` and `new_text_snippet`. These are the first 80 characters of the `old_string` and `new_string` you passed to the Edit tool call. **Why 80 characters:** Long enough to be unique in a ~200-line report (avoiding false-positive grep matches during post-revision validation), short enough to not bloat the manifest. The orchestrator uses these snippets to machine-verify that edits actually landed — without them, validation is impossible and the edit is treated as failed.
+
+**Do not substitute prose descriptions for snippets.** An `action` like "Changed route count from 15 to 9" is not a substitute for `old_text_snippet` / `new_text_snippet`. The action field describes the intent; the snippets prove it happened.
+
+**Complete manifest example:**
 
 ```json
 {
@@ -88,6 +107,7 @@ Each resolved edit must include `old_text_snippet` and `new_text_snippet` — th
   "edits": [
     {
       "issue_id": "review-1",
+      "status": "resolved",
       "location": "Section 3, paragraph 2",
       "action": "Changed route count from 15 to 9 per src-007 metadata",
       "old_text_snippet": "the study identified 15 distinct neural routes connecting the fusiform face ar",
@@ -95,6 +115,7 @@ Each resolved edit must include `old_text_snippet` and `new_text_snippet` — th
     },
     {
       "issue_id": "user-1",
+      "status": "resolved",
       "location": "Section 3",
       "action": "Condensed section from 5 paragraphs to 2 per user request",
       "old_text_snippet": "The perceptual mechanisms underlying the uncanny valley have been investigated ",
@@ -102,6 +123,7 @@ Each resolved edit must include `old_text_snippet` and `new_text_snippet` — th
     },
     {
       "issue_id": "verify-3",
+      "status": "resolved",
       "location": "Section 5, paragraph 1",
       "action": "Added hedge: 'as of 2024' qualifier to temporal claim",
       "old_text_snippet": "no longitudinal studies have tracked whether the uncanny valley effect diminish",
@@ -109,6 +131,7 @@ Each resolved edit must include `old_text_snippet` and `new_text_snippet` — th
     },
     {
       "issue_id": "style-2",
+      "status": "resolved",
       "location": "Section 2, paragraph 3",
       "action": "Expanded 'HMD' to 'head-mounted display (HMD)' on first use",
       "old_text_snippet": "participants viewed stimuli through an HMD while physiological responses were r",
@@ -118,6 +141,7 @@ Each resolved edit must include `old_text_snippet` and `new_text_snippet` — th
   "unresolved": [
     {
       "issue_id": "verify-5",
+      "status": "unresolved",
       "reason": "Claim references src-012 but the notes file lacks the specific data point. Full source text needed to verify."
     }
   ]

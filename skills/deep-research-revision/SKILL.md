@@ -121,6 +121,10 @@ cp <session-dir>/report.md <session-dir>/report_draft.md
 
 Evaluate the synthesis-reviewer's results to determine how to use the verifier's output. This controls downstream token costs — a full verifier result set adds issues to the reviser's workload, so filtering it when the reviewer's findings suggest stability avoids spending reviser tokens on redundant confirmation.
 
+**Short-circuit:** If this is the first revision pass (no prior `revision/verification-report.md` exists), use full verification. Skip the gating evaluation entirely — the conditions below only differentiate behavior on subsequent passes. **Why:** First-pass verification establishes a baseline. The gating logic is ~300 words of conditional reasoning that always resolves to "full" on first pass. Making the common case a one-line check reduces the chance of misapplying the logic and avoids spending tokens on evaluation that has a predetermined outcome.
+
+**Subsequent passes** (prior `revision/verification-report.md` exists):
+
 **Count high-severity issues from the synthesis-reviewer** (not the verifier — the reviewer is the gating signal because it examines internal consistency and source support, which are leading indicators of report quality).
 
 **Three modes:**
@@ -128,25 +132,21 @@ Evaluate the synthesis-reviewer's results to determine how to use the verifier's
 1. **Full verification** — use all verifier findings. Triggers when ANY of:
    - The reviewer found **3+ high-severity issues**. **Why:** A high issue count suggests systemic report quality problems — the kinds of errors that cascade across claims. Independent verification catches problems the reviewer's structural analysis misses (e.g., a claim that's internally consistent but factually wrong).
    - The user **explicitly requested verification** (e.g., "verify the claims" or "fact-check this").
-   - This is the **first revision pass** on this report (no prior `revision/verification-report.md` exists). **Why:** First-pass verification establishes a baseline. Subsequent runs can rely on the prior verification for claims that haven't changed.
 
 2. **Targeted verification** — use only verifier findings that relate to the reviewer's flagged claims. Triggers when:
    - The reviewer found **1-2 high-severity issues**.
-   - **How to filter:** For each verifier finding in `high_priority_issues`, check whether it targets the same section/paragraph or the same claim as one of the reviewer's high-severity issues. Keep matches, discard the rest. **Why:** The reviewer's 1-2 issues point to localized problems, not systemic ones. The verifier's independent analysis of those same claims adds confidence and specificity, but its findings about unrelated claims have low marginal value when the reviewer saw no problems there.
+   - **How to filter:** For each verifier finding in the `issues` array, check whether it targets the same section/paragraph or the same claim as one of the reviewer's high-severity issues. Keep matches, discard the rest. **Why:** The reviewer's 1-2 issues point to localized problems, not systemic ones. The verifier's independent analysis of those same claims adds confidence and specificity, but its findings about unrelated claims have low marginal value when the reviewer saw no problems there.
 
-3. **Skip verification** — discard all verifier findings. Triggers when ALL of:
-   - The reviewer found **0 high-severity issues**.
-   - A prior `revision/verification-report.md` exists from an earlier run. **Why:** The reviewer's clean bill combined with a prior verification baseline means the report's factual claims are stable. The verifier's output would be mostly confirmations, adding issues-list bulk but not actionable corrections. Without a prior baseline (first run), always use full verification — a clean reviewer pass doesn't guarantee factual accuracy, only internal consistency.
+3. **Skip verification** — discard all verifier findings. Triggers when:
+   - The reviewer found **0 high-severity issues**. **Why:** The reviewer's clean bill combined with a prior verification baseline means the report's factual claims are stable. The verifier's output would be mostly confirmations, adding issues-list bulk but not actionable corrections.
 
 **Log the gating decision** for auditability — record which mode was selected and why (e.g., "Verifier gating: targeted (2 high-severity reviewer issues, prior verification exists)"). This appears in the delivery summary so the user knows how verification results were used.
 
-**After gating**, collect:
-- All high and medium severity issues from the synthesis-reviewer
-- Verifier issues per the gating mode: all `high_priority_issues` (full), only matching issues (targeted), or none (skip)
+**After gating**, collect issues from the reviewers' `issues` arrays — each reviewer now returns pre-formatted issues with IDs already assigned:
+- From the synthesis-reviewer's `issues` array: take all high and medium severity issues (already prefixed `review-N`)
+- From the research-verifier's `issues` array per gating mode: all issues (full), only issues whose location matches a reviewer-flagged section (targeted), or none (skip). Issues are already prefixed `verify-N`
 
-Assign each an issue ID:
-- Reviewer issues: `review-1`, `review-2`, ...
-- Verifier issues: `verify-1`, `verify-2`, ...
+**Why the orchestrator no longer assigns IDs or translates formats:** Each reviewer assigns its own `issue_id` prefix (`review-N`, `verify-N`) and outputs the canonical schema directly. This eliminates the error-prone translation step where the orchestrator had to interpret different output structures and manually assign IDs — a process that risked misassigned IDs, missed issues, and incorrect severity mappings.
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
 
@@ -185,7 +185,13 @@ Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
 
 The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
 
-**After it returns**, collect all high and medium severity style issues. Assign IDs: `style-1`, `style-2`, ...
+**After it returns**, collect style issues from the style-reviewer's `issues` array — issues are already prefixed `style-N` by the reviewer.
+
+**Severity filtering — adaptive, not a hard cutoff:**
+
+1. Always include all high and medium severity style issues.
+2. Include low-severity style issues when the total combined issues list (accuracy + style high/medium + user feedback) is under 25. **Why 25:** The reviser comfortably handles ~25 issues per pass. If accuracy issues already consume most of that budget, low-severity style issues should yield. If the accuracy load is light, low-severity fixes are free additions that improve the report without risking reviser overload.
+3. When including low-severity style issues, add `"priority": "opportunistic"` to each one. The reviser applies opportunistic issues only when it's already editing nearby text for a higher-priority issue — it won't force an edit on an otherwise-clean passage. **Why:** This avoids the risk of introducing edit conflicts on untouched text for marginal gains, while capturing low-hanging fruit when the reviser is already in the neighborhood.
 
 ### Step 4: Combined revision
 

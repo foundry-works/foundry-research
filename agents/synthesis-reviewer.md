@@ -81,7 +81,7 @@ The review file should contain the full structured issues list:
 **Suggested fix:** Add citation or remove/qualify the claim
 ```
 
-Then return a compact JSON manifest to the supervisor:
+Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `review-N` prefix — the orchestrator uses these IDs to track issues through dedup, revision, and validation:
 
 ```json
 {
@@ -93,6 +93,7 @@ Then return a compact JSON manifest to the supervisor:
   "low": 1,
   "issues": [
     {
+      "issue_id": "review-1",
       "severity": "high",
       "dimension": "internal_contradiction",
       "location": "Section 3, paragraph 2 vs Section 5, paragraph 1",

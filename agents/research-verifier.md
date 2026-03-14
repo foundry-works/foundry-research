@@ -63,7 +63,10 @@ Write the verification report to `revision/verification-report.md` in the sessio
 
 ## Output format
 
-Write the detailed verification report to disk, then return a compact JSON summary:
+Write the detailed verification report to disk, then return a compact JSON summary. The summary includes two arrays:
+
+- **`high_priority_issues`** — the full verification detail for each contradicted or partially-supported claim (kept for the audit trail and the on-disk report).
+- **`issues`** — the same findings in the canonical issue format the orchestrator uses for assembly. Each issue MUST include an `issue_id` with the `verify-N` prefix. The orchestrator reads this array directly — it does not translate from `high_priority_issues`.
 
 ```json
 {
@@ -83,11 +86,29 @@ Write the detailed verification report to disk, then return a compact JSON summa
       "verdict": "contradicted",
       "evidence": "Official route map (URL) shows only 9 direct routes as of 2025"
     }
+  ],
+  "issues": [
+    {
+      "issue_id": "verify-1",
+      "severity": "high",
+      "location": "Section 3, paragraph 2",
+      "description": "Claim that Carrier X offers 15 direct routes from hub Y is contradicted by primary source",
+      "suggested_fix": "Change route count to 9 per official route map (URL) as of 2025",
+      "dimension": "factual_error"
+    }
   ]
 }
 ```
 
-The `high_priority_issues` array contains only contradicted or partially_supported claims — the ones the writer needs to address. Keep this array focused; the full details are in the verification report file.
+**How to build the `issues` array:** For each entry in `high_priority_issues`, create a corresponding canonical issue:
+- `issue_id`: `verify-1`, `verify-2`, ... (sequential, matching the order in `high_priority_issues`)
+- `severity`: `"high"` for contradicted claims, `"medium"` for partially-supported claims. **Why all verifier issues are at least medium:** The verifier only surfaces contradicted and partially-supported claims — by definition, these are factual accuracy problems that the report needs to address.
+- `location`: copied from `report_location`
+- `description`: one-sentence summary of the discrepancy (derived from `claim` + `verdict`)
+- `suggested_fix`: a specific, actionable correction derived from the `evidence` field — not "verify and correct" but "change X to Y per [source]"
+- `dimension`: `"factual_error"` for contradicted, `"imprecise_claim"` for partially-supported
+
+The `high_priority_issues` array is kept for audit purposes and the on-disk verification report. The `issues` array is what the orchestrator consumes.
 
 ## Verification report file format
 
