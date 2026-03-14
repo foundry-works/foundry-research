@@ -2560,6 +2560,132 @@ def cmd_sync_files(args):
     })
 
 
+def cmd_enrich_metadata(args):
+    """Enrich sources with missing DOI/author/venue from Crossref title search.
+
+    Queries Crossref API by title for sources missing DOI, authors, or venue.
+    Updates both state.db and on-disk metadata JSON files.
+    """
+    import urllib.parse
+    import urllib.request
+
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    metadata_dir = os.path.join(args.session_dir, "sources", "metadata")
+
+    # Find sources with missing metadata
+    rows = conn.execute(
+        """SELECT id, title, doi, authors, venue
+           FROM sources WHERE session_id = ?
+           AND (doi IS NULL OR authors = '[]' OR venue IS NULL OR venue = '')""",
+        (sid,)
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        success_response({"enriched": 0, "attempted": 0, "message": "No sources with missing metadata"})
+        return
+
+    enriched = 0
+    attempted = 0
+    errors = []
+
+    for row in rows:
+        src_id = row["id"]
+        title = row["title"]
+        if not title or len(title) < 10:
+            continue
+
+        attempted += 1
+        try:
+            # Query Crossref by title
+            encoded_title = urllib.parse.quote(title)
+            url = f"https://api.crossref.org/works?query.title={encoded_title}&rows=1&select=DOI,author,container-title,published-print,published-online"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "DeepResearch/1.0 (mailto:research@example.com)",
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            items = data.get("message", {}).get("items", [])
+            if not items:
+                continue
+
+            item = items[0]
+            # Verify title similarity before applying (basic check)
+            cr_title = item.get("title", [""])[0].lower() if item.get("title") else ""
+            if not cr_title or len(set(title.lower().split()) & set(cr_title.split())) < 3:
+                continue
+
+            updates = {}
+            db_updates = {}
+
+            # DOI
+            if not row["doi"] and item.get("DOI"):
+                updates["doi"] = item["DOI"]
+                db_updates["doi"] = item["DOI"]
+
+            # Authors
+            if row["authors"] == "[]" and item.get("author"):
+                author_list = []
+                for a in item["author"]:
+                    name_parts = []
+                    if a.get("given"):
+                        name_parts.append(a["given"])
+                    if a.get("family"):
+                        name_parts.append(a["family"])
+                    if name_parts:
+                        author_list.append(" ".join(name_parts))
+                if author_list:
+                    updates["authors"] = author_list
+                    db_updates["authors"] = json.dumps(author_list)
+
+            # Venue
+            if not row["venue"] and item.get("container-title"):
+                venue = item["container-title"][0] if item["container-title"] else None
+                if venue:
+                    updates["venue"] = venue
+                    db_updates["venue"] = venue
+
+            if not db_updates:
+                continue
+
+            # Update state.db
+            set_clauses = ", ".join(f"{k} = ?" for k in db_updates)
+            values = list(db_updates.values()) + [src_id, sid]
+            conn.execute(
+                f"UPDATE sources SET {set_clauses} WHERE id = ? AND session_id = ?",
+                values,
+            )
+
+            # Update on-disk metadata JSON
+            from _shared.metadata import read_source_metadata, write_source_metadata
+            meta = read_source_metadata(metadata_dir, src_id)
+            if meta:
+                meta.update(updates)
+                write_source_metadata(metadata_dir, src_id, meta)
+
+            enriched += 1
+            log(f"Enriched {src_id}: {', '.join(db_updates.keys())}")
+
+        except Exception as e:
+            errors.append(f"{src_id}: {str(e)}")
+            continue
+
+    conn.commit()
+    conn.close()
+
+    result = {
+        "enriched": enriched,
+        "attempted": attempted,
+        "total_missing": len(rows),
+    }
+    if errors:
+        result["errors"] = errors[:5]  # Cap error list
+    success_response(result)
+
+
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
@@ -2789,6 +2915,10 @@ def main():
     p.add_argument("--top", type=int, default=30, help="Number of top sources to include in triage scoring (default 30)")
     p.add_argument("--session-dir", **_sd)
 
+    # enrich-metadata
+    p = sub.add_parser("enrich-metadata")
+    p.add_argument("--session-dir", **_sd)
+
     # sync-files
     p = sub.add_parser("sync-files")
     p.add_argument("--session-dir", **_sd)
@@ -2835,6 +2965,7 @@ def main():
         "audit": cmd_audit,
         "triage": cmd_triage,
         "recover-failed": cmd_recover_failed,
+        "enrich-metadata": cmd_enrich_metadata,
         "sync-files": cmd_sync_files,
         "manifest": cmd_manifest,
     }

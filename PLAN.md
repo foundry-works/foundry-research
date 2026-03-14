@@ -1,168 +1,157 @@
-# Deep Research Pipeline Improvements — Plan
+# Deep Research Pipeline Improvements — Plan (v2)
 
 ## Context
 
-Observations from the 2026-03-14 "uncanny valley" research session. 32 sources deeply read, 100 findings logged, ~5,200-word report produced. The pipeline worked end-to-end but several structural issues wasted tokens, time, and introduced data quality risks.
+Observations from the 2026-03-14 "uncanny valley" research session. This was run **after** the v1 plan's fixes were implemented (path handling, mismatch detection, light gap-mode, quality report in handoff, abstract-only utilization, background task guardrail). The pipeline ran end-to-end: brief-writer → source-acquisition → pre-read validation → 12 parallel readers → 7 parallel findings-loggers → dedup → light gap-mode → synthesis-writer. 14 sources deeply read, 90 findings logged, ~3,850-word report produced.
+
+This plan captures what the v1 fixes addressed well, what problems remain, and new issues surfaced by the session.
 
 ---
 
-## 1. Reader Agent Path Handling (Bug Fix)
+## What Worked Well (Strengths to Preserve)
 
-### Problem
-Three gap-mode reader agents wrote notes to `deep-research-uncanny-valley/deep-research-uncanny-valley/notes/` (doubled path) instead of `deep-research-uncanny-valley/notes/`. This caused findings-loggers to miss the notes entirely, requiring manual discovery and `cp` to fix. The root cause is the reader agent prompt saying "use relative paths from the project root" — but agents receive an absolute session directory path and construct relative paths from their working directory, which may differ from the project root.
+### 1. Delegation architecture saves enormous context
+The source-acquisition agent absorbed ~24 searches of raw JSON (100-200K tokens) and returned a ~500-token manifest. Readers (12 agents × 20-50K tokens each) kept the orchestrator focused on coordination. **This is the system's biggest win — protect it.**
 
-### Fix
-**File: `agents/research-reader.md`** — Remove the "always use relative paths" instruction. Replace with explicit path construction guidance:
+### 2. Brief-writer produces genuinely useful questions
+The adversarial question (Q6: "is the UV an artifact?") generated 15 findings and became one of the richest report sections. The mandatory tradeoffs + adversarial question requirement pays off in synthesis quality.
 
-```
-## File paths
+### 3. Pre-read validation catches waste
+Reading 30 lines per source before spawning readers caught 4 tangential sources (chatbot compliance, Pepper robot, VR interaction fidelity metaphor, minimal method article). ~120-200K tokens saved for ~2 minutes of work.
 
-Construct output paths by joining the session directory from your directive with the relative note path. Example: if session directory is `/home/user/project/deep-research-topic`, write notes to `/home/user/project/deep-research-topic/notes/src-003.md` (absolute) or `deep-research-topic/notes/src-003.md` (relative from project root — use this only if your working directory is the project root).
+### 4. Findings-logger parallelization is clean
+7 agents per question, concurrent, no shared state, followed by `deduplicate-findings`. Zero merges needed — loggers are doing good within-agent dedup.
 
-**Never double the session directory name.** If the session directory path ends with `deep-research-topic`, the note path is `{session_dir}/notes/src-NNN.md`, not `deep-research-topic/deep-research-topic/notes/src-NNN.md`.
-```
+### 5. Light gap-mode worked exactly as designed (v1 fix validated)
+Q4 (modern AI) had thin academic coverage. Light gap-mode (2 web searches → 2 downloads → 2 readers → 3 findings logged directly) resolved the gap in ~5 minutes instead of the ~50 minutes a full acquisition agent would have taken. The "recency vs. coverage" decision heuristic was easy to apply.
 
-**Why:** The current instruction is ambiguous when the agent's working directory isn't the project root. Explicit examples prevent the doubled-path failure mode.
-
-### Validation
-After fix, spawn a test reader with a session directory path and verify the note lands in the correct location.
-
----
-
-## 2. Earlier Content Mismatch Detection (Quality Gate)
-
-### Problem
-21 sources (15% of downloads) were eventually flagged as mismatched. The existing `check_content_mismatch()` in `quality.py` runs at download time but misses cases where:
-- A paper shares domain vocabulary but covers a different topic (e.g., "uncanny valley" in geology vs. psychology)
-- The downloaded PDF is a completely different paper (correct domain but wrong specific paper)
-- Paywall landing pages with abstracts pass the content-length and sentence checks
-
-The current three-layer check (title keywords, abstract overlap, brief keywords) catches ~70% of mismatches. The remaining 30% leak through to the pre-read step or worse, to reader agents.
-
-### Fix
-**File: `skills/deep-research/scripts/_shared/quality.py`** — Strengthen `check_content_mismatch()`:
-
-1. **Check first-page author presence more aggressively.** Currently checks first 20,000 chars for author surnames. Change to: check first 3,000 chars (roughly the first page) for at least one author surname. Most legitimate PDFs have author names on the first page. If zero authors in first 3,000 chars AND title_hits < 3, flag as mismatched.
-
-2. **Add a "paywall abstract stub" detector.** After `assess_quality()` returns `"ok"`, check if the content is suspiciously short for a full paper (< 2,000 chars of real text after stripping HTML comments and boilerplate) AND contains paywall markers anywhere (not just first 50 lines). Many Springer/Wiley pages pass the current checks because they include the abstract as real text.
-
-**File: `skills/deep-research/scripts/download.py`** — After `check_content_mismatch()`, add a log line to stderr when a source is flagged, including the reason. This makes it visible in the acquisition agent's context without parsing JSON.
-
-### Why not just rely on pre-read?
-Pre-read validation costs one `Read` call per source — cheap but serial. Catching mismatches at download time is free (already in the pipeline) and prevents mismatched sources from appearing in triage rankings, download counts, and the acquisition manifest. The pre-read step remains as a second layer for subtle mismatches.
+### 6. Abstract-only utilization step exists (v1 fix) but wasn't triggered
+All questions had 7+ findings, so the <5 threshold was never hit. The step is there for when it's needed. See improvement item 4 below for a threshold adjustment.
 
 ---
 
-## 3. Gap-Mode "Light" Path (New Feature)
+## What Didn't Work Well
 
-### Problem
-The full gap-mode cycle (spawn acquisition agent → 10+ searches → downloads → spawn readers → re-run findings-loggers → re-audit) added ~50 minutes and ~300K tokens to get Q7 from 6 to 11 findings. For emerging topics with sparse academic literature, a lighter approach would be more cost-effective.
+### 1. Tavily failures were invisible for too long
+The source-acquisition agent reported "tavily returned no results" across 5+ attempts but didn't escalate this as an API failure vs. legitimate empty results. For a topic where Q4 (modern AI content) depends on web sources, this meant an entire question lost its primary source channel until the orchestrator's gap-mode.
 
-### Fix
-**File: `skills/deep-research/SKILL.md`** — Add a "light gap-mode" option in step 14:
+**Root cause:** No connectivity test at session start. No distinction between "provider returned 0 results for this query" and "provider API is broken/misconfigured." The acquisition agent treats both identically.
 
-```
-**Light gap-mode (for thin coverage on emerging/non-academic topics):**
-When a question's gap is about topic recency (few academic papers exist yet) rather than search quality (papers exist but weren't found), use light gap-mode instead of the full acquisition agent:
+**Impact:** Q4 had thin coverage until light gap-mode. The 2 web sources found in gap-mode (Frontiers 2025 review, Kramer 2025 AI faces) should have been found in round 1.
 
-1. Run 2-3 targeted tavily web searches directly (no acquisition agent)
-2. Download any promising results via `download <src-id> --url <url>`
-3. Spawn 1-2 reader agents for the best new sources
-4. Log findings directly
-5. Log the skip decision and rationale in journal.md
+### 2. Massive paywall losses — 229/260 sources had no content
+The recovery cascade (CORE, tavily, DOI landing page) went 0-for-everything. Key foundational papers (Mori 2012 translation, Gray & Wegner 2012, Mathur & Reichling 2016, Saygin 2012 fMRI) were all paywalled. Effective download rate: ~8%.
 
-**When to use light vs. full gap-mode:**
-- Light: The gap is about topic recency (AI deepfakes, voice cloning — sparse academic literature). Web sources and preprints are the best available evidence.
-- Full: The gap is about search coverage (papers exist in well-connected citation networks but weren't found). Academic providers and citation chasing will find them.
-```
+**Root cause:** No Unpaywall API integration. No institutional proxy support. CORE search returned nothing for exact-title queries. Tavily was broken (see item 1).
 
-### Why
-The acquisition agent is designed for academic literature with citation networks. For emerging topics, its strength (citation chasing, provider diversity, recovery cascade) doesn't help — the papers don't exist yet. Direct tavily searches from the orchestrator find the same web sources in 2-3 tool calls instead of spawning an Opus agent for 50+ minutes.
+**Impact:** The system over-indexes on open-access journals (Frontiers, PLOS, arXiv) and under-indexes on the foundational literature that often matters most. The report had to caveat that several foundational papers "were inaccessible and could not be directly verified."
 
----
+### 3. Content mismatches still leaked through (9 caught at download, 4 caught at pre-read)
+The v1 mismatch detection improvements helped (9 caught at download time), but 4 more were caught only at the pre-read validation step. These were sources that shared vocabulary with the target topic but covered different specific areas (e.g., src-069 about chatbot compliance barely mentions UV, src-072 about Pepper robot is an overview not UV research).
 
-## 4. Source Quality Report in Synthesis Handoff (Data Flow)
+**Root cause:** These are topical near-misses, not metadata mismatches. The title and abstract share enough keywords to pass relevance checks, but the paper doesn't actually study the uncanny valley.
 
-### Problem
-The synthesis-writer had to reconstruct source quality information from the handoff JSON and its own reads of metadata files. The orchestrator's quality report (written to journal.md) was the most accurate tally but wasn't directly available to the writer.
+### 4. Abstract-only utilization threshold is too conservative
+The <5 findings threshold was never triggered because all questions had 7+ findings. But several abstract-only sources (src-003 mind perception, src-019 Ho & MacDorman measurement, src-043 persistence through interaction) contained empirical results that would have enriched the report. For example, src-003's finding about "uncanny valley of mind" (appearance × mental capacity interaction) is directly relevant to Q2 and Q4 but was only captured indirectly through other sources.
 
-### Fix
-**File: `skills/deep-research/scripts/state.py`** — In the `summary --write-handoff` command, include a `source_quality_report` section in the output JSON:
+### 5. The orchestrator prompt is too long (~400 lines)
+Under context compression, later steps get degraded attention. The gap-mode decision tree alone is ~50 lines. Provider selection guidance (~20 lines) and session structure (~15 lines) are reference material that doesn't need to be in the hot path.
 
-```json
-"source_quality_report": {
-  "on_topic_with_evidence": {"count": 21, "ids": ["src-012", ...]},
-  "abstract_only_relevant": {"count": 4, "ids": ["src-016", ...]},
-  "degraded_unread": {"count": 1, "ids": ["src-098"]},
-  "mismatched": {"count": 16, "ids": ["src-044", ...]},
-  "reader_validated": {"count": 5, "ids": ["src-004", ...]}
-}
-```
+### 6. No systematic cross-source contradiction detection
+The report's strongest insight — the meta-analysis (no negative affect, N=11,053) vs. lab studies (consistent eeriness) contradiction — was caught by the orchestrator's interpretive judgment, not by any structured mechanism. The findings-loggers extract independently per question and can't flag when finding-X from src-A contradicts finding-Y from src-B.
 
-This is already available from `audit` — just needs to be included in the handoff.
+### 7. Reader agents are expensive at Opus tier
+12 parallel readers each consumed significant tokens. The `research-reader.md` agent definition may be configured for a higher model than needed. Reader note quality was excellent (caught effect sizes, methodological nuances, cross-study contradictions), but for straightforward empirical papers, a lighter model might suffice.
 
-**File: `skills/deep-research/SKILL.md`** — In step 15a, tell the orchestrator to mention the quality report is in the handoff file so the writer uses it for the Methodology section.
-
-**File: `agents/synthesis-writer.md`** — Add instruction to use `source_quality_report` from the handoff JSON for the Methodology section's source counts, rather than inferring from source metadata.
-
-### Why
-The Methodology section's accuracy depends on knowing exactly how many sources were deeply read vs. abstract-only vs. mismatched. Currently this requires the writer to re-derive it from metadata files, which is error-prone and token-expensive.
+### 8. Synthesis-writer reference list had incomplete metadata
+Several references had `[metadata incomplete]` flags because metadata files don't always have complete author lists, DOIs, or venues — especially for web-downloaded sources. No enrichment step exists between download and synthesis.
 
 ---
 
-## 5. Abstract-Only Source Utilization (New Feature)
+## Proposed Improvements
 
-### Problem
-16 abstract-only sources had potentially useful information (especially for thin questions like Q6 individual differences and Q3 voice synthesis), but were completely excluded from findings extraction. Structured abstracts contain methods, sample sizes, and key results — enough for 1-2 findings per source.
+### 1. Tavily Connectivity Test and WebSearch Fallback (HIGH PRIORITY)
 
-### Fix
-**File: `skills/deep-research/SKILL.md`** — After the main reader batch (step 7) and before findings-loggers (step 10), add a step:
+**Problem:** Tavily silently fails → entire source channels go dark for web-dependent questions.
 
-```
-### Step 9b: Abstract-based findings for thin questions (optional)
+**Fix:**
+- **File: `agents/source-acquisition.md`** — Add at the start of the initial-mode workflow: "Before round 1 searches, run a single test tavily search (e.g., `search --provider tavily --query 'test'`). If it returns an error or 0 results, log a journal entry: 'Tavily API unavailable — using WebSearch for all web queries.' Then for all subsequent web search needs, tell the orchestrator in the manifest that tavily failed so the orchestrator can use `WebSearch` directly."
+- **File: `skills/deep-research/SKILL.md`** — Add to step 4: "If the acquisition manifest reports tavily failure, run 2-3 `WebSearch` queries per web-dependent question immediately (don't wait for gap-mode)."
 
-If any question has < 5 findings after step 10's findings-loggers complete, and there are abstract-only sources relevant to that question:
+**Why:** Catches the failure in the first 30 seconds instead of discovering it after 24 searches.
 
-1. Read the metadata JSON for each relevant abstract-only source (`sources/metadata/src-NNN.json`)
-2. If the abstract contains a clear empirical result (sample size, effect, conclusion), log a finding directly via `state log-finding` with the caveat "Based on abstract only; full methodology not verified"
-3. Cap at 2-3 abstract-based findings per question — these supplement, not replace, deep-read evidence
+### 2. Unpaywall API Integration (HIGH PRIORITY)
 
-Do NOT spawn reader agents for abstract-only sources — the metadata JSON already contains the abstract, and there's no content file to read.
-```
+**Problem:** 8% effective download rate. Recovery cascade has no open-access discovery step.
 
-**File: `agents/findings-logger.md`** — Add instruction that findings-loggers may also read `sources/metadata/src-*.json` (not just `notes/src-*.md`) when the supervisor explicitly directs them to extract from abstracts for thin questions. Include the metadata path pattern in the "How to work" section.
+**Fix:**
+- **File: `skills/deep-research/scripts/download.py`** — Add Unpaywall API as a cascade step before CORE and tavily recovery. Unpaywall is free (requires email), legal, and has high coverage of OA copies (green OA, bronze OA, hybrid OA). Query by DOI: `https://api.unpaywall.org/v2/{doi}?email={email}`. If `best_oa_location.url_for_pdf` is non-null, download from there.
+- **File: `skills/deep-research/scripts/_shared/config.py`** — Add `UNPAYWALL_EMAIL` config (not an API key — Unpaywall is free, just needs a contact email).
 
-### Why
-Abstract-based findings are lower-confidence but better than nothing for thin questions. They're already in the methodology section as "abstract-only sources" — extracting findings from them makes that designation more useful. The cost is near-zero (metadata JSON is already on disk, no agent spawn needed).
+**Why:** Unpaywall covers ~30% of all DOIs with free legal PDFs. For a session finding 260 sources, this could yield 60-80 additional downloads — a 3-4x improvement over the current 22 valid downloads.
 
----
+### 3. Web-First Source Mode for Recency-Dependent Questions (HIGH PRIORITY)
 
-## 6. Prevent Background Task Leakage from Subagents (Guard Rail)
+**Problem:** The triage system ranks by citation count, which systematically deprioritizes recent web sources and preprints that are the best evidence for emerging topics.
 
-### Problem
-The source-acquisition agent spawned background download tasks (`run_in_background: true` on Bash calls) that completed after the report was already written. These task notifications appeared in the orchestrator's context as noise. The acquisition agent doesn't have the `TaskOutput` tool, so it can't retrieve background results — making them pure waste.
+**Fix:**
+- **File: `agents/source-acquisition.md`** — Add a "web-first questions" concept: "If the orchestrator flags specific questions as recency-dependent (e.g., 'Q4 is about AI-generated content — web sources are primary'), prioritize those questions' tavily/web results in triage regardless of citation count. Rank web sources for these questions by: (a) publication date, (b) domain authority (arxiv, pmc, acm > blog posts > reddit), (c) keyword relevance to the question."
+- **File: `skills/deep-research/SKILL.md`** — In step 4 (source-acquisition handoff), add: "Flag any research questions where recency matters more than citation authority (typically: emerging technologies, current events, recent policy changes). The acquisition agent will prioritize web sources for these questions."
 
-### Fix
-**File: `agents/source-acquisition.md`** — Rule 4 already says "Never sleep-poll or background commands" and explains why. But the agent still did it. Strengthen the rule:
+**Why:** The current system is excellent for established academic fields with citation networks. It's structurally weak for topics where the most relevant work is <2 years old.
 
-```
-4. **Never background commands — they are irrecoverable.** Don't set `run_in_background: true` on any Bash call. You don't have the TaskOutput tool, so you cannot retrieve background results — they're lost. If a command is slow (e.g., `recover-failed`), set `timeout: 600000` instead. Background tasks also leak notifications into the orchestrator's context as noise after you've returned.
-```
+### 4. Lower Abstract-Only Utilization Threshold (MEDIUM PRIORITY)
 
-Add the word "irrecoverable" — the current phrasing explains the mechanism but doesn't convey the severity. The agent may be reasoning "I'll just kick this off for later" without understanding that "later" doesn't exist for it.
+**Problem:** The <5 findings threshold is never triggered because findings-loggers are aggressive extractors.
 
-### Why
-This is a prompt clarity issue, not an architecture issue. The agent has the information it needs (rule 4) but the framing doesn't prevent the behavior under time pressure.
+**Fix:**
+- **File: `skills/deep-research/SKILL.md`** — Change step 11b trigger from "< 5 findings" to: "If an abstract-only source directly addresses a research question with an empirical result (sample size, effect, conclusion), log a finding regardless of existing finding count. Cap at 2-3 abstract-based findings per question."
+
+**Why:** The threshold-based trigger is about preventing wasted effort on thin questions. But the real value of abstract-based findings is supplementing deep-read evidence with additional data points — this is valuable even when the question already has 7+ findings, especially for topics where many relevant papers are paywalled.
+
+### 5. Orchestrator Prompt Layering (MEDIUM PRIORITY)
+
+**Problem:** SKILL.md is ~400 lines. Under context compression, procedural detail competes with research judgment.
+
+**Fix:**
+- Split SKILL.md into:
+  - `SKILL.md` — Core workflow (15 steps), command execution rules, delegation patterns. Target: ~200 lines.
+  - `REFERENCE.md` — Provider selection guidance, session structure, adaptive guardrails, output format template. Loaded by agents that need it, not always in orchestrator context.
+- Move the gap-mode decision tree into a simpler heuristic: "Is the gap about search coverage (papers exist but weren't found) or topic recency (papers don't exist yet)? Coverage → full. Recency → light."
+
+**Why:** Shorter prompts → less degradation under compression → better research judgment in late-session decisions.
+
+### 6. Cross-Source Contradiction Detection (MEDIUM PRIORITY)
+
+**Problem:** Contradictions are the most valuable findings (they're where the interesting research questions live), but they're only caught if the orchestrator happens to notice.
+
+**Fix (option A — CLI extension):**
+- **File: `skills/deep-research/scripts/state.py`** — Add `--contradicts finding-NN` optional flag to `log-finding`. When set, creates a `contradictions` row linking the two findings. Add `state contradictions` command to list all flagged contradictions.
+- **File: `agents/findings-logger.md`** — Add instruction: "If a finding directly contradicts a previously logged finding (opposite conclusion about the same construct from a different source), use `--contradicts finding-NN`."
+
+**Fix (option B — post-extraction pass):**
+- Add a lightweight contradiction-detection step after deduplication (step 11): the orchestrator reads the full findings list and flags contradicting pairs. No new agent needed — the findings are already in context via the summary.
+
+**Why:** Option A is more systematic but requires findings-loggers to know about other questions' findings (they currently don't). Option B is simpler and works within the current architecture. Recommend starting with option B.
+
+### 7. Metadata Enrichment Before Synthesis (LOW PRIORITY)
+
+**Problem:** Incomplete metadata → `[metadata incomplete]` flags in references → lower report quality.
+
+**Fix:**
+- **File: `skills/deep-research/scripts/state.py`** — Add `state enrich-metadata` command that queries Crossref API by title for sources with missing DOI, author, or venue fields. Run once after all downloads complete, before synthesis handoff.
+
+**Why:** Crossref title search is free and resolves ~80% of missing DOIs. This is a polish improvement — the report is usable without it, but cleaner references increase credibility.
 
 ---
 
 ## Non-Changes (Considered but Rejected)
 
-### Parallel pre-read validation
-Considered spawning a subagent for batch pre-read validation instead of doing it inline. Rejected: the orchestrator's inline `Read` calls are cheap (30 lines × 43 sources = ~1,300 lines total), complete in seconds, and keep quality decisions in the orchestrator's context where they inform reader allocation. An agent would add latency and move the quality decision to a place where it's harder to act on.
-
 ### Automated gap-mode skip decision
-Considered adding a flag in `state audit` that automatically recommends skip/run for gap-mode based on findings counts and coverage scores. Rejected: the skip decision is a research judgment that depends on context the audit can't capture (is Q7's thin coverage because the topic is emerging, or because we searched poorly?). The current approach — explicit criteria in SKILL.md with a journal.md rationale requirement — keeps the human-in-the-loop.
+Considered adding a flag in `state audit` that automatically recommends skip/run for gap-mode. Rejected: the skip decision is a research judgment about whether thin coverage reflects search quality or genuine literature gaps. The current explicit criteria + journal rationale requirement keeps the human-in-the-loop.
 
-### Reader agents for metadata-only sources
-Considered spawning lightweight reader agents that just read metadata JSON and write thin notes. Rejected: this adds agent overhead (spawn, context, return) for something the findings-logger can do directly from the metadata file. The abstract-based findings approach (item 5 above) is cheaper.
+### Parallel pre-read validation via agent
+Considered spawning a subagent for batch pre-read. Rejected: inline `Read` calls are cheap (~30 lines × 21 sources), complete in seconds, and keep quality decisions in the orchestrator's context where they inform reader allocation.
+
+### Structured reader output (JSON) instead of narrative notes
+Considered having readers produce structured JSON (claims + evidence strength) instead of markdown notes. Rejected for now: narrative notes are more flexible and the synthesis-writer reads them effectively. Structured output would help contradiction detection (item 6) but requires redesigning the reader→findings-logger→writer data flow — too much scope for this iteration.

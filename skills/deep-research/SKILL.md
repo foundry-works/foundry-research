@@ -48,6 +48,10 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
    **What you get back:** A manifest telling you how many sources were found, downloaded, and triaged, which brief questions have strong vs. thin coverage, and any gaps already logged. Everything else is on disk (state.db, journal.md, sources/). You never see raw search JSON.
 
+   **If the manifest reports `tavily_available: false`:** The acquisition agent's web search channel was broken for the entire session. For any research question where web sources matter (recency-dependent topics, emerging technologies, non-academic coverage), run 2-3 `WebSearch` queries immediately — don't wait for gap-mode. WebSearch results aren't auto-tracked in state.db, so download promising URLs via `${CLAUDE_SKILL_DIR}/download <src-id> --url <url>` and log a journal entry noting which questions you supplemented.
+
+   **Flag recency-dependent questions in your handoff.** Some research questions are best answered by recent web sources rather than highly-cited academic papers — emerging technologies, current events, recent policy changes, or topics where the most relevant work is <2 years old. When handing off to the acquisition agent, flag these questions explicitly: "Q4 is recency-dependent — web sources and preprints are primary evidence, not supplements." The agent will prioritize web results for these questions by date and domain authority rather than citation count, which systematically deprioritizes recent work.
+
    **Validate citation chasing in the manifest.** The manifest includes a `citation_chasing` block (`papers_chased`, `traversals_run`, `sources_from_chasing`). For literature review or measurement topics, expect 6-10 traversals (30-50% of search effort). If the agent ran only 1-2 traversals, push back in gap mode — citation networks are the most efficient source of relevant papers in well-connected fields. When directing gap-mode citation chasing, include specific paper IDs (S2 hex IDs from `state sources --min-citations 50`) and which direction to traverse.
 
 5. **Triage sources for reading.** The source-acquisition agent already ran triage, but you make the final reading allocation. Use the manifest's `triage_tiers` and `top_papers` to decide which sources get reader agents.
@@ -74,13 +78,14 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
    This takes 2 minutes and prevents mismatched sources from leaking into findings or citations. It also gives you an accurate denominator for coverage assessment — "12 of 20 sources were usable" is more honest than "20 sources read." **Why structured, not ad hoc:** Informal post-reader quality assessment leads to mismatched sources leaking into findings and inflated source counts in methodology sections. A structured tally makes it systematic, and persisting it in journal.md means the synthesis-writer can reference accurate data.
 10. **Delegate findings logging to findings-logger agents (one per question, parallel, foreground — see rule 1).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_SKILL_DIR}/state` path, and that single question's full text. Launch all agents in the **same response message** so they run concurrently and all return before your next turn. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
 11. **Deduplicate findings across questions.** Run `${CLAUDE_SKILL_DIR}/state deduplicate-findings`. This merges cross-question duplicates: findings that cite overlapping sources and have >70% token overlap are merged — the one with more source citations is kept, and the absorbed finding's question is added as an `also_relevant_to` annotation. No agent needed — one CLI call. **Why here:** Findings-loggers run in parallel with no shared state, so the same claim logged under multiple questions can't be caught at extraction time. Deduplication before gap review ensures the gap assessment isn't inflated by duplicate coverage.
-11b. **Abstract-based findings for thin questions (optional).** After deduplication, check if any research question has < 5 findings. If so, and abstract-only sources exist that are relevant to that question (check `sources/metadata/src-NNN.json` for sources with `quality: "abstract_only"` or no content file):
+11b. **Abstract-based findings (supplement, not fallback).** After deduplication, scan abstract-only sources (`quality: "abstract_only"` or no content file in `sources/metadata/src-NNN.json`) for empirical results that directly address a research question — a sample size, effect, or conclusion, not just topical overlap.
 
     1. Read the metadata JSON for each relevant abstract-only source
-    2. If the abstract contains a clear empirical result (sample size, effect, conclusion), log a finding directly via `${CLAUDE_SKILL_DIR}/state log-finding` with the caveat "(abstract only; methodology not verified)" appended to `--text`
-    3. Cap at 2-3 abstract-based findings per question — these supplement deep-read evidence, not replace it
+    2. If the abstract contains a clear empirical result, log a finding directly via `${CLAUDE_SKILL_DIR}/state log-finding` with the caveat "(abstract only; methodology not verified)" appended to `--text`
+    3. Cap at 2-3 abstract-based findings per question
 
-    Do NOT spawn reader agents for abstract-only sources — the metadata JSON already contains the abstract, and there's no content file to read. **Why this step exists:** Abstract-only sources have potentially useful information (especially for thin questions like individual differences or emerging topics) but were previously excluded entirely from findings extraction. Structured abstracts contain methods, sample sizes, and key results — enough for 1-2 supplementary findings per source at near-zero cost.
+    Log regardless of existing finding count — the value of abstract-based findings is supplementing deep-read evidence with additional data points, not filling gaps in thin questions. A question with 8 deep-read findings still benefits from an abstract-only source reporting a different sample size or population. Do NOT spawn reader agents for abstract-only sources — the metadata JSON already contains the abstract, and there's no content file to read. **Why not threshold-gated:** A "< 5 findings" trigger is never hit in practice because findings-loggers are aggressive extractors. The real value is enrichment — paywalled foundational papers often have informative structured abstracts with methods, sample sizes, and key results that add data points at near-zero cost.
+11c. **Flag cross-source contradictions.** Review the full findings list (from `${CLAUDE_SKILL_DIR}/state summary --compact`). For any pair of findings that reach opposite conclusions about the same construct from different sources, log the contradiction in journal.md and include it in the synthesis handoff narrative. Examples: a meta-analysis finding no negative affect vs. lab studies finding consistent eeriness; one study reporting an effect replicates across cultures vs. another finding significant cultural moderation. These contradictions are often the most valuable part of the report — they're where the interesting research questions live. No new agent or CLI command needed; you already have the findings in context from the dedup step. **Why here, not in findings-loggers:** Findings-loggers extract independently per question with no shared state — they can't see findings from other questions to detect cross-question contradictions. This step is lightweight (scan the findings list, write a journal entry) and catches what parallel extraction structurally cannot.
 12. Review each research question — if any has < 2 supporting sources, call `${CLAUDE_SKILL_DIR}/state log-gap --text "Q3 has insufficient coverage"`. **Why this matters:** gaps logged here drive targeted follow-up searches in the next round. An empty gaps table means the audit can't identify weak coverage areas.
 13. `${CLAUDE_SKILL_DIR}/state audit --brief` — check coverage, identify gaps, get methodology stats. The `--brief` flag returns counts instead of full ID arrays, saving context. Use full `audit` (without `--brief`) only when you need to debug specific source IDs.
 14. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
@@ -93,21 +98,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     Log the skip decision and rationale in journal.md. This is a research judgment, not a shortcut — gap-mode exists for sessions with genuine coverage holes, not as a mandatory checkbox. **Why allow skipping:** Gap-mode involves spawning the source-acquisition agent again (Opus, foreground), running searches, downloading, then spawning more readers. For a session with strong coverage, this adds 10-15 minutes and ~100K tokens with no improvement to the final report.
 
-    **Light gap-mode (for thin coverage on emerging/non-academic topics):**
-
-    When a question's gap is about topic recency (few academic papers exist yet) rather than search quality (papers exist but weren't found), use light gap-mode instead of the full acquisition agent:
-
-    1. Run 2-3 targeted tavily web searches directly (no acquisition agent)
-    2. Download any promising results via `${CLAUDE_SKILL_DIR}/download <src-id> --url <url>`
-    3. Spawn 1-2 reader agents for the best new sources
-    4. Log findings directly
-    5. Log the light gap-mode decision and rationale in journal.md
-
-    **When to use light vs. full gap-mode:**
-    - **Light:** The gap is about topic recency (e.g., AI deepfakes, voice cloning — sparse academic literature). Web sources and preprints are the best available evidence. Citation chasing and provider diversity won't help because the papers don't exist yet.
-    - **Full:** The gap is about search coverage (papers exist in well-connected citation networks but weren't found). Academic providers and citation chasing will find them.
-
-    **Why light mode exists:** The full acquisition agent is designed for academic literature with citation networks. For emerging topics, its strengths (citation chasing, provider diversity, recovery cascade) don't help — the papers don't exist yet. Direct tavily searches from the orchestrator find the same web sources in 2-3 tool calls instead of spawning an Opus agent.
+    **Light vs. full gap-mode:** Is the gap about search coverage (papers exist but weren't found) or topic recency (papers don't exist yet)? Coverage gap → full acquisition agent (citation chasing and provider diversity will find them). Recency gap → light mode: run 2-3 web searches directly, download promising results, spawn 1-2 readers, log findings. Log the decision in journal.md.
 
     **Full gap-mode** — Spawn the `source-acquisition` agent again (Opus, foreground) with:
     - The session directory path (absolute)
@@ -139,7 +130,9 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     The synthesis-writer must be **foreground** (see rule 1).
 
-    **a. Hand off to synthesis-writer.** First, run `${CLAUDE_SKILL_DIR}/state summary --write-handoff` — this writes the full structured data (findings, gaps, sources, brief, source quality report) to `synthesis-handoff.json` and returns only the file path and counts. Then spawn a `synthesis-writer` subagent with:
+    **a. Enrich metadata.** Run `${CLAUDE_SKILL_DIR}/state enrich-metadata` to fill in missing DOIs, authors, and venues from Crossref. This queries by title for sources with incomplete metadata and updates both state.db and on-disk JSON files. Run once before synthesis — cleaner metadata produces cleaner references in the report.
+
+    **b. Hand off to synthesis-writer.** First, run `${CLAUDE_SKILL_DIR}/state summary --write-handoff` — this writes the full structured data (findings, gaps, sources, brief, source quality report) to `synthesis-handoff.json` and returns only the file path and counts. Then spawn a `synthesis-writer` subagent with:
     - The session directory path (absolute)
     - The research brief (scope, questions, completeness criteria)
     - The **path to `synthesis-handoff.json`** — tell the writer to read this file for the structured findings array with source citations, the gaps array, and the `source_quality_report` (counts and IDs for each quality tier: on-topic with evidence, abstract-only, degraded, mismatched, reader-validated). The writer should use `source_quality_report` for the Methodology section's source counts rather than re-deriving from metadata files.
@@ -152,7 +145,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
 
-    **b. Present the draft and hand off to the user.** Once the writer returns:
+    **c. Present the draft and hand off to the user.** Once the writer returns:
     1. Read and present `report.md` to the user
     2. Log the draft completion in journal.md (sources used, coverage summary)
     3. Tell the user: "Draft is at `report.md`. Review it, then run `/deep-research-revision <session-dir>` to review and revise — you can include feedback like 'section 3 is too long' or 'the conclusion ignores cost constraints'."
@@ -203,6 +196,7 @@ recover-failed --min-citations 30 # lower citation threshold for recovery eligib
 audit                             # pre-report coverage & quality check
 audit --brief                     # counts only (no ID arrays except degraded_unread/reader_validated/mismatched)
 audit --strict                    # exit non-zero if warnings found
+enrich-metadata                   # fill missing DOI/author/venue from Crossref (run before synthesis)
 ```
 
 **JSON input:** Pass JSON via `--from-json FILE` (write to a temp file first) or `--from-stdin` (pipe JSON via stdin). There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts. Example: `echo '{"scope":"..."}' | ${CLAUDE_SKILL_DIR}/state set-brief --from-stdin`
@@ -262,44 +256,7 @@ Each entry should be 3-5 lines, not paragraphs. The goal is breadcrumbs for a co
 
 **Financial data: output raw, don't compute.** When presenting financial data from yfinance or EDGAR, output the raw tables and values as returned by the provider. Do not compute derived metrics (P/E ratios, growth rates, margins) unless explicitly asked — and when you do, caveat that these are LLM-computed approximations that should be verified against authoritative sources. Financial data providers return pre-computed ratios (e.g., yfinance profile includes `trailing_pe`, `profit_margin`, `return_on_equity`) — prefer those over manual calculation.
 
----
-
-## Provider Selection Guidance
-
-Provider selection is handled by the `source-acquisition` agent (see `agents/source-acquisition.md`), but you should understand the landscape to validate the agent's manifest and direct gap-mode searches:
-
-- **Biomedical/clinical:** PubMed + bioRxiv + Semantic Scholar
-- **CS/ML/AI:** arXiv + Semantic Scholar + OpenAlex
-- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
-- **Humanities/social science:** Crossref + OpenAlex + Semantic Scholar
-- **Financial:** yfinance + EDGAR + academic providers for context
-- **General technical:** tavily + GitHub; Reddit/HN for community perspective
-- **When unsure:** at least 3 providers including one web source
-
----
-
-## Session Structure
-
-```
-./deep-research-{session}/
-├── state.db              # SQLite — search history + source index (source of truth)
-├── journal.md            # Your reasoning scratchpad (append-only)
-├── report.md             # Final report
-├── notes/                # Per-source summaries (from reader subagents)
-│   └── src-001.md
-└── sources/
-    ├── metadata/         # JSON metadata files
-    │   └── src-001.json
-    ├── src-001.md        # Pure markdown content
-    ├── src-001.pdf       # PDF when available
-    └── src-001.toc       # Table of contents with line numbers
-```
-
-- Initialize: `${CLAUDE_SKILL_DIR}/state init --query "..."`
-- Sources and searches are auto-tracked by `${CLAUDE_SKILL_DIR}/search` (no manual step needed)
-- Check duplicates: `${CLAUDE_SKILL_DIR}/state check-dup-batch --from-json` (batch)
-- Review progress: `${CLAUDE_SKILL_DIR}/state summary`
-- Pre-report check: `${CLAUDE_SKILL_DIR}/state audit`
+See `REFERENCE.md` for provider selection guidance, session structure, adaptive guardrails, and output format.
 
 ---
 
@@ -339,58 +296,3 @@ done
 
 For small sessions (< 10 sources), do everything inline. Delegation is a scaling strategy, not a requirement.
 
----
-
-## Adaptive Guardrails
-
-Defaults with rationale — scale based on query complexity:
-
-| Parameter | Default | Scale down | Scale up |
-|-----------|---------|------------|----------|
-| Research questions | 3-7 | Simple factual → 1-2 | Broad review → up to 10 |
-| Searches per question | 1-3 | Comprehensive initial results → 1 | Niche topic → 3+ |
-| Total sources | 15-40 | Simple query → 5-10 | Systematic review → 50+ |
-| Sources cited | 10-25 | Scale with report length | |
-
-Don't over-research simple questions. Don't under-research complex ones.
-
----
-
-## Output Format
-
-```markdown
-# [Research Topic]
-
-## Key Findings
-- Finding 1 [1][2]
-- Finding 2 [3]
-- ...
-
-## [Topic-appropriate sections]
-### [Sections based on research questions]
-...
-
-## Methodology
-- Sources deeply read: N (with notes in notes/)
-- Abstract-only sources: M
-- Web sources: K
-- Providers used: [list]
-- Session directory: [path]
-
-## References (Sources Read)
-[1] Author, "Title," Venue, Year. [URL/DOI] [academic]
-[2] Author, "Title," Venue, Year. [URL/DOI] [preprint]
-...
-
-## Further Reading
-- Author, "Title," Venue, Year. [URL/DOI] — cited for abstract/metadata only
-- ...
-```
-
-Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`, `[reddit]`, `[hn]`.
-
-**Citation rules:**
-- Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
-- Sources known only from abstracts or search metadata go in **Further Reading**
-- The Methodology section must honestly report deep reads vs. abstract-only counts (use `${CLAUDE_SKILL_DIR}/state audit` output)
-- Never claim to have "deeply read" a source that has `degraded` (unread) or abstract-only content. Sources upgraded to `reader_validated` by `mark-read` can be claimed as deep reads.

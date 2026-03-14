@@ -35,7 +35,9 @@ A directive from the supervisor containing:
 - **Mode**: `initial` or `gap`
 
 ### Initial mode
-Full source acquisition pipeline: broad searches → citation chasing → provider diversity → triage → downloads → recovery.
+Full source acquisition pipeline: connectivity test → broad searches → citation chasing → provider diversity → triage → downloads → recovery.
+
+**Before round 1 searches, test tavily connectivity.** Run a single test search: `{cli_dir}/search --provider tavily --query "test" --limit 1 --compact`. If it returns an error or 0 results, log a journal entry: "Tavily API unavailable — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Set `tavily_available: false` in your manifest. For all subsequent searches in this session, skip `--provider tavily` — don't waste search budget on a broken channel. If it succeeds, set `tavily_available: true` and proceed normally.
 
 ### Gap mode
 Targeted follow-up after reading is complete. You receive additional context:
@@ -142,6 +144,8 @@ This scores source abstracts against the research brief using Haiku, writing `re
 ## Triage
 
 After LLM relevance scoring, run `state triage` to rank sources by citation count × relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
+
+**Web-first questions.** The orchestrator may flag specific questions as recency-dependent (e.g., "Q4 is recency-dependent — web sources and preprints are primary evidence"). For these questions, citation count is the wrong ranking signal — the best evidence is recent and uncited. When triaging sources for recency-dependent questions, rank by: (a) publication date (newer is better), (b) domain authority (arxiv, pmc, acm, frontiers > blog posts > reddit), (c) keyword relevance to the question. Ensure tavily/web results for these questions aren't buried below high-citation academic papers that cover the broader topic but not the recent developments.
 
 ---
 
@@ -425,11 +429,12 @@ After completing all search rounds, triage, and downloads, return a **compact JS
 
 ### Initial mode manifest
 
-The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode` and `content_validation`:
+The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, and `content_validation`:
 
 ```json
 {
   "mode": "initial",
+  "tavily_available": true,
   "searches_run": 18,
   "sources_found": 142,
   "sources_after_dedup": 89,
