@@ -16,6 +16,7 @@ A directive from the supervisor containing:
 - **Session directory path** (absolute)
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — the original scope and questions, for completeness checking
+- **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-flag issues that match a prior resolved entry unless you have new evidence that the fix was insufficient or introduced a new problem. Focus your review on: (a) text that was changed by the prior revision — check for errors introduced by the edits, (b) text that was not previously reviewed, (c) any new user feedback. **Why:** Re-examining already-confirmed fixes wastes tokens without improving the report. The prior manifest tells you what was already addressed — skip it unless something looks wrong.
 
 ## How to work
 
@@ -110,6 +111,8 @@ Severity levels:
 - **high** — Would mislead a reader or invalidate a conclusion. Must fix.
 - **medium** — Weakens credibility or completeness. Should fix.
 - **low** — Minor quality issue. Nice to fix.
+
+**Severity calibration:** A `high` severity issue MUST have a substantive `suggested_fix` that changes report text. If your analysis reveals something worth noting but no text change is needed, either downgrade to `low` with a note that no fix is required, or omit it from the `issues` array and mention it in a separate `observations` field in the JSON manifest (`"observations": ["..."]`). The orchestrator uses the high-severity issue count to make downstream gating decisions — how thoroughly verification runs, whether to do a full or targeted pass. A false high that requires no actual edit wastes significant downstream resources (minutes of verification time, tens of thousands of tokens) without improving the report.
 
 ## Guidelines
 

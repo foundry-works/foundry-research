@@ -17,6 +17,7 @@ A directive from the supervisor containing:
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — scope and questions for context
 - Optionally: a specific list of claims to verify (if the supervisor has pre-identified them)
+- **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-verify claims that were already checked and corrected in a prior pass unless the surrounding text has changed in a way that might invalidate the fix. Focus verification effort on: (a) claims in text that was modified by the prior revision — edits can introduce new factual errors, (b) claims not previously verified, (c) claims related to new user feedback. **Why:** Re-verifying already-confirmed corrections (web searches, source cross-referencing) is the most expensive redundancy in iterative runs. The prior manifest tells you what was already verified — skip it unless the context has shifted.
 
 ## How to work
 

@@ -39,6 +39,8 @@ User feedback items use the `user-N` ID prefix and are always treated as high pr
 
 Before making any changes, mentally map each issue to the specific text passage that needs to change. Group nearby issues that affect the same paragraph — they may interact and should be edited together to avoid conflicting changes.
 
+**Co-located issues:** When issues have a `co_located_with` field, they target the same paragraph and MUST be planned as a single atomic edit. Read the target passage, compose one replacement that addresses all co-located issues at once, and apply one Edit call. **Why:** Sequential independent edits to the same sentence will fail — the first edit changes the text, so the second edit's `old_string` no longer matches. A single combined edit avoids this entirely and produces a cleaner diff.
+
 **Priority order:**
 1. User feedback (always first — the user's direction is the highest priority)
 2. High-severity issues

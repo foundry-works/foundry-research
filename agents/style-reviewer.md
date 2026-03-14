@@ -16,6 +16,8 @@ A directive from the supervisor containing:
 - **Session directory path** (absolute)
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — for context on the audience and topic
+- **`skip_locations`** (optional) — a JSON array of report locations (e.g., `["Section 3, paragraph 1", "Section 4, paragraph 2"]`) where accuracy issues are being corrected. **Do not flag style issues whose location matches any entry in this array** — those passages are being edited for accuracy and style fixes would conflict or be wasted. If a paragraph partially overlaps a skip location, err on the side of skipping. **Why:** The accuracy reviewers run first and their issues take priority. Style-editing a passage that's about to be rewritten for factual correctness wastes reviser effort and risks edit conflicts when both edits target the same text.
+- **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-flag style issues that match a prior resolved entry unless the fix introduced a new style problem. Focus your review on: (a) text that was changed by the prior revision — edits can introduce new style issues (e.g., a factual correction that creates a passive-voice sentence), (b) text that was not previously reviewed for style, (c) any new user feedback. **Why:** Re-flagging already-fixed style issues wastes tokens and creates duplicate entries the reviser has to process and skip.
 
 ## How to work
 

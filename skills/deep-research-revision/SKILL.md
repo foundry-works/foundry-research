@@ -85,11 +85,12 @@ In quick mode, skip to **Step 4** (combined revision) with only the user's struc
 
 **Full mode** — run the complete two-pass review cycle — in all other cases. This is the default.
 
-### Step 1: Rename draft and read the brief
+### Step 1: Rename draft, read the brief, and check for prior revision
 
 1. Read `report.md` to confirm it exists and is non-empty
 2. Read the research brief from `journal.md` or `brief.json` in the session directory — the reviewers need this for context
-3. Copy `report.md` to `report_draft.md` to preserve the original for diffing
+3. Check for an existing `revision/revision-manifest.json` from a prior run. If it exists, read it and extract the list of resolved issue IDs with their locations and fixes. Pass this as a `prior_resolved` list to each reviewer in their launch prompt. **Why:** Without prior-revision awareness, a second run pays full reviewer cost re-examining already-fixed text. Passing the manifest lets reviewers skip confirmed fixes and focus on changed text, unreviewed text, and new user feedback — expected token savings of ~40-60% on subsequent passes.
+4. Copy `report.md` to `report_draft.md` to preserve the original for diffing
 
 ```bash
 cp <session-dir>/report.md <session-dir>/report_draft.md
@@ -125,7 +126,7 @@ Evaluate the synthesis-reviewer's results to determine how to use the verifier's
 
 **Subsequent passes** (prior `revision/verification-report.md` exists):
 
-**Count high-severity issues from the synthesis-reviewer** (not the verifier — the reviewer is the gating signal because it examines internal consistency and source support, which are leading indicators of report quality).
+**Count high-severity issues from the synthesis-reviewer** (not the verifier — the reviewer is the gating signal because it examines internal consistency and source support, which are leading indicators of report quality). **Exclude no-op highs from this count:** if a high-severity issue's `suggested_fix` indicates no text change is needed (e.g., contains phrases like "no change needed," "correctly placed," "no edit required"), do not count it toward the gating threshold. **Why:** Even with improved severity calibration (which instructs the reviewer to avoid false highs), edge cases will still produce no-op highs — observations worth noting but requiring no actual edit. Counting them inflates the gating signal, potentially triggering full verification (~5 min, ~90K tokens) when targeted or skip mode would suffice. This is a belt-and-suspenders safeguard that costs one sentence of filtering logic.
 
 **Three modes:**
 
@@ -170,7 +171,9 @@ Before passing issues to the reviser, deduplicate across reviewer and verifier r
    - **Add a `flagged_by` field** listing both source IDs (e.g., `["review-3", "verify-2"]`). This preserves the audit trail so the delivery summary can report which agents found which issues.
    - **Keep the issue ID of the more specific entry** (the one whose `suggested_fix` was preferred). Drop the other ID from the active issues list.
 
-4. **Log the merge count.** Record how many issues were merged (e.g., "Dedup: merged 2 duplicate issues, 14 → 12 active issues"). This count is reported in the delivery summary.
+4. **Flag co-located non-duplicates.** After dedup, scan the remaining issues for non-duplicates that target the same paragraph (same section + paragraph in their `location` field). For each co-located group, add a `co_located_with` field listing the other issue IDs (e.g., `"co_located_with": ["style-5"]` on review-2, and `"co_located_with": ["review-2"]` on style-5). **Why:** Two different issues targeting the same sentence create fragile edit sequences — the first edit changes surrounding text, causing the second edit's `old_string` to no longer match. The `co_located_with` signal tells the reviser to plan a single atomic edit for the group rather than sequential independent edits, turning a fragile heuristic into a deterministic grouping.
+
+5. **Log the merge count.** Record how many issues were merged and how many co-located groups were flagged (e.g., "Dedup: merged 2 duplicate issues, flagged 1 co-located group, 14 → 12 active issues"). This is reported in the delivery summary.
 
 ### Step 3: Pass 2 — Style review
 
@@ -178,10 +181,13 @@ Before passing issues to the reviser, deduplicate across reviewer and verifier r
 
 **Why the style reviewer sees pre-revision text:** In the old pipeline, style review ran after accuracy *revision*, seeing corrected text. Now both reviews complete before any revision. This is acceptable because accuracy edits are typically small (correcting a number, adding a hedge, qualifying a claim) and rarely change the sentence structure that style issues target. The combined reviser processes accuracy issues first, so by the time it reaches style issues, those text regions are already corrected.
 
+**Build a `skip_locations` list** from the accuracy issues before launching the style reviewer. For each high or medium severity accuracy issue (from both the synthesis-reviewer and research-verifier after gating), extract its `location` field. Pass this as a JSON array in the style reviewer's agent prompt. Example: `"skip_locations": ["Section 3, paragraph 1", "Section 4, paragraph 2"]`. **Why JSON, not prose:** Prose descriptions like "the paragraph about AI faces in Section 4" require the style reviewer to interpret your intent — a process that's fragile and error-prone. A JSON array of location strings is unambiguous: the style reviewer checks each potential issue's location against the list mechanically, with no interpretation needed.
+
 Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
 - Session directory path (absolute)
 - Path to `report.md` (the pre-revision version — accuracy corrections haven't been applied yet)
 - Research brief
+- `skip_locations` JSON array (from above)
 
 The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
 
@@ -190,8 +196,8 @@ The style reviewer checks: passive voice, unexplained jargon, unfocused paragrap
 **Severity filtering — adaptive, not a hard cutoff:**
 
 1. Always include all high and medium severity style issues.
-2. Include low-severity style issues when the total combined issues list (accuracy + style high/medium + user feedback) is under 25. **Why 25:** The reviser comfortably handles ~25 issues per pass. If accuracy issues already consume most of that budget, low-severity style issues should yield. If the accuracy load is light, low-severity fixes are free additions that improve the report without risking reviser overload.
-3. When including low-severity style issues, add `"priority": "opportunistic"` to each one. The reviser applies opportunistic issues only when it's already editing nearby text for a higher-priority issue — it won't force an edit on an otherwise-clean passage. **Why:** This avoids the risk of introducing edit conflicts on untouched text for marginal gains, while capturing low-hanging fruit when the reviser is already in the neighborhood.
+2. Include a low-severity style issue as opportunistic ONLY if its section matches an existing high or medium severity issue (accuracy or style). Compare the section identifier (e.g., "Section 3") in the low-severity issue's `location` against all higher-priority issues' `location` fields. If no section match, exclude it — the reviser would skip it anyway since there are no nearby edits. **Why section-match instead of a count threshold:** The old "under 25 total" rule included low-severity issues the reviser almost always skipped (no nearby higher-priority edits in the same passage). This wasted planning tokens on issues with a predetermined outcome. Filtering by section proximity mirrors the reviser's own skip logic — if the issue isn't even in the same section as another edit, it was never going to be applied. The tradeoff: we might occasionally exclude a low that the reviser would have applied, but the reviser's "nearby" heuristic is generous enough that same-section is the practical minimum.
+3. When including low-severity style issues, add `"priority": "opportunistic"` to each one. The reviser applies opportunistic issues only when it's already editing nearby text for a higher-priority issue — it won't force an edit on an otherwise-clean passage.
 
 ### Step 4: Combined revision
 
@@ -219,6 +225,7 @@ The reviser makes surgical edits using the Edit tool and returns a manifest mapp
 **After the reviser returns:**
 - Check the manifest for unresolved issues — note these for delivery
 - Verify `report.md` was updated (the reviser edits it in place)
+- Write the reviser's manifest to `revision/revision-manifest.json` as structured JSON. Include for each issue: issue ID, status, location, and fix applied (the `action`, `old_text_snippet`, and `new_text_snippet` fields). **Why persist here, before validation:** The manifest captures intent — what the reviser tried to do. Validation (Step 4b) confirms what actually landed. Both are useful for subsequent runs: the resolved list tells reviewers what was addressed, and validation status tells them whether it stuck.
 - Run post-revision validation (Step 4b below)
 
 **If zero total issues found** (no accuracy issues, no style issues, no user feedback): skip revision entirely, proceed to delivery. Log that both review passes found no issues.
