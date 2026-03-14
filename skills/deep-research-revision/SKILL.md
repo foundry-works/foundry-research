@@ -79,7 +79,7 @@ All user feedback items get `severity: "high"` — the user's direction is alway
 - The feedback is purely about content direction (emphasis, structure, scope, tone) — not about factual accuracy
 - The user doesn't ask for a full review
 
-In quick mode, skip to **Step 3** (revise) with only the user's structured directives as the issues list. Log the mode decision.
+In quick mode, skip to **Step 4** (combined revision) with only the user's structured directives as the issues list. Log the mode decision.
 
 **Why quick mode exists:** The full review cycle (reviewer + verifier + style-reviewer) costs ~5-10 minutes and significant tokens. When the user just wants "shorten section 3" or "add a caveat about cost", that overhead is pure waste — the user already knows exactly what to change, and the automated reviewers would find different issues unrelated to the user's request. Quick mode respects the user's time and token budget.
 
@@ -123,7 +123,7 @@ Assign each an issue ID:
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
 
-**If zero issues found** (no reviewer issues, no verifier issues, no user feedback): skip directly to Pass 2 (style). Log that accuracy review found no issues.
+**If zero issues found** (no reviewer issues, no verifier issues, no user feedback): skip directly to Step 3 (style review). Log that accuracy review found no issues.
 
 ### Step 2b: Deduplicate issues
 
@@ -145,14 +145,41 @@ Before passing issues to the reviser, deduplicate across reviewer and verifier r
 
 4. **Log the merge count.** Record how many issues were merged (e.g., "Dedup: merged 2 duplicate issues, 14 → 12 active issues"). This count is reported in the delivery summary.
 
-### Step 3: Accuracy revision
+### Step 3: Pass 2 — Style review
+
+**Why style review runs after accuracy review, not in parallel:** The style reviewer needs to know which sections have accuracy problems — if a paragraph will be rewritten to fix a factual error, flagging its passive voice is wasted effort. Running accuracy review first lets the style reviewer skip sections already flagged for substantive changes. The cost is ~2-3 minutes of sequential execution, trivial compared to the research phase that produced the draft.
+
+**Why the style reviewer sees pre-revision text:** In the old pipeline, style review ran after accuracy *revision*, seeing corrected text. Now both reviews complete before any revision. This is acceptable because accuracy edits are typically small (correcting a number, adding a hedge, qualifying a claim) and rarely change the sentence structure that style issues target. The combined reviser processes accuracy issues first, so by the time it reaches style issues, those text regions are already corrected.
+
+Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
+- Session directory path (absolute)
+- Path to `report.md` (the pre-revision version — accuracy corrections haven't been applied yet)
+- Research brief
+
+The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
+
+**After it returns**, collect all high and medium severity style issues. Assign IDs: `style-1`, `style-2`, ...
+
+### Step 4: Combined revision
+
+Merge all issues — accuracy (reviewer + verifier + user feedback from Step 2/2b) and style (from Step 3) — into a single combined list and launch one reviser.
+
+**Why a single combined pass instead of two separate reviser launches:** The reviser processes both accuracy and style issues identically — the `pass_type` field was audit metadata, not a behavioral switch. Two separate Opus-tier launches (~110k tokens each) doubled the cost for no behavioral difference. A single pass with accuracy issues ordered first achieves the same result: accuracy edits land before style edits, so style fixes target corrected text.
+
+**Combined list ordering** (the reviser processes issues in this order):
+1. User feedback directives (`user-N`) — always first, highest priority
+2. Accuracy issues by severity: high → medium (`review-N`, `verify-N`)
+3. Style issues by severity: high → medium (`style-N`)
+
+**Why accuracy before style:** Accuracy edits may change the text targeted by style issues. Processing accuracy first ensures the reviser doesn't style-edit a passage that's about to be rewritten for correctness. The issue ID prefixes (`review-N`, `verify-N`, `style-N`) make the ordering unambiguous.
+
+**Overflow guidance:** If the combined list exceeds 30 issues, split into two batches: first batch contains all user feedback + accuracy issues (up to 30), second batch contains the remainder (style issues, or overflow accuracy issues). Launch the reviser sequentially — first batch, then second batch on the updated file. **Why 30:** A typical reviser context handles ~25 issues comfortably; 30 gives headroom without risking quality degradation from context overload. Splitting accuracy-first ensures the higher-priority fixes land in the first pass.
 
 Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 - Session directory path (absolute)
 - Draft path: relative path to `report.md`
-- Pass type: `"accuracy"`
-- Combined issues list: reviewer issues + verifier issues + user feedback directives
-- Priority order: user feedback first, then high severity, then medium
+- Pass type: `"combined"`
+- Combined issues list (ordered as above)
 
 The reviser makes surgical edits using the Edit tool and returns a manifest mapping each issue to the edit made (or explaining why it's unresolved).
 
@@ -160,40 +187,17 @@ The reviser makes surgical edits using the Edit tool and returns a manifest mapp
 - Check the manifest for unresolved issues — note these for delivery
 - Verify `report.md` was updated (the reviser edits it in place)
 
-### Step 4: Pass 2 — Style review
+**If zero total issues found** (no accuracy issues, no style issues, no user feedback): skip revision entirely, proceed to delivery. Log that both review passes found no issues.
 
-**Why style runs after accuracy, not in parallel:** Style fixes applied to text containing factual errors are wasted work — the text will change when errors are fixed. Running accuracy first means the style reviewer sees correct text, and the reviser has a simpler job. The cost is ~2-3 minutes of sequential execution, which is trivial compared to the research phase that produced the draft.
-
-Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
-- Session directory path (absolute)
-- Path to `report.md` (the accuracy-corrected version)
-- Research brief
-
-The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
-
-**After it returns**, collect all high and medium severity style issues. Assign IDs: `style-1`, `style-2`, ...
-
-**If zero style issues found:** skip revision, proceed to delivery.
-
-### Step 5: Style revision
-
-Spawn a **`report-reviser`** subagent (Opus, foreground) with:
-- Session directory path (absolute)
-- Draft path: relative path to `report.md`
-- Pass type: `"style"`
-- Style issues list
-
-The reviser makes surgical edits for clarity without changing meaning, citations, hedging, or scope qualifiers.
-
-### Step 6: Delivery
+### Step 5: Delivery
 
 1. Read the final `report.md`
-2. Present a summary to the user:
-   - How many accuracy issues were found and fixed (from reviewer + verifier)
+2. Present a summary to the user, distinguishing accuracy and style fixes by counting issue ID prefixes in the reviser manifest (`review-N` and `verify-N` = accuracy, `style-N` = style, `user-N` = user feedback):
+   - How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits)
+   - How many style issues were found and fixed (count `style-N` resolved edits)
    - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
-   - How many style issues were found and fixed
    - Any unresolved issues (with explanations from the reviser manifest)
-   - Any user feedback items and how they were addressed
+   - Any user feedback items and how they were addressed (count `user-N` resolved edits)
 3. Note that the original draft is preserved at `report_draft.md` for comparison
 4. If there are unresolved issues, suggest what the user could do (e.g., provide the missing source, clarify their intent, run another revision pass)
 

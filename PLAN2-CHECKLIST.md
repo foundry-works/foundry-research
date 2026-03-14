@@ -19,13 +19,13 @@
 
 ## 3. Merge Reviser Passes
 
-- [ ] **3a.** Restructure SKILL.md workflow: after style reviewer returns, merge accuracy + style issues into one combined list
-- [ ] **3b.** Specify combined list ordering with rationale: user feedback first, then accuracy issues by severity, then style issues by severity. **Why accuracy before style:** accuracy edits may change text targeted by style issues
-- [ ] **3c.** Launch single reviser with `pass_type: "combined"` and the merged list
-- [ ] **3d.** Update `report-reviser.md`: add `"combined"` as valid pass_type, add "why" explaining processing order
-- [ ] **3e.** Remove SKILL.md step 5 (separate style revision pass) — fold into the combined step
-- [ ] **3f.** Update delivery step: report accuracy and style fixes separately by counting issue ID prefixes (review-N, verify-N = accuracy; style-N = style)
-- [ ] **3g.** Add overflow guidance: if combined list exceeds 30 issues, split into two batches (accuracy first, then style). **Why 30:** typical reviser context handles ~25 issues comfortably; 30 gives headroom without risking quality degradation
+- [x] **3a.** Restructure SKILL.md workflow: after style reviewer returns, merge accuracy + style issues into one combined list
+- [x] **3b.** Specify combined list ordering with rationale: user feedback first, then accuracy issues by severity, then style issues by severity. **Why accuracy before style:** accuracy edits may change text targeted by style issues
+- [x] **3c.** Launch single reviser with `pass_type: "combined"` and the merged list
+- [x] **3d.** Update `report-reviser.md`: add `"combined"` as valid pass_type, add "why" explaining processing order
+- [x] **3e.** Remove SKILL.md step 5 (separate style revision pass) — fold into the combined step
+- [x] **3f.** Update delivery step: report accuracy and style fixes separately by counting issue ID prefixes (review-N, verify-N = accuracy; style-N = style)
+- [x] **3g.** Add overflow guidance: if combined list exceeds 30 issues, split into two batches (accuracy first, then style). **Why 30:** typical reviser context handles ~25 issues comfortably; 30 gives headroom without risking quality degradation
 
 ## 4. Post-Revision Validation
 
