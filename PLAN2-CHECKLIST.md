@@ -29,12 +29,12 @@
 
 ## 4. Post-Revision Validation
 
-- [ ] **4a.** Extend reviser manifest format in `report-reviser.md`: add `old_text_snippet` (first 80 chars of old_string) and `new_text_snippet` (first 80 chars of new_string) to each edit entry
-- [ ] **4b.** Add "why 80 chars" annotation: long enough for uniqueness in a ~200-line report, short enough to not bloat the manifest
-- [ ] **4c.** Add validation step in SKILL.md after reviser returns: for each resolved issue, grep report.md for `old_text_snippet` — if found, the edit didn't land
-- [ ] **4d.** Add retry logic: if any edits failed validation, re-launch reviser with only failed issues, cap at one retry
-- [ ] **4e.** Add "why one retry" annotation to SKILL.md (context drift is fixed by re-reading; deeper problems need human judgment)
-- [ ] **4f.** Add failed-validation count to delivery summary
+- [x] **4a.** Extend reviser manifest format in `report-reviser.md`: add `old_text_snippet` (first 80 chars of old_string) and `new_text_snippet` (first 80 chars of new_string) to each edit entry
+- [x] **4b.** Add "why 80 chars" annotation: long enough for uniqueness in a ~200-line report, short enough to not bloat the manifest
+- [x] **4c.** Add validation step in SKILL.md after reviser returns: for each resolved issue, grep report.md for `old_text_snippet` — if found, the edit didn't land
+- [x] **4d.** Add retry logic: if any edits failed validation, re-launch reviser with only failed issues, cap at one retry
+- [x] **4e.** Add "why one retry" annotation to SKILL.md (context drift is fixed by re-reading; deeper problems need human judgment)
+- [x] **4f.** Add failed-validation count to delivery summary
 
 ## 5. Conditional Verifier Gating
 

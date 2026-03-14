@@ -74,7 +74,9 @@ Some issues may require information you don't have access to. For these:
 
 ## Return value
 
-After completing all edits, return a JSON manifest mapping each issue to the edit made (or explaining why it wasn't resolved):
+After completing all edits, return a JSON manifest mapping each issue to the edit made (or explaining why it wasn't resolved).
+
+Each resolved edit must include `old_text_snippet` and `new_text_snippet` — the first 80 characters of the old and new strings used in the Edit call. **Why 80 characters:** Long enough to be unique in a ~200-line report (avoiding false-positive grep matches during post-revision validation), short enough to not bloat the manifest. These snippets let the orchestrator machine-verify that edits actually landed, rather than trusting the manifest at face value.
 
 ```json
 {
@@ -85,22 +87,30 @@ After completing all edits, return a JSON manifest mapping each issue to the edi
     {
       "issue_id": "review-1",
       "location": "Section 3, paragraph 2",
-      "action": "Changed route count from 15 to 9 per src-007 metadata"
+      "action": "Changed route count from 15 to 9 per src-007 metadata",
+      "old_text_snippet": "the study identified 15 distinct neural routes connecting the fusiform face ar",
+      "new_text_snippet": "the study identified 9 distinct neural routes connecting the fusiform face are"
     },
     {
       "issue_id": "user-1",
       "location": "Section 3",
-      "action": "Condensed section from 5 paragraphs to 2 per user request"
+      "action": "Condensed section from 5 paragraphs to 2 per user request",
+      "old_text_snippet": "The perceptual mechanisms underlying the uncanny valley have been investigated ",
+      "new_text_snippet": "Research into the uncanny valley's perceptual mechanisms has converged on two k"
     },
     {
       "issue_id": "verify-3",
       "location": "Section 5, paragraph 1",
-      "action": "Added hedge: 'as of 2024' qualifier to temporal claim"
+      "action": "Added hedge: 'as of 2024' qualifier to temporal claim",
+      "old_text_snippet": "no longitudinal studies have tracked whether the uncanny valley effect diminish",
+      "new_text_snippet": "as of 2024, no longitudinal studies have tracked whether the uncanny valley ef"
     },
     {
       "issue_id": "style-2",
       "location": "Section 2, paragraph 3",
-      "action": "Expanded 'HMD' to 'head-mounted display (HMD)' on first use"
+      "action": "Expanded 'HMD' to 'head-mounted display (HMD)' on first use",
+      "old_text_snippet": "participants viewed stimuli through an HMD while physiological responses were r",
+      "new_text_snippet": "participants viewed stimuli through a head-mounted display (HMD) while physiol"
     }
   ],
   "unresolved": [

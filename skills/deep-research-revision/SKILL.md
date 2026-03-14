@@ -186,8 +186,34 @@ The reviser makes surgical edits using the Edit tool and returns a manifest mapp
 **After the reviser returns:**
 - Check the manifest for unresolved issues — note these for delivery
 - Verify `report.md` was updated (the reviser edits it in place)
+- Run post-revision validation (Step 4b below)
 
 **If zero total issues found** (no accuracy issues, no style issues, no user feedback): skip revision entirely, proceed to delivery. Log that both review passes found no issues.
+
+### Step 4b: Post-revision validation
+
+The reviser's manifest claims edits were made, but claims aren't proof. Validate that each edit actually landed by checking the report text against the manifest's snippets.
+
+**Why validate rather than trusting the manifest:** The reviser's "re-read after editing" instruction is aspirational guidance, not an enforced check. The most common failure mode is a prior edit changing surrounding context so a later edit's `old_string` no longer matches — the Edit tool fails silently from the orchestrator's perspective, and the reviser may record "resolved" in the manifest despite the edit not landing.
+
+**Validation procedure:**
+
+For each resolved edit in the manifest:
+1. Check whether `old_text_snippet` still appears in `report.md`. If it does, the edit didn't land — the old text is still present.
+2. Check whether `new_text_snippet` appears in `report.md`. If it does, the edit landed successfully.
+3. If `old_text_snippet` is absent AND `new_text_snippet` is present → **confirmed**.
+4. If `old_text_snippet` is present AND `new_text_snippet` is absent → **failed** (edit didn't apply).
+5. If both are absent → **inconclusive** (surrounding context changed; treat as needing retry).
+6. If both are present → **inconclusive** (snippet may appear in multiple locations; treat as confirmed but log a warning).
+
+Collect all failed edits into a `failed_validations` list.
+
+**Retry logic:** If any edits failed validation, re-launch the reviser with only the failed issues. Cap at **one retry**. **Why one retry:** The most common failure is context drift — a prior edit changed surrounding text so `old_string` no longer matches. One retry with the current file state fixes this because the reviser re-reads the file and targets the updated text. If an edit fails twice, the issue is likely deeper (ambiguous old_string, conflicting edits, or text that was removed entirely) and needs human judgment, not more retries. Unbounded retries risk a loop that wastes tokens without converging.
+
+After the retry (or if no retry was needed), record:
+- Count of edits that passed validation on first try
+- Count of edits that required retry
+- Count of edits that failed after retry (escalate to unresolved)
 
 ### Step 5: Delivery
 
@@ -196,7 +222,8 @@ The reviser makes surgical edits using the Edit tool and returns a manifest mapp
    - How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits)
    - How many style issues were found and fixed (count `style-N` resolved edits)
    - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
-   - Any unresolved issues (with explanations from the reviser manifest)
+   - Post-revision validation results: how many edits were confirmed on first try, how many required a retry, and how many failed validation entirely (if any). **Why report this:** Validation failures signal fragile edits — if retries are frequent, the issues list may have too many overlapping edits targeting the same passages, which is useful feedback for tuning the reviewers.
+   - Any unresolved issues (with explanations from the reviser manifest, including any edits that failed validation after retry)
    - Any user feedback items and how they were addressed (count `user-N` resolved edits)
 3. Note that the original draft is preserved at `report_draft.md` for comparison
 4. If there are unresolved issues, suggest what the user could do (e.g., provide the missing source, clarify their intent, run another revision pass)
