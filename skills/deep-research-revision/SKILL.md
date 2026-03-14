@@ -113,9 +113,36 @@ cp <session-dir>/report.md <session-dir>/report_draft.md
   - Research brief
   - The verifier identifies 8-15 load-bearing claims and checks them against primary sources
 
-**After both return**, collect:
+**Why parallel launch with post-hoc gating:** The synthesis-reviewer takes ~2 min, the verifier ~5 min. Making them sequential (reviewer first, then conditionally launching the verifier) would always add ~2 min of reviewer latency before the verifier could start. Since the most common use case — first revision of a new report — always needs full verification, parallel launch saves wall-clock time in the majority of runs. The tradeoff: in skip/targeted cases, the verifier runs unnecessarily. But verifier tokens are a fixed cost regardless of launch order, and the downstream savings (fewer issues reaching the reviser) are where gating actually saves tokens.
+
+**After both return**, apply verifier gating to decide how much of the verifier's output to use:
+
+#### Verifier gating
+
+Evaluate the synthesis-reviewer's results to determine how to use the verifier's output. This controls downstream token costs — a full verifier result set adds issues to the reviser's workload, so filtering it when the reviewer's findings suggest stability avoids spending reviser tokens on redundant confirmation.
+
+**Count high-severity issues from the synthesis-reviewer** (not the verifier — the reviewer is the gating signal because it examines internal consistency and source support, which are leading indicators of report quality).
+
+**Three modes:**
+
+1. **Full verification** — use all verifier findings. Triggers when ANY of:
+   - The reviewer found **3+ high-severity issues**. **Why:** A high issue count suggests systemic report quality problems — the kinds of errors that cascade across claims. Independent verification catches problems the reviewer's structural analysis misses (e.g., a claim that's internally consistent but factually wrong).
+   - The user **explicitly requested verification** (e.g., "verify the claims" or "fact-check this").
+   - This is the **first revision pass** on this report (no prior `revision/verification-report.md` exists). **Why:** First-pass verification establishes a baseline. Subsequent runs can rely on the prior verification for claims that haven't changed.
+
+2. **Targeted verification** — use only verifier findings that relate to the reviewer's flagged claims. Triggers when:
+   - The reviewer found **1-2 high-severity issues**.
+   - **How to filter:** For each verifier finding in `high_priority_issues`, check whether it targets the same section/paragraph or the same claim as one of the reviewer's high-severity issues. Keep matches, discard the rest. **Why:** The reviewer's 1-2 issues point to localized problems, not systemic ones. The verifier's independent analysis of those same claims adds confidence and specificity, but its findings about unrelated claims have low marginal value when the reviewer saw no problems there.
+
+3. **Skip verification** — discard all verifier findings. Triggers when ALL of:
+   - The reviewer found **0 high-severity issues**.
+   - A prior `revision/verification-report.md` exists from an earlier run. **Why:** The reviewer's clean bill combined with a prior verification baseline means the report's factual claims are stable. The verifier's output would be mostly confirmations, adding issues-list bulk but not actionable corrections. Without a prior baseline (first run), always use full verification — a clean reviewer pass doesn't guarantee factual accuracy, only internal consistency.
+
+**Log the gating decision** for auditability — record which mode was selected and why (e.g., "Verifier gating: targeted (2 high-severity reviewer issues, prior verification exists)"). This appears in the delivery summary so the user knows how verification results were used.
+
+**After gating**, collect:
 - All high and medium severity issues from the synthesis-reviewer
-- All contradicted or partially-supported claims from the verifier's `high_priority_issues`
+- Verifier issues per the gating mode: all `high_priority_issues` (full), only matching issues (targeted), or none (skip)
 
 Assign each an issue ID:
 - Reviewer issues: `review-1`, `review-2`, ...
@@ -123,7 +150,7 @@ Assign each an issue ID:
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
 
-**If zero issues found** (no reviewer issues, no verifier issues, no user feedback): skip directly to Step 3 (style review). Log that accuracy review found no issues.
+**If zero issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 3 (style review). Log that accuracy review found no issues.
 
 ### Step 2b: Deduplicate issues
 
@@ -221,6 +248,7 @@ After the retry (or if no retry was needed), record:
 2. Present a summary to the user, distinguishing accuracy and style fixes by counting issue ID prefixes in the reviser manifest (`review-N` and `verify-N` = accuracy, `style-N` = style, `user-N` = user feedback):
    - How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits)
    - How many style issues were found and fixed (count `style-N` resolved edits)
+   - Verifier gating mode used (full, targeted, or skip) and why — so the user understands how verification results were applied. If targeted, note which claims were matched; if skip, note that prior verification exists
    - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
    - Post-revision validation results: how many edits were confirmed on first try, how many required a retry, and how many failed validation entirely (if any). **Why report this:** Validation failures signal fragile edits — if retries are frequent, the issues list may have too many overlapping edits targeting the same passages, which is useful feedback for tuning the reviewers.
    - Any unresolved issues (with explanations from the reviser manifest, including any edits that failed validation after retry)

@@ -38,23 +38,23 @@
 
 ## 5. Conditional Verifier Gating
 
-- [ ] **5a.** Add gating logic to SKILL.md step 2, after both reviewers return
-- [ ] **5b.** Define three modes with rationale:
+- [x] **5a.** Add gating logic to SKILL.md step 2, after both reviewers return
+- [x] **5b.** Define three modes with rationale:
   - Full verification: 3+ high-severity reviewer issues, OR user requests, OR first revision of this report. **Why:** high issue count suggests report quality problems that independent verification catches
   - Targeted verification: 1-2 high-severity issues — pass those claims to verifier. **Why:** focuses expensive Opus+web-search on known problem areas
   - Skip verification: 0 high issues AND prior `verification-report.md` exists. **Why:** reviewer's clean bill + prior verification baseline = low marginal value
-- [ ] **5c.** Add "why parallel launch with post-hoc gating" annotation: saves ~2 min in the common case (full mode) vs. sequential launch that always adds reviewer latency
-- [ ] **5d.** In targeted mode, pass specific claims to verifier using existing "specific list of claims" input (verifier line 19)
-- [ ] **5e.** Log the gating decision for auditability
+- [x] **5c.** Add "why parallel launch with post-hoc gating" annotation: saves ~2 min in the common case (full mode) vs. sequential launch that always adds reviewer latency
+- [x] **5d.** In targeted mode, pass specific claims to verifier using existing "specific list of claims" input (verifier line 19)
+- [x] **5e.** Log the gating decision for auditability
 
 ## 6. Style Reviewer Scope Reduction
 
-- [ ] **6a.** Add `mechanical` boolean to style-reviewer.md issue format
-- [ ] **6b.** Define which dimensions are typically mechanical vs. judgment, with rationale:
+- [x] **6a.** Add `mechanical` boolean to style-reviewer.md issue format
+- [x] **6b.** Define which dimensions are typically mechanical vs. judgment, with rationale:
   - Mechanical: acronym expansion, filler removal, sentence splitting (pattern-matchable, no meaning risk)
   - Judgment: paragraph focus, passive voice in context, list opportunities (require understanding argument flow)
-- [ ] **6c.** Update `report-reviser.md`: mechanical issues can be applied with minimal surrounding-context verification. **Why:** these edits don't change meaning by definition (expanding "HMD" to "head-mounted display (HMD)" can't alter an argument), so the reviser's re-read-after-editing step can be lighter
-- [ ] **6d.** Add prioritization guidance to style-reviewer.md: scan judgment-intensive dimensions first (paragraph focus, contextual jargon), then sweep for mechanical issues. **Why:** judgment issues are higher-value findings; if the reviewer hits context limits, mechanical issues are the right ones to drop
+- [x] **6c.** Update `report-reviser.md`: mechanical issues can be applied with minimal surrounding-context verification. **Why:** these edits don't change meaning by definition (expanding "HMD" to "head-mounted display (HMD)" can't alter an argument), so the reviser's re-read-after-editing step can be lighter
+- [x] **6d.** Add prioritization guidance to style-reviewer.md: scan judgment-intensive dimensions first (paragraph focus, contextual jargon), then sweep for mechanical issues. **Why:** judgment issues are higher-value findings; if the reviewer hits context limits, mechanical issues are the right ones to drop
 
 ## Verification
 

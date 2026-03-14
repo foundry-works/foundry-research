@@ -45,6 +45,8 @@ Before making any changes, mentally map each issue to the specific text passage 
 3. Medium-severity issues
 4. Low-severity issues (only if they don't risk collateral damage to clean text)
 
+**Mechanical vs. judgment style issues:** Style issues include a `mechanical` flag. Mechanical issues (acronym expansion, filler removal, unambiguous sentence splits) can be applied with minimal surrounding-context verification — a quick check that the sentence still reads correctly is sufficient. **Why:** These edits don't change meaning by definition (expanding "HMD" to "head-mounted display (HMD)" can't alter an argument), so the full re-read-after-editing step can be lighter. Non-mechanical style issues (paragraph restructuring, passive-to-active rewrites, list conversions) require the same careful re-read as accuracy edits, since they reshape how the reader processes the argument.
+
 ### Step 3: Make surgical edits
 
 For each issue (or group of related issues):

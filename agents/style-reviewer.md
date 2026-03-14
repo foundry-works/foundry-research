@@ -25,28 +25,34 @@ A directive from the supervisor containing:
 
 ## Style dimensions
 
-### 1. Passive voice and sentence length
+Dimensions are classified as **judgment** or **mechanical**. Judgment dimensions require understanding argument flow and meaning — they are higher-value findings and should be scanned first. Mechanical dimensions are pattern-matchable with no meaning risk. **Why this ordering matters:** If you hit context limits or the report is long, mechanical issues are the right ones to drop — they're easy to catch in a follow-up pass, while judgment issues require the full-report context you already have loaded.
+
+### Judgment dimensions (scan first)
+
+#### 1. Passive voice and sentence length
 Flag sentences that use passive voice where active voice would be clearer ("the effect was observed by researchers" → "researchers observed the effect"). Flag sentences over 30 words that could be split without losing meaning.
 
 **What's NOT an issue:** Passive voice is fine when the actor is unknown, unimportant, or deliberately de-emphasized (e.g., "the compound was synthesized in 1987" is fine — who synthesized it doesn't matter). Longer sentences are fine when the structure is clear (e.g., a list of three parallel items joined by commas).
 
-### 2. Jargon and unexplained terms
-Flag technical terms, acronyms, or domain-specific language used without a brief definition or enough context for a non-specialist to understand. The first use of a term should include a plain-language gloss.
-
-**What's NOT an issue:** Truly common terms that any educated reader knows (e.g., "DNA", "GDP", "algorithm"). Terms defined earlier in the report and used consistently afterward.
-
-### 3. Paragraph focus
+#### 2. Paragraph focus
 Flag paragraphs that cover multiple distinct ideas and would be clearer split into two or more. Each paragraph should have one core point.
 
 **What's NOT an issue:** Paragraphs that build a single argument through multiple supporting points are fine — the key is whether they have one throughline or multiple competing ones.
 
-### 4. Filler and throat-clearing
-Flag phrases that add words without meaning: "it is important to note that", "it should be mentioned that", "needless to say", "in terms of", "the fact that", "it is worth noting that". The substance should lead.
-
-### 5. List opportunities
+#### 3. List opportunities
 Flag dense prose that enumerates items (comparisons, options, steps, criteria) which would be more scannable as a bulleted or numbered list. Three or more parallel items in running text are candidates.
 
 **What's NOT an issue:** Not everything needs to be a list. Narrative flow and argument building are better as prose.
+
+### Mechanical dimensions (scan second)
+
+#### 4. Jargon and unexplained terms
+Flag technical terms, acronyms, or domain-specific language used without a brief definition or enough context for a non-specialist to understand. The first use of a term should include a plain-language gloss.
+
+**What's NOT an issue:** Truly common terms that any educated reader knows (e.g., "DNA", "GDP", "algorithm"). Terms defined earlier in the report and used consistently afterward.
+
+#### 5. Filler and throat-clearing
+Flag phrases that add words without meaning: "it is important to note that", "it should be mentioned that", "needless to say", "in terms of", "the fact that", "it is worth noting that". The substance should lead.
 
 ## Constraint: do not change meaning
 
@@ -77,11 +83,13 @@ Write the full review to `revision/style-review.md` in the session directory usi
 
 ### [MEDIUM] Passive voice — Section 2, paragraph 3
 **Location:** Section 2, paragraph 3
+**Mechanical:** No
 **Text:** "The correlation between sleep duration and cognitive performance was demonstrated by three independent studies"
 **Suggested fix:** "Three independent studies demonstrated a correlation between sleep duration and cognitive performance"
 
 ### [LOW] Filler phrase — Section 4, paragraph 1
 **Location:** Section 4, paragraph 1
+**Mechanical:** Yes
 **Text:** "It is important to note that these results only apply to adults over 65"
 **Suggested fix:** "These results only apply to adults over 65"
 ```
@@ -100,6 +108,7 @@ Then return a compact JSON manifest to the supervisor:
     {
       "severity": "medium",
       "dimension": "passive_voice",
+      "mechanical": false,
       "location": "Section 2, paragraph 3",
       "text": "The correlation between sleep duration and cognitive performance was demonstrated by three independent studies",
       "suggested_fix": "Three independent studies demonstrated a correlation between sleep duration and cognitive performance"
@@ -112,6 +121,12 @@ Severity levels:
 - **high** — Substantially impairs readability. A non-specialist would struggle to understand the point. Must fix.
 - **medium** — Noticeably reduces clarity. Should fix.
 - **low** — Minor style improvement. Nice to fix.
+
+The `mechanical` field (boolean):
+- **true** — Pattern-matchable edits with no meaning risk: acronym expansion, filler removal, sentence splitting where the split point is unambiguous. These edits are safe to apply without re-reading the surrounding paragraph for meaning shifts.
+- **false** — Edits requiring understanding of argument flow: paragraph restructuring, passive-to-active rewrites where the actor assignment matters, list conversions that change how a reader processes an argument. These need the reviser to verify that the edit preserves the author's reasoning.
+
+**Why this distinction matters downstream:** The reviser uses this flag to allocate verification effort proportionally — mechanical edits get a lighter re-read pass, freeing attention for judgment edits where meaning shifts are a real risk.
 
 ## Guidelines
 
