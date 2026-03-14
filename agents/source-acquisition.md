@@ -52,8 +52,7 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 
 ## Search Strategy
 
-**Search budget:** Aim for 15-25 total searches in initial mode. The temperament measurement session ran 90 searches, which flooded state.db with off-topic sources and wasted download bandwidth. Diminishing returns set in after ~20 searches — new results overlap heavily with existing sources. If you haven't hit coverage by 25 searches, the gap is in query quality, not quantity. Refine queries or try different providers instead of adding more searches.
-
+**Search budget:** Aim for 15-25 total searches in initial mode. Diminishing returns set in after ~20 searches — new results overlap heavily with existing sources. If you haven't hit coverage by 25 searches, the gap is in query quality, not quantity. Refine queries or try different providers instead of adding more searches.
 ### Round 1: Broad sweep
 - Run 3-5 parallel searches across different providers, using the core topic terms from the brief
 - **Always set `--limit` explicitly:** 50 for broad, 20 for targeted, 10 for citation traversal
@@ -100,8 +99,7 @@ Before proceeding to round 3+, verify your citation chasing ratio: `traversals_r
 4. Use author-name searches for fields with known key researchers: `Rothbart temperament`, `Kochanska effortful control`
 5. Reserve broad population-based searches for gap-filling, not initial rounds
 
-**Why instrument-first:** Broad population searches ("school-age children temperament measurement") return thousands of irrelevant results — papers about dental hygiene, nutritional status, or helminth infections that happen to involve "school-age children." Instrument-specific queries find the target literature immediately because instrument names are high-specificity terms with almost no false positives.
-
+**Why instrument-first:** Instrument names are high-specificity terms with almost no false positives, while broad population searches return thousands of irrelevant results from unrelated fields. Instrument-specific queries find the target literature immediately.
 **How to detect this pattern:** If the brief mentions specific instruments, scales, or assessment tools by name, use this strategy. If the brief asks about "how X is measured" or "what tools exist for Y," the answer is instruments — search for known ones first.
 
 ### Pre-insertion relevance gate
@@ -189,8 +187,7 @@ After all downloads and recovery attempts complete, validate content for the **t
 }
 ```
 
-**Why at this stage:** The orchestrator's batch pre-read step (SKILL.md step 6) catches mismatches too, but it happens after you've returned — meaning the orchestrator has to context-switch back into validation mode. Catching gross mismatches here saves 8-15 wasted reader agent invocations (~160-300K tokens) and lets the orchestrator trust your manifest's download counts when allocating readers.
-
+**Why at this stage:** The orchestrator's batch pre-read step (SKILL.md step 6) catches mismatches too, but it happens after you've returned. Catching gross mismatches here lets the orchestrator trust your manifest's download counts when allocating readers.
 ### Web search recovery for paywalled papers
 
 After `recover-failed` completes, check whether any **high-priority** sources (top 5-10 by triage score) are still missing content. These are often foundational papers locked behind publisher paywalls (Wiley, Elsevier, APA, Cambridge) that the API-based cascade can't reach — but authors frequently self-host their most-cited papers on personal websites, lab pages, or university repositories.
@@ -217,8 +214,7 @@ After `recover-failed` completes, check whether any **high-priority** sources (t
    {cli_dir}/download <source-id> --url "<found-url>"
    ```
 
-**Why this works:** In the temperament measurement session, every foundational paper (Rothbart's CBQ, IBQ-R, Goldsmith's Lab-TAB) was inaccessible via the standard cascade — but the CBQ paper was freely hosted on Rothbart's lab site at Bowdoin College. A simple `"Rothbart" "Children's Behavior Questionnaire" PDF` search would have found it immediately.
-
+**Why this works:** Authors frequently self-host their most-cited papers on personal websites, lab pages, or university repositories. A targeted Tavily search with author name + title keywords + "PDF" finds these copies when the API cascade fails.
 **Budget:** Cap at 5-10 web search attempts per session. Log what you tried and outcomes in journal.md so the orchestrator knows what's still missing and why.
 
 **Use `--summary-only` on direct download calls** (e.g., `download --retry-sync --summary-only`) to get counts only instead of verbose per-source details. The `download-pending --auto-download` output is already compact (just counts + failed source IDs).

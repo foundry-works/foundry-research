@@ -56,9 +56,9 @@
 
 ## 6. Prompt Organization
 
-- [ ] **6a.** Create `skills/deep-research/LESSONS.md` with entry format (ID, session, what happened, lesson, applied-in)
-- [ ] **6b.** Extract ~15 incident-specific narrative blocks from SKILL.md into LESSONS.md entries
-- [ ] **6c.** Replace extracted blocks with one-line references: "See LESSONS.md#entry-id"
-- [ ] **6d.** Extract ~5 incident-specific blocks from `source-acquisition.md` into LESSONS.md
-- [ ] **6e.** Verify: does Claude Code skill loader include LESSONS.md automatically, or only SKILL.md? If only SKILL.md, add a Read instruction at the top of SKILL.md pointing to LESSONS.md for debugging context.
-- [ ] **6f.** Review: ensure all inline "why" blocks that explain *principles* (not incidents) remain in place
+- [x] **6a.** Create `skills/deep-research/LESSONS.md` with entry format (ID, session, what happened, lesson, applied-in)
+- [x] **6b.** Extract ~15 incident-specific narrative blocks from SKILL.md into LESSONS.md entries
+- [x] **6c.** Replace extracted blocks with one-line references: "See LESSONS.md#entry-id"
+- [x] **6d.** Extract ~5 incident-specific blocks from `source-acquisition.md` into LESSONS.md
+- [x] **6e.** Verify: does Claude Code skill loader include LESSONS.md automatically, or only SKILL.md? If only SKILL.md, add a Read instruction at the top of SKILL.md pointing to LESSONS.md for debugging context.
+- [x] **6f.** Review: ensure all inline "why" blocks that explain *principles* (not incidents) remain in place
