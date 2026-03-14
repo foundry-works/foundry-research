@@ -193,6 +193,22 @@ Use the **Agent tool** to spawn subagents:
 
 ---
 
+## Expected Agent Outputs
+
+All revision artifacts go in `{session}/revision/`, not `notes/` or the session root. **Why a separate directory:** `notes/` contains reader summaries from the original research pipeline — mixing in reviewer outputs makes it ambiguous whether a file came from research or revision. The `revision/` subdirectory keeps provenance clear.
+
+**Why these paths are explicit here:** The orchestrator doesn't read agent prompt files, so agent-defined output conventions are invisible unless mirrored in the skill prompt. These canonical paths ensure the orchestrator knows where to find results without overriding agent defaults.
+
+| Agent | Output path |
+|-------|-------------|
+| synthesis-reviewer | `{session}/revision/review-report.md` |
+| research-verifier | `{session}/revision/verification-report.md` |
+| style-reviewer | `{session}/revision/style-review.md` |
+
+**Do not override these paths** when launching agents. Let each agent write to its default location — the paths above match what the agent prompts specify. **Why no overrides:** Ad-hoc path overrides in agent launch prompts diverge from the agent's own conventions, causing outputs to land in unexpected locations. When the orchestrator and agent disagree on where files go, downstream steps that read those files break silently.
+
+---
+
 ## What This Skill Does NOT Do
 
 - **No new research.** This skill does not search for sources, download papers, or run the research pipeline. If the user needs more sources, they should run `/deep-research` again or do targeted searches manually.

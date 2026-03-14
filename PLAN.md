@@ -198,32 +198,19 @@ SKILL.md is 377 lines; source-acquisition.md is 474 lines. Total prompt surface 
 ### Why it's a concern (not a failure)
 This didn't cause a failure in this session — the prompts were followed. But the length increases the risk that under context pressure, the model skims rather than reads closely. The longest sections are incident-specific narratives (e.g., "the temperament session's 32% mismatch rate," "the temperament session's SUGGESTIONS.md identified...") that provide context for decisions but aren't needed on every run.
 
-### Proposed fix
+### Implemented fix (simplified from original plan)
 
-**A. Create `skills/deep-research/LESSONS.md`.** Move incident-specific context and extended rationale into a standalone file. Each entry has a short ID (e.g., `#mismatch-cascade`, `#recovery-spiral`, `#gap-false-confidence`) that SKILL.md can reference. Format:
+LESSONS.md was prototyped but dropped — it added indirection without clear benefit. The principle-based "why" blocks inline are sufficient; the agent either internalizes the principle or it doesn't, and referencing a separate incident file won't change behavior.
 
-```markdown
-## mismatch-cascade
-**Session:** temperament measurement (2025-XX)
-**What happened:** Gap agent trusted title matches on content-mismatched sources, leaving 8/12 gaps unresolved.
-**Lesson:** Always verify gap resolution with readers before calling resolve-gap.
-**Applied in:** SKILL.md step 13, source-acquisition.md §gap-mode
-```
+**What was done:**
+- Replaced ~5 incident-specific narratives in SKILL.md with general principle statements (e.g., "The temperament session's 32% mismatch rate proved..." → "Download-time keyword checks miss topical mismatches where papers share vocabulary...")
+- Replaced ~4 incident-specific narratives in source-acquisition.md similarly
+- All principle-based "why" blocks kept inline
+- Net reduction: 9 fewer lines, all session-specific references removed
 
-**B. Replace inline narratives in SKILL.md with one-line references.** Example: instead of the 5-line explanation in step 6 about the temperament session's 32% mismatch rate, write: "**Why mandatory:** See LESSONS.md#pre-read-validation for the incident that motivated this step."
-
-**C. Keep "why" blocks that explain *the principle*, remove ones that explain *the incident*.** "Why: category-boundary ambiguity doesn't always produce negative affect, so pre-read validation catches false matches that keyword checks miss" stays. "Why: the temperament session's 32% mismatch rate proved that download-time quality checks alone are insufficient" moves to LESSONS.md.
-
-### Files to change
-- Create `skills/deep-research/LESSONS.md`
-- `skills/deep-research/SKILL.md` — replace ~15 incident-specific narrative blocks with LESSONS.md references
-- `agents/source-acquisition.md` — same treatment for ~5 incident-specific blocks
-
-### Risk
-The model may not read LESSONS.md unless explicitly told to. Mitigated by: (a) the principles remain inline — only the incidents move, (b) LESSONS.md is in the skill directory and could be loaded with the skill context, (c) the references are clear enough that the model can follow them when debugging a failure.
-
-### Open question
-Does the Claude Code skill loader include all files in the skill directory, or only SKILL.md? If only SKILL.md, LESSONS.md would need to be referenced via Read tool calls, which adds friction. Need to verify this before implementing.
+### Files changed
+- `skills/deep-research/SKILL.md` — incident narratives replaced with principle statements
+- `agents/source-acquisition.md` — same treatment
 
 ---
 

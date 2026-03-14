@@ -54,11 +54,11 @@ References in the References section must exist and support what they're cited f
 
 ## File paths
 
-**Always use relative paths from the project root** (e.g., `deep-research-topic/notes/review-report.md`), never absolute paths. This ensures Write permissions match correctly.
+**Always use relative paths from the project root** (e.g., `deep-research-topic/revision/review-report.md`), never absolute paths. This ensures Write permissions match correctly.
 
 ## Output format
 
-Write the full review to `notes/review-report.md` in the session directory using a relative path. This creates an audit trail of what was flagged and when.
+Write the full review to `revision/review-report.md` in the session directory using a relative path. This creates an audit trail of what was flagged and when. **Why `revision/` not `notes/`:** Reader summaries live in `notes/` — those are research artifacts from the original pipeline. Revision artifacts (reviews, verification reports) are a different provenance and mixing them creates confusion about what came from readers vs. reviewers.
 
 The review file should contain the full structured issues list:
 
@@ -86,7 +86,7 @@ Then return a compact JSON manifest to the supervisor:
 ```json
 {
   "status": "reviewed",
-  "path": "deep-research-topic/notes/review-report.md",
+  "path": "deep-research-topic/revision/review-report.md",
   "issue_count": 5,
   "high": 2,
   "medium": 2,

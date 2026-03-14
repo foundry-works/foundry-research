@@ -2,12 +2,12 @@
 
 ## 1. Standardize Output Paths
 
-- [ ] **1a.** Create `revision/` subdirectory convention: update `synthesis-reviewer.md` output path from `notes/review-report.md` to `revision/review-report.md`
-- [ ] **1b.** Update `research-verifier.md` output path from `notes/verification-report.md` to `revision/verification-report.md`
-- [ ] **1c.** Update `style-reviewer.md` output path from `notes/style-review.md` to `revision/style-review.md`
-- [ ] **1d.** Add "Expected Agent Outputs" section to `skills/deep-research-revision/SKILL.md` listing canonical paths for each agent, with a "why" explaining that the orchestrator should not override these paths
-- [ ] **1e.** Update SKILL.md agent launch instructions: remove any ad-hoc path overrides, let agents write to their default locations
-- [ ] **1f.** Verify: the `revision/` directory doesn't conflict with any existing session directory structure
+- [x] **1a.** Create `revision/` subdirectory convention: update `synthesis-reviewer.md` output path from `notes/review-report.md` to `revision/review-report.md`
+- [x] **1b.** Update `research-verifier.md` output path from `notes/verification-report.md` to `revision/verification-report.md`
+- [x] **1c.** Update `style-reviewer.md` output path from `notes/style-review.md` to `revision/style-review.md`
+- [x] **1d.** Add "Expected Agent Outputs" section to `skills/deep-research-revision/SKILL.md` listing canonical paths for each agent, with a "why" explaining that the orchestrator should not override these paths
+- [x] **1e.** Update SKILL.md agent launch instructions: remove any ad-hoc path overrides, let agents write to their default locations
+- [x] **1f.** Verify: the `revision/` directory doesn't conflict with any existing session directory structure
 
 ## 2. Issue Deduplication Before Reviser
 

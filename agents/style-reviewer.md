@@ -61,11 +61,11 @@ If you're unsure whether a suggested rewrite changes meaning, flag it as low sev
 
 ## File paths
 
-**Always use relative paths from the project root** (e.g., `deep-research-topic/notes/style-review.md`), never absolute paths.
+**Always use relative paths from the project root** (e.g., `deep-research-topic/revision/style-review.md`), never absolute paths.
 
 ## Output format
 
-Write the full review to `notes/style-review.md` in the session directory using a relative path.
+Write the full review to `revision/style-review.md` in the session directory using a relative path. **Why `revision/` not `notes/`:** Reader summaries live in `notes/` — those are research artifacts from the original pipeline. Revision artifacts (reviews, style reviews) are a different provenance and mixing them creates confusion about what came from readers vs. reviewers.
 
 ```markdown
 # Style Review
@@ -91,7 +91,7 @@ Then return a compact JSON manifest to the supervisor:
 ```json
 {
   "status": "reviewed",
-  "path": "deep-research-topic/notes/style-review.md",
+  "path": "deep-research-topic/revision/style-review.md",
   "issue_count": 8,
   "high": 1,
   "medium": 4,

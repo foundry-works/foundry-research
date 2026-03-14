@@ -55,11 +55,11 @@ Focus your search effort proportionally: high-stakes claims (recommendations, qu
 
 ### Step 4: Write verification report
 
-Write the verification report to `notes/verification-report.md` in the session directory using a **relative path from the project root**.
+Write the verification report to `revision/verification-report.md` in the session directory using a **relative path from the project root**. **Why `revision/` not `notes/`:** Reader summaries live in `notes/` — those are research artifacts from the original pipeline. Revision artifacts (reviews, verification reports) are a different provenance and mixing them creates confusion about what came from readers vs. reviewers.
 
 ## File paths
 
-**Always use relative paths from the project root** (e.g., `deep-research-topic/notes/verification-report.md`), never absolute paths.
+**Always use relative paths from the project root** (e.g., `deep-research-topic/revision/verification-report.md`), never absolute paths.
 
 ## Output format
 
@@ -68,7 +68,7 @@ Write the detailed verification report to disk, then return a compact JSON summa
 ```json
 {
   "status": "verified",
-  "path": "deep-research-topic/notes/verification-report.md",
+  "path": "deep-research-topic/revision/verification-report.md",
   "claims_checked": 12,
   "results": {
     "confirmed": 8,
