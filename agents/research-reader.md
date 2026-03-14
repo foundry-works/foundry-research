@@ -30,11 +30,15 @@ A directive from the supervisor containing:
 
 ## File paths
 
-**Always use relative paths from the project root** (e.g., `deep-research-topic/notes/src-003.md`), never absolute paths (e.g., `/home/user/project/deep-research-topic/notes/src-003.md`). This ensures Write permissions match correctly — absolute paths may be denied by the permission allowlist even when the relative equivalent is allowed.
+Construct output paths by joining the session directory from your directive with the relative note path. If the session directory is `/home/user/project/deep-research-topic`, write notes to `deep-research-topic/notes/src-003.md` (relative from project root).
+
+**Never double the session directory name.** If the session directory path ends with `deep-research-topic`, the note path is `{session_dir}/notes/src-NNN.md`, not `deep-research-topic/deep-research-topic/notes/src-NNN.md`. The most common cause of doubling: concatenating the session directory basename onto a path that already includes it.
+
+**Why relative paths:** Absolute paths may be denied by the permission allowlist even when the relative equivalent is allowed. Strip the project root prefix to get a relative path.
 
 ## Output rules
 
-- Write the summary to `notes/{source_id}.md` in the session directory, using a **relative path from the project root**
+- Write the summary to `notes/{source_id}.md` in the session directory (see File paths section above for path construction)
 - The note should include: core findings (2-3 sentences), key evidence/data points, methodology, limitations, and relevance to the research question
 - Return ONLY a compact JSON manifest entry to the supervisor — do NOT return the full summary in your response. Include `coverage_signal` to help the supervisor assess coverage without reading the full note.
 

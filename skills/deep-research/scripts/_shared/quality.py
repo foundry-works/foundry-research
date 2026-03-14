@@ -118,6 +118,20 @@ def assess_quality(text: str) -> dict:
     # 6. Paywall / access-gate detection (first 50 lines)
     paywall_hit = _detect_paywall(check_text)
 
+    # 7. Paywall abstract stub detector: catches pages that pass quality
+    # checks because they include the abstract as real text, but are actually
+    # paywall landing pages. Many Springer/Wiley pages pass checks 1-5
+    # because their abstracts have enough sentences, alpha chars, and length.
+    # Scan the FULL text for paywall markers (not just first 50 lines).
+    paywall_stub = False
+    if not paywall_hit and content_length < 2000 and not reasons:
+        full_lower = check_text.lower()
+        for marker in _PAYWALL_MARKERS:
+            if marker.lower() in full_lower:
+                paywall_stub = True
+                paywall_hit = f"stub: {marker}"
+                break
+
     details = {
         "content_length": content_length,
         "alpha_ratio": round(alpha_ratio, 3),
@@ -128,7 +142,8 @@ def assess_quality(text: str) -> dict:
     # Paywall pages get their own quality label so downstream can distinguish
     # access-gate pages from genuinely degraded conversions.
     if paywall_hit:
-        details["reasons"] = reasons + [f"paywall_page ({paywall_hit})"]
+        label = "paywall_stub" if paywall_stub else "paywall_page"
+        details["reasons"] = reasons + [f"{label} ({paywall_hit})"]
         return {"quality": "degraded", "quality_details": details}
 
     if not reasons:
@@ -190,14 +205,20 @@ def check_content_mismatch(
     title_words = _extract_keywords(title) if title else []
     title_hits = sum(1 for w in title_words if w in text_lower) if title_words else 0
 
-    # Check author surnames (last name before comma, or last word)
+    # Check author surnames in first page (~3000 chars) and full header
+    # Most legitimate PDFs have author names on the first page.
+    first_page_lower = text[:3000].lower()
     author_hits = 0
+    author_first_page_hits = 0
     if authors:
         for author in authors[:5]:  # check first 5 authors
             parts = author.split(",")
             surname = parts[0].strip().lower() if parts else ""
-            if surname and len(surname) >= 3 and surname in text_lower:
-                author_hits += 1
+            if surname and len(surname) >= 3:
+                if surname in text_lower:
+                    author_hits += 1
+                if surname in first_page_lower:
+                    author_first_page_hits += 1
 
     # Abstract-keyword overlap check
     abstract_overlap = None
@@ -230,6 +251,13 @@ def check_content_mismatch(
         mismatched = author_hits == 0
     else:
         mismatched = False
+
+    # First-page author check: if authors exist in the full text but NOT on
+    # the first page, and title match is weak, flag as mismatched.
+    # Legitimate papers almost always have author names on page 1.
+    if (not mismatched and has_authors and author_hits > 0
+            and author_first_page_hits == 0 and title_hits < 3):
+        mismatched = True
 
     # Abstract-keyword gate: even if title/author passed, flag as mismatched
     # when abstract overlap is very low AND title match is weak.

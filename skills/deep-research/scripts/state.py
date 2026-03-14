@@ -921,7 +921,7 @@ def cmd_summary(args):
     source_count = conn.execute("SELECT COUNT(*) as c FROM sources WHERE session_id = ?", (sid,)).fetchone()["c"]
     sources_by_type: dict[str, int] = {}
     sources_by_provider: dict[str, int] = {}
-    source_rows = conn.execute("SELECT id, title, type, provider FROM sources WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
+    source_rows = conn.execute("SELECT id, title, type, provider, quality FROM sources WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
     source_list = []
     for r in source_rows:
         t = r["type"] or "unknown"
@@ -968,6 +968,34 @@ def cmd_summary(args):
 
     # --write-handoff: write full summary to file, return only path + counts
     if getattr(args, "write_handoff", False):
+        # Build source quality report from DB quality field + on-disk notes
+        notes_dir = os.path.join(args.session_dir, "notes")
+        quality_tiers: dict[str, list[str]] = {
+            "on_topic_with_evidence": [],
+            "abstract_only_relevant": [],
+            "degraded_unread": [],
+            "mismatched": [],
+            "reader_validated": [],
+        }
+        for r in source_rows:
+            sid_val = r["id"]
+            q = r["quality"] or ""
+            has_note = os.path.exists(os.path.join(notes_dir, f"{sid_val}.md"))
+            if q == "mismatched":
+                quality_tiers["mismatched"].append(sid_val)
+            elif q == "reader_validated":
+                quality_tiers["reader_validated"].append(sid_val)
+            elif q == "abstract_only":
+                quality_tiers["abstract_only_relevant"].append(sid_val)
+            elif q == "degraded" and not has_note:
+                quality_tiers["degraded_unread"].append(sid_val)
+            elif has_note:
+                quality_tiers["on_topic_with_evidence"].append(sid_val)
+
+        full_result["source_quality_report"] = {
+            k: {"count": len(v), "ids": v} for k, v in quality_tiers.items()
+        }
+
         handoff_path = os.path.join(args.session_dir, "synthesis-handoff.json")
         with open(handoff_path, "w") as f:
             json.dump(full_result, f, indent=2)

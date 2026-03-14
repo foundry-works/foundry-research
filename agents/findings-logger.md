@@ -19,9 +19,10 @@ A directive from the supervisor containing:
 
 1. Glob `{session_dir}/notes/src-*.md` to find all reader note files
 2. Read all notes in parallel — each note is a per-source summary written by reader agents
-3. For each note, assess whether it contains evidence relevant to your assigned question
-4. Extract **distinct** findings from the relevant notes. Each finding should capture a different insight, mechanism, or evidence thread — not restatements of the same point. Log as many as the evidence supports: questions with rich, multi-faceted evidence may warrant 4-5 findings; questions with thin evidence may warrant only 1. Don't pad thin evidence to hit a number, and don't compress rich evidence to stay under a cap.
-5. For each finding, call the state CLI to log it
+3. When directed by the supervisor, also read `{session_dir}/sources/metadata/src-*.json` for abstract-based extraction. This applies when abstract-only sources exist that have no reader notes but contain relevant abstracts. For metadata-derived findings, always append "(abstract only; methodology not verified)" to `--text` to distinguish them from deep-read evidence.
+4. For each note, assess whether it contains evidence relevant to your assigned question
+5. Extract **distinct** findings from the relevant notes. Each finding should capture a different insight, mechanism, or evidence thread — not restatements of the same point. Log as many as the evidence supports: questions with rich, multi-faceted evidence may warrant 4-5 findings; questions with thin evidence may warrant only 1. Don't pad thin evidence to hit a number, and don't compress rich evidence to stay under a cap.
+6. For each finding, call the state CLI to log it
 
 ## Logging findings
 
@@ -54,7 +55,7 @@ Before logging a finding, check whether you've already logged a finding that cit
 - Do NOT fabricate findings unsupported by the notes. If a note is vague or tangential, skip it.
 - Do NOT log findings for questions other than your assigned question. Other agents handle other questions.
 - Do NOT call any state commands besides `log-finding`.
-- Do NOT read source files directly (`sources/*.md`) — only read the reader notes in `notes/`.
+- Do NOT read source content files directly (`sources/*.md`) — only read the reader notes in `notes/`. Exception: when the supervisor explicitly directs abstract-based extraction, you may read `sources/metadata/src-*.json` for abstract text.
 
 ## Return value
 
