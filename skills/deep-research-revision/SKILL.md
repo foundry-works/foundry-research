@@ -125,6 +125,26 @@ If the user provided feedback, add the structured user directives (from the User
 
 **If zero issues found** (no reviewer issues, no verifier issues, no user feedback): skip directly to Pass 2 (style). Log that accuracy review found no issues.
 
+### Step 2b: Deduplicate issues
+
+Before passing issues to the reviser, deduplicate across reviewer and verifier results. The synthesis-reviewer and research-verifier examine the report independently and often flag the same underlying problem with different phrasings, IDs, and suggested fixes. Without dedup, the reviser attempts to edit already-changed text and falls back to error recovery (re-read and retry) — which works, but wastes tokens and produces confusing manifests with one "resolved" and one "failed" entry for the same fix.
+
+**Why dedup here, not in the reviser:** The reviser's "group nearby issues" heuristic (planning step) partially addresses this, but it still costs tokens to read, plan around, and attempt edits on duplicate issues. Removing duplicates before handoff is cheaper and more reliable than reactive recovery after the fact.
+
+**Dedup procedure:**
+
+1. **Group by location.** For each issue, normalize the location to section + paragraph (e.g., "Section 3, paragraph 2"). Group issues that target the same section and paragraph.
+
+2. **Evaluate semantic overlap within each group.** Two issues at the same location are duplicates when they describe the same underlying problem — different phrasings of the same factual concern, or overlapping corrections to the same claim. Two issues at the same location that describe different problems (e.g., one about a missing citation, another about passive voice) are not duplicates — keep both.
+
+3. **Merge duplicates** using these rules:
+   - **Prefer the more specific `suggested_fix`.** A fix that says "change X to Y" is immediately actionable; "verify and correct" requires additional reading, costing the reviser tokens and risking a less precise edit.
+   - **Elevate severity to the higher of the two.** Dual-flagged issues have higher confidence — two independent reviewers agreeing on a problem is stronger signal than one.
+   - **Add a `flagged_by` field** listing both source IDs (e.g., `["review-3", "verify-2"]`). This preserves the audit trail so the delivery summary can report which agents found which issues.
+   - **Keep the issue ID of the more specific entry** (the one whose `suggested_fix` was preferred). Drop the other ID from the active issues list.
+
+4. **Log the merge count.** Record how many issues were merged (e.g., "Dedup: merged 2 duplicate issues, 14 → 12 active issues"). This count is reported in the delivery summary.
+
 ### Step 3: Accuracy revision
 
 Spawn a **`report-reviser`** subagent (Opus, foreground) with:
@@ -170,6 +190,7 @@ The reviser makes surgical edits for clarity without changing meaning, citations
 1. Read the final `report.md`
 2. Present a summary to the user:
    - How many accuracy issues were found and fixed (from reviewer + verifier)
+   - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
    - How many style issues were found and fixed
    - Any unresolved issues (with explanations from the reviser manifest)
    - Any user feedback items and how they were addressed

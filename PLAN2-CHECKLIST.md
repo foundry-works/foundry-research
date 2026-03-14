@@ -11,11 +11,11 @@
 
 ## 2. Issue Deduplication Before Reviser
 
-- [ ] **2a.** Add dedup step to SKILL.md between issue collection (step 2) and reviser launch (step 3)
-- [ ] **2b.** Write dedup logic: group issues by location (same section + paragraph), merge overlapping issues
-- [ ] **2c.** Specify merge rules with rationale: prefer more specific suggested_fix (**why:** immediately actionable vs. requires interpretation), elevate to higher severity (**why:** dual-flagged issues have higher confidence), note both sources in `flagged_by` field (**why:** audit trail)
-- [ ] **2d.** Add `merged_count` to delivery summary so user knows dedup happened
-- [ ] **2e.** Add "why" annotation explaining that dedup prevents the reviser from attempting to edit already-changed text (the reactive recovery at reviser line 114 is a fallback, not a substitute for prevention)
+- [x] **2a.** Add dedup step to SKILL.md between issue collection (step 2) and reviser launch (step 3)
+- [x] **2b.** Write dedup logic: group issues by location (same section + paragraph), merge overlapping issues
+- [x] **2c.** Specify merge rules with rationale: prefer more specific suggested_fix (**why:** immediately actionable vs. requires interpretation), elevate to higher severity (**why:** dual-flagged issues have higher confidence), note both sources in `flagged_by` field (**why:** audit trail)
+- [x] **2d.** Add `merged_count` to delivery summary so user knows dedup happened
+- [x] **2e.** Add "why" annotation explaining that dedup prevents the reviser from attempting to edit already-changed text (the reactive recovery at reviser line 114 is a fallback, not a substitute for prevention)
 
 ## 3. Merge Reviser Passes
 
