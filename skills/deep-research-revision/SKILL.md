@@ -22,7 +22,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
 ## Input Validation
 
-**Required argument:** Session directory path (e.g., `./deep-research-credit-cards`).
+**Required argument:** Session directory path (e.g., `./deep-research-topic`).
 
 If the user doesn't provide a session directory path, fail immediately with a clear error:
 > "Please provide the session directory path: `/deep-research-revision ./deep-research-topic`"
