@@ -28,7 +28,7 @@ from _shared.metadata import (  # noqa: E402
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.state_client import call_state  # noqa: E402
-from _shared.pdf_utils import download_pdf, pdf_to_markdown  # noqa: E402
+from _shared.pdf_utils import download_pdf, extract_first_page_text, pdf_to_markdown  # noqa: E402
 from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
 
 # arXiv download constraints
@@ -729,6 +729,63 @@ def _record_pdf_success(result: dict, source_id: str, source_name: str,
         result["quality"] = "ok"
 
 
+def _early_mismatch_check(pdf_path: str, result: dict) -> bool:
+    """Check if a downloaded PDF is clearly from the wrong paper.
+
+    Extracts first-page text and checks for title keywords, author surnames,
+    and brief domain keywords. Returns True if the content is a mismatch
+    (caller should skip this source and try the next cascade source).
+    """
+    title = result.get("_expected_title", "")
+    authors = result.get("_expected_authors") or []
+    brief_keywords = result.get("_brief_keywords") or []
+    if not title and not authors:
+        return False  # no metadata to check against
+
+    first_page = extract_first_page_text(pdf_path)
+    if not first_page:
+        return False  # can't extract text — let full conversion handle it
+
+    from _shared.quality import _extract_keywords
+    first_page_lower = first_page.lower()
+
+    title_words = _extract_keywords(title) if title else []
+    title_hits = sum(1 for w in title_words if w in first_page_lower) if title_words else 0
+
+    author_hits = 0
+    if authors:
+        for author in authors[:5]:
+            parts = author.split(",")
+            surname = parts[0].strip().lower() if parts else ""
+            if surname and len(surname) >= 3 and surname in first_page_lower:
+                author_hits += 1
+
+    has_title_keywords = len(title_words) >= 2
+    has_authors = bool(authors)
+
+    # Primary check: title/author metadata match
+    mismatched = False
+    if has_title_keywords and has_authors:
+        mismatched = title_hits == 0 and author_hits == 0
+    elif has_title_keywords:
+        mismatched = title_hits == 0
+    elif has_authors:
+        mismatched = author_hits == 0
+
+    if mismatched:
+        return True
+
+    # Brief-keyword gate: catch cross-domain mismatches (e.g., psychology paper
+    # returning finance content) even when title words partially match due to
+    # shared generic terms. Only flags when title match is also weak.
+    if brief_keywords and title_hits < 3:
+        brief_hits = sum(1 for kw in brief_keywords if kw.lower() in first_page_lower)
+        if brief_hits == 0:
+            return True
+
+    return False
+
+
 def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                      _metadata_dir: str, to_md: bool, config: dict, result: dict,
                      cancel: threading.Event | None = None) -> None:
@@ -755,6 +812,10 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             elif source_name == "annas_archive":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
                 if download_annas_archive(doi, pdf_path, config, client):
+                    if _early_mismatch_check(pdf_path, result):
+                        log(f"Early mismatch: {source_name} PDF doesn't match expected metadata, skipping", level="warn")
+                        os.remove(pdf_path)
+                        continue
                     _record_pdf_success(result, source_id, "annas_archive",
                                         pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
                     return
@@ -762,6 +823,10 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             elif source_name == "scihub":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
                 if download_scihub(doi, pdf_path, client):
+                    if _early_mismatch_check(pdf_path, result):
+                        log(f"Early mismatch: {source_name} PDF doesn't match expected metadata, skipping", level="warn")
+                        os.remove(pdf_path)
+                        continue
                     _record_pdf_success(result, source_id, "scihub",
                                         pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
                     return
@@ -779,6 +844,11 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
 
         dl_result = download_pdf(pdf_url, pdf_path, client)
         if dl_result["success"]:
+            # Early mismatch check before committing to full conversion
+            if _early_mismatch_check(pdf_path, result):
+                log(f"Early mismatch: {source_name} PDF doesn't match expected metadata, skipping", level="warn")
+                os.remove(pdf_path)
+                continue
             _record_pdf_success(result, source_id, source_name,
                                 pdf_path, dl_result["size_bytes"], sources_dir, to_md)
             return

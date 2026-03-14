@@ -48,7 +48,11 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
    **What you get back:** A manifest telling you how many sources were found, downloaded, and triaged, which brief questions have strong vs. thin coverage, and any gaps already logged. Everything else is on disk (state.db, journal.md, sources/). You never see raw search JSON.
 
-   **If the manifest reports `tavily_available: false`:** The acquisition agent's web search channel was broken for the entire session. For any research question where web sources matter (recency-dependent topics, emerging technologies, non-academic coverage), run 2-3 `WebSearch` queries immediately — don't wait for gap-mode. WebSearch results aren't auto-tracked in state.db, so download promising URLs via `${CLAUDE_SKILL_DIR}/download <src-id> --url <url>` and log a journal entry noting which questions you supplemented.
+   **If the manifest reports `tavily_available: false`:** The acquisition agent's web search channel was broken for the entire session. Compensate immediately — don't wait for gap-mode:
+   1. **Identify web-dependent questions.** Review the brief for questions about recency-dependent topics, emerging technologies, current events, or topics with significant non-academic coverage.
+   2. **Run 2 WebSearch queries per web-dependent question** using domain-specific terms from the brief (not generic terms). For example, for a question about recent robot perception studies: `WebSearch("robot uncanny valley perception 2024 2025")`.
+   3. **Download promising results.** For each useful URL, run `${CLAUDE_SKILL_DIR}/download <src-id> --url <url>` to ingest it into the pipeline.
+   4. **Log a journal entry** listing which questions you supplemented, which URLs were added, and which questions still lack web coverage after your manual searches.
 
    **Flag recency-dependent questions in your handoff.** Some research questions are best answered by recent web sources rather than highly-cited academic papers — emerging technologies, current events, recent policy changes, or topics where the most relevant work is <2 years old. When handing off to the acquisition agent, flag these questions explicitly: "Q4 is recency-dependent — web sources and preprints are primary evidence, not supplements." The agent will prioritize web results for these questions by date and domain authority rather than citation count, which systematically deprioritizes recent work.
 

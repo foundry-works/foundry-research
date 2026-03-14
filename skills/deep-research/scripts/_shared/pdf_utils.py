@@ -347,6 +347,32 @@ def _run_pymupdf4llm(pdf_path: str, timeout: int) -> str | None:
 _MAX_PYPDF_PAGES = 500  # cap to prevent OOM on huge documents
 
 
+def extract_first_page_text(pdf_path: str, timeout: int = 15) -> str | None:
+    """Extract text from the first page of a PDF for quick mismatch checks.
+
+    Uses pypdf in a subprocess with a short timeout. Returns None on failure.
+    """
+    script = (
+        "import sys; from pypdf import PdfReader; "
+        "reader = PdfReader(sys.argv[1]); "
+        "text = reader.pages[0].extract_text() if reader.pages else ''; "
+        "sys.stdout.buffer.write((text or '').encode('utf-8')[:8000])"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, pdf_path],
+            capture_output=True,
+            timeout=timeout,
+            preexec_fn=_make_mem_limiter(),
+        )
+        if result.returncode != 0:
+            return None
+        text = result.stdout.decode("utf-8", errors="replace")
+        return text if text.strip() else None
+    except (subprocess.TimeoutExpired, Exception):
+        return None
+
+
 def _run_pypdf(pdf_path: str, timeout: int = _PYMUPDF_TIMEOUT) -> str | None:
     """Extract raw text from PDF using pypdf in a subprocess with timeout.
 

@@ -37,7 +37,7 @@ For each finding, run:
 Rules:
 - `--text` should be a concise synthesis statement (1-3 sentences), not a quote. State what the evidence shows.
 - `--sources` is a comma-separated list of source IDs that support this finding. Only cite sources whose notes actually contain relevant evidence.
-- `--question` must be the **exact full question text** you were given — do not abbreviate or rephrase it. The audit system matches findings to questions by this field.
+- `--question` must use the **exact full question text** from the brief — do not truncate, abbreviate, or rephrase it. Copy-paste the complete question string you were given, including the "Q1:" prefix and any trailing clauses. The audit matches findings to brief questions by string comparison — shortened or reworded labels create false sparse-coverage warnings because they appear as a separate question key.
 
 ## Deduplication
 

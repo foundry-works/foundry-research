@@ -222,11 +222,29 @@ def _log_search_to_state(args, result: dict, search_mode: str) -> None:
     """Log the search to session state via state.py."""
     ingested_count = len(result.get("results", []))
     search_type = getattr(args, "search_type", "manual") or "manual"
+
+    # For citation traversals, construct a query string that includes the mode
+    # and seed paper identifier so each traversal is uniquely identifiable.
+    query = args.query or ""
+    if search_mode in ("cited_by", "references") and not query:
+        # Extract the identifier from provider-specific flags
+        identifier = (
+            getattr(args, "cited_by", None)
+            or getattr(args, "references", None)
+            or ""
+        )
+        if identifier:
+            query = f"{search_mode}:{identifier}"
+    elif search_mode in ("cited_by", "references") and query:
+        # Even when query is set, prefix with mode for uniqueness
+        if not query.startswith(f"{search_mode}:"):
+            query = f"{search_mode}:{query}"
+
     resp = call_state(
         args.session_dir, "log-search",
         args=[
             "--provider", args.provider,
-            "--query", args.query or "",
+            "--query", query,
             "--search-mode", search_mode,
             "--search-type", search_type,
             "--result-count", str(ingested_count),

@@ -86,6 +86,18 @@ Before proceeding to round 3+, verify your citation chasing ratio: `traversals_r
 - **Log gaps for thin questions.** After each round, assess which brief questions have fewer than 5 candidate sources by title-keyword matching against triage results. Call `state log-gap --text "Q3 has thin coverage (2 sources after round N)"` for any that are underserved. These gaps appear in the manifest and help the orchestrator decide whether to invoke you again in gap mode.
 - Run until: saturation (same papers appearing), coverage (each brief question has 5+ candidate sources), or diminishing returns
 
+### Provider failure adaptation
+
+Track provider results across your searches. If a provider returns 0 results on 2 consecutive queries, stop using it for the remainder of this round and redistribute those searches to other providers. Log the decision in your journal entry: "Stopped using {provider} after 2 consecutive zero-result queries — redistributing to {alternatives}." Include failed providers in the manifest under `provider_failures`:
+
+```json
+"provider_failures": [
+  {"provider": "core", "reason": "0 results on 2 consecutive queries", "queries_attempted": 3}
+]
+```
+
+**Why adapt early:** A silently broken provider (wrong API key, domain coverage gap, rate limit) wastes search budget and reduces diversity. Two consecutive zeros is sufficient signal — a working provider with reasonable queries almost always returns something, even if not highly relevant.
+
 ### Query crafting rules
 1. Always include the core topic term — "uncanny valley cross-cultural" not "cross-cultural differences"
 2. If >500 results, the query is too broad — add qualifiers

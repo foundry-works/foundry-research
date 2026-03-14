@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS searches (
     ingested_count INTEGER,
     timestamp TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id),
-    UNIQUE(session_id, provider, query)
+    UNIQUE(session_id, provider, query, search_mode)
 );
 
 CREATE TABLE IF NOT EXISTS sources (
@@ -153,6 +153,20 @@ def _migrate_schema(db_path: str) -> None:
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass  # column already exists
+
+            # Migrate UNIQUE constraint on searches to include search_mode.
+            # SQLite can't ALTER constraints, so we drop the old unique index
+            # (if it exists as a separate index) and create one that includes
+            # search_mode. The CREATE TABLE constraint is already updated for
+            # new databases; this handles databases created before the change.
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_searches_unique_v2 "
+                    "ON searches(session_id, provider, query, search_mode)"
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # index already exists or table doesn't exist yet
         finally:
             conn.close()
     except Exception:
@@ -449,7 +463,7 @@ def cmd_add_source(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
-    result = _insert_source(conn, sid, data)
+    result = _insert_source(conn, sid, data, session_dir=args.session_dir)
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
@@ -472,7 +486,7 @@ def cmd_add_sources(args):
 
     for i, source in enumerate(data):
         try:
-            result = _insert_source(conn, sid, source)
+            result = _insert_source(conn, sid, source, session_dir=args.session_dir)
             if result.get("duplicate"):
                 duplicates.append({"index": i, "title": source.get("title", ""), "matched": result["matched"]})
             else:
@@ -486,8 +500,13 @@ def cmd_add_sources(args):
     success_response({"added": added, "duplicates": duplicates, "errors": errors})
 
 
-def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict) -> dict:
-    """Insert a single source with dedup. Returns result dict."""
+def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict,
+                   session_dir: str | None = None) -> dict:
+    """Insert a single source with dedup. Returns result dict.
+
+    When session_dir is provided, also writes a metadata JSON file at ingestion
+    time so that all sources are inspectable on disk, not just downloaded ones.
+    """
     doi = normalize_doi(data["doi"]) if data.get("doi") else None
     url = canonicalize_url(data.get("url", "")) or None
     title = data.get("title", "")
@@ -512,7 +531,60 @@ def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict) -> dic
          data.get("content_file"), data.get("pdf_file"),
          data.get("relevance_score"), _now())
     )
+
+    # Write metadata JSON at ingestion time so triage and audit have access
+    # to all source metadata on disk, not just downloaded sources.
+    if session_dir:
+        _write_ingestion_metadata(session_dir, source_id, data, doi, url)
+
     return {"id": source_id, "title": title, "duplicate": False}
+
+
+def _write_ingestion_metadata(session_dir: str, source_id: str, data: dict,
+                              doi: str | None, url: str | None) -> None:
+    """Write a partial metadata JSON file at source ingestion time.
+
+    If a metadata file already exists (e.g., from a prior search that found the
+    same source via a different path), merge rather than overwrite.
+    """
+    try:
+        metadata_dir = os.path.join(session_dir, "sources", "metadata")
+        os.makedirs(metadata_dir, exist_ok=True)
+        filepath = os.path.join(metadata_dir, f"{source_id}.json")
+
+        meta = {
+            "id": source_id,
+            "title": data.get("title", ""),
+            "authors": data.get("authors", []),
+            "doi": doi,
+            "url": url,
+            "provider": data.get("provider", "unknown"),
+            "year": data.get("year"),
+            "venue": data.get("venue"),
+            "citation_count": data.get("citation_count"),
+            "abstract": data.get("abstract"),
+            "type": data.get("type", "academic"),
+            "pdf_url": data.get("pdf_url"),
+        }
+        # Remove None values to keep files clean
+        meta = {k: v for k, v in meta.items() if v is not None}
+
+        if os.path.exists(filepath):
+            # Merge with existing — don't overwrite fields that already have values
+            try:
+                existing = json.loads(open(filepath, encoding="utf-8").read())
+                for k, v in meta.items():
+                    if k not in existing or existing[k] is None:
+                        existing[k] = v
+                meta = existing
+            except (json.JSONDecodeError, OSError):
+                pass  # overwrite corrupt file
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+    except Exception:
+        pass  # best-effort — don't fail the insert
 
 
 def cmd_check_dup(args):
@@ -547,15 +619,51 @@ def cmd_check_dup_batch(args):
     success_response(results)
 
 
+def _normalize_question(conn: sqlite3.Connection, session_id: str, question: str) -> str:
+    """Normalize question text by fuzzy-matching against brief questions.
+
+    If the incoming question is a close match (token overlap > 0.9) to a brief
+    question, substitute the brief text. This prevents truncated or slightly
+    reworded questions from creating duplicate keys in findings_by_question.
+    """
+    if not question:
+        return question
+    try:
+        row = conn.execute(
+            "SELECT questions FROM brief WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if not row:
+            return question
+        brief_questions = json.loads(row["questions"])
+        if not isinstance(brief_questions, list):
+            return question
+        best_match = question
+        best_score = 0.0
+        for bq in brief_questions:
+            if not isinstance(bq, str):
+                continue
+            score = _token_overlap(question, bq)
+            if score > best_score:
+                best_score = score
+                best_match = bq
+        if best_score > 0.9 and best_match != question:
+            log(f"Normalized question text (overlap={best_score:.2f}): {question!r} → {best_match!r}")
+            return best_match
+    except Exception:
+        pass
+    return question
+
+
 def cmd_log_finding(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
     finding_id = _next_id(conn, "findings", "finding", sid)
 
+    question = _normalize_question(conn, sid, args.question)
     source_ids = [s.strip() for s in args.sources.split(",")] if args.sources else []
     conn.execute(
         "INSERT INTO findings (id, session_id, text, sources, question, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (finding_id, sid, args.text, json.dumps(source_ids), args.question, _now())
+        (finding_id, sid, args.text, json.dumps(source_ids), question, _now())
     )
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
