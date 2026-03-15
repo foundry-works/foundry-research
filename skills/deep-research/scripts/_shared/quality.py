@@ -62,6 +62,19 @@ def assess_quality(text: str) -> dict:
             },
         }
 
+    # Detect raw PDF bytes stored as text (e.g., PDF fetched via web and
+    # saved with .md extension without conversion)
+    if text[:4] == "%PDF":
+        return {
+            "quality": "degraded",
+            "quality_details": {
+                "content_length": len(text),
+                "alpha_ratio": 0.0,
+                "sentence_count": 0,
+                "reasons": ["pdf_binary_as_text"],
+            },
+        }
+
     # Strip HTML warning comments for assessment
     check_text = text
     while check_text.startswith("<!-- WARNING:"):

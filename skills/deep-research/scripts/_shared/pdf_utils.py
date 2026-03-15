@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -166,16 +167,17 @@ def pdf_to_markdown(
     md_path: str,
     timeout: int = _PYMUPDF_TIMEOUT,
 ) -> dict:
-    """Convert PDF to Markdown with pymupdf4llm (primary) and pypdf (fallback).
+    """Convert PDF to Markdown with pymupdf4llm, pypdf, or pdftotext fallbacks.
 
-    Runs pymupdf4llm in a subprocess to enforce a strict timeout.
-    If it fails or times out, falls back to pypdf raw text extraction.
+    Tries converters in order: pymupdf4llm → pypdf → pdftotext (poppler-utils).
+    Each runs in a subprocess with timeout and memory limits.
 
     After conversion, runs a quality check and generates a TOC.
 
     Returns:
         {"success": bool, "content_length": int, "toc_file": str | None,
-         "converter": "pymupdf4llm" | "pypdf", "quality": "ok" | "degraded"}
+         "converter": "pymupdf4llm" | "pypdf" | "pdftotext",
+         "quality": "ok" | "degraded"}
     """
     md_text = None
     converter = "pymupdf4llm"
@@ -194,7 +196,17 @@ def pdf_to_markdown(
             if md_text:
                 md_text = _FALLBACK_WARNING + md_text
         except Exception as e:
-            log(f"pypdf fallback also failed for {pdf_path}: {e}", level="error")
+            log(f"pypdf fallback also failed for {pdf_path}: {e}", level="warn")
+
+    # Fallback to system pdftotext (poppler-utils)
+    if md_text is None:
+        converter = "pdftotext"
+        try:
+            md_text = _run_pdftotext(pdf_path)
+            if md_text:
+                md_text = _FALLBACK_WARNING + md_text
+        except Exception as e:
+            log(f"pdftotext fallback also failed for {pdf_path}: {e}", level="error")
             return {
                 "success": False,
                 "content_length": 0,
@@ -407,6 +419,38 @@ def _run_pypdf(pdf_path: str, timeout: int = _PYMUPDF_TIMEOUT) -> str | None:
         return text if text.strip() else None
     except subprocess.TimeoutExpired:
         log(f"pypdf timed out after {timeout}s for {pdf_path}", level="warn")
+        return None
+
+
+def _run_pdftotext(pdf_path: str, timeout: int = _PYMUPDF_TIMEOUT) -> str | None:
+    """Extract text from PDF using system pdftotext (poppler-utils) with timeout.
+
+    Uses -layout flag to preserve spatial layout. Output is truncated at
+    _MAX_MD_OUTPUT to match the other converters.
+    """
+    pdftotext_bin = shutil.which("pdftotext")
+    if not pdftotext_bin:
+        log("pdftotext not installed (poppler-utils), skipping fallback", level="warn")
+        return None
+
+    try:
+        result = subprocess.run(
+            [pdftotext_bin, "-layout", pdf_path, "-"],
+            capture_output=True,
+            timeout=timeout,
+            preexec_fn=_make_mem_limiter(),
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            log(f"pdftotext failed: {stderr}", level="warn")
+            return None
+        raw = result.stdout
+        if len(raw) > _MAX_MD_OUTPUT:
+            raw = raw[:_MAX_MD_OUTPUT]
+        text = raw.decode("utf-8", errors="replace")
+        return text if text.strip() else None
+    except subprocess.TimeoutExpired:
+        log(f"pdftotext timed out after {timeout}s for {pdf_path}", level="warn")
         return None
 
 

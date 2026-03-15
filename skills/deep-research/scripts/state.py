@@ -2752,6 +2752,125 @@ def cmd_sync_files(args):
 
 
 # ---------------------------------------------------------------------------
+# convert-pdfs
+# ---------------------------------------------------------------------------
+
+def cmd_convert_pdfs(args):
+    """Batch-convert unconverted PDFs to markdown and rescue PDF-in-markdown files.
+
+    Two modes:
+    1. Unconverted PDFs: .pdf files in sources/ with no corresponding .md → convert
+    2. PDF-in-markdown: .md files starting with %PDF magic bytes → rename to .pdf,
+       convert, update content_file in state.db
+    """
+    from _shared.pdf_utils import pdf_to_markdown, validate_pdf
+
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    sources_dir = os.path.join(args.session_dir, "sources")
+
+    if not os.path.isdir(sources_dir):
+        success_response({
+            "converted": 0, "rescued_from_md": 0, "failed": 0,
+            "details": [], "message": "No sources/ directory found",
+        })
+        return
+
+    details = []
+    converted = 0
+    rescued = 0
+    failed = 0
+
+    # --- Pass 1: Detect .md files containing raw PDF bytes ---
+    for fname in sorted(os.listdir(sources_dir)):
+        if not fname.endswith(".md"):
+            continue
+        md_path = os.path.join(sources_dir, fname)
+        try:
+            with open(md_path, "rb") as f:
+                head = f.read(4)
+        except OSError:
+            continue
+        if head != b"%PDF":
+            continue
+
+        source_id = fname[:-3]  # strip .md
+        pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
+        log(f"Rescuing PDF-in-markdown: {fname} → {source_id}.pdf")
+
+        # Rename .md to .pdf
+        os.rename(md_path, pdf_path)
+
+        if not validate_pdf(pdf_path):
+            details.append({"source_id": source_id, "action": "rescue", "success": False,
+                            "error": "Renamed file is not a valid PDF"})
+            failed += 1
+            continue
+
+        # Convert
+        result = pdf_to_markdown(pdf_path, md_path)
+        if result["success"]:
+            # Update content_file in DB to point to .md
+            conn.execute(
+                "UPDATE sources SET content_file = ? WHERE id = ? AND session_id = ?",
+                (f"sources/{source_id}.md", source_id, sid),
+            )
+            rescued += 1
+            details.append({"source_id": source_id, "action": "rescue", "success": True,
+                            "converter": result["converter"], "quality": result["quality"]})
+        else:
+            failed += 1
+            details.append({"source_id": source_id, "action": "rescue", "success": False,
+                            "error": "All converters failed"})
+
+    # --- Pass 2: Convert .pdf files with no corresponding .md ---
+    for fname in sorted(os.listdir(sources_dir)):
+        if not fname.endswith(".pdf"):
+            continue
+        source_id = fname[:-4]  # strip .pdf
+        md_path = os.path.join(sources_dir, f"{source_id}.md")
+        if os.path.exists(md_path):
+            continue  # already has markdown
+
+        pdf_path = os.path.join(sources_dir, fname)
+        if not validate_pdf(pdf_path):
+            details.append({"source_id": source_id, "action": "convert", "success": False,
+                            "error": "Invalid PDF"})
+            failed += 1
+            continue
+
+        log(f"Converting unconverted PDF: {fname}")
+        result = pdf_to_markdown(pdf_path, md_path)
+        if result["success"]:
+            # Update content_file in DB to point to .md
+            conn.execute(
+                "UPDATE sources SET content_file = ? WHERE id = ? AND session_id = ?",
+                (f"sources/{source_id}.md", source_id, sid),
+            )
+            converted += 1
+            details.append({"source_id": source_id, "action": "convert", "success": True,
+                            "converter": result["converter"], "quality": result["quality"]})
+        else:
+            failed += 1
+            details.append({"source_id": source_id, "action": "convert", "success": False,
+                            "error": "All converters failed"})
+
+    conn.commit()
+
+    if converted > 0 or rescued > 0:
+        _regenerate_snapshot(args.session_dir, conn, sid)
+
+    conn.close()
+
+    success_response({
+        "converted": converted,
+        "rescued_from_md": rescued,
+        "failed": failed,
+        "details": details,
+    })
+
+
+# ---------------------------------------------------------------------------
 # cleanup-orphans
 # ---------------------------------------------------------------------------
 
@@ -3174,6 +3293,10 @@ def main():
     p = sub.add_parser("sync-files")
     p.add_argument("--session-dir", **_sd)
 
+    # convert-pdfs
+    p = sub.add_parser("convert-pdfs")
+    p.add_argument("--session-dir", **_sd)
+
     # cleanup-orphans
     p = sub.add_parser("cleanup-orphans")
     p.add_argument("--session-dir", **_sd)
@@ -3222,6 +3345,7 @@ def main():
         "recover-failed": cmd_recover_failed,
         "enrich-metadata": cmd_enrich_metadata,
         "sync-files": cmd_sync_files,
+        "convert-pdfs": cmd_convert_pdfs,
         "cleanup-orphans": cmd_cleanup_orphans,
         "manifest": cmd_manifest,
     }

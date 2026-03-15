@@ -206,6 +206,8 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
+5. **PDF conversion sweep:** After all downloads and recovery complete, run `state convert-pdfs` to catch two failure modes: (a) PDFs on disk that were never converted to markdown (download succeeded but `to_md` failed silently), and (b) `.md` files that actually contain raw PDF bytes (URL served PDF content but the web downloader saved it as markdown). The command renames, converts, and updates state.db automatically.
+
 ### Post-download content validation (mandatory before manifest)
 
 After all downloads and recovery attempts complete, validate content for the **top 20-30 sources by triage score** that have content files on disk. This catches mismatches that slip past the title-word check — papers sharing common words with the target title but covering a completely different topic (e.g., "The 'Uncanny Valley' and the Verisimilitude of Sexual Offenders" passing a check for an uncanny valley perception paper because both contain "uncanny valley").
@@ -346,6 +348,9 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 
 # Recovery — ⚠ slow command, set Bash timeout to 600000
 {cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3" --max-attempts 15
+
+# PDF conversion — batch-convert unconverted PDFs and rescue PDF-in-.md files
+{cli_dir}/state convert-pdfs
 ```
 
 ### Relevance Scoring

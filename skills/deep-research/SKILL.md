@@ -218,6 +218,7 @@ audit                             # pre-report coverage & quality check
 audit --brief                     # counts only (no ID arrays except degraded_unread/reader_validated/mismatched)
 audit --strict                    # exit non-zero if warnings found
 enrich-metadata                   # fill missing DOI/author/venue from Crossref (run before synthesis)
+convert-pdfs                      # batch-convert unconverted PDFs to markdown; rescue PDF-in-.md files
 cleanup-orphans                   # remove metadata files on disk with no matching source in state.db
 ```
 

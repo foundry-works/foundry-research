@@ -556,6 +556,9 @@ _MAX_WEB_SIZE = 10 * 1024 * 1024  # 10MB cap on web page downloads
 _MAX_WEB_STREAM_SECONDS = 120  # wall-clock cap on web page streaming
 
 
+_PDF_CONTENT_ERROR = "URL served PDF content, not HTML"
+
+
 def _stream_web_content(client, url: str, *,
                         max_size: int = _MAX_WEB_SIZE,
                         timeout: int = _MAX_WEB_STREAM_SECONDS) -> tuple[str | None, str | None]:
@@ -563,12 +566,17 @@ def _stream_web_content(client, url: str, *,
 
     Returns (content, error_msg). On success error_msg is None.
     Handles: Content-Length check, streaming size cap, wall-clock timeout,
-    readable content extraction.
+    PDF detection (via Content-Type and magic bytes), readable content extraction.
     """
     resp = client.get(url, stream=True, timeout=(15, timeout))
     try:
         if resp.status_code != 200:
             return None, f"HTTP {resp.status_code} for {url}"
+
+        # Check Content-Type for PDF
+        content_type = resp.headers.get("Content-Type", "")
+        if "application/pdf" in content_type.lower():
+            return None, _PDF_CONTENT_ERROR
 
         try:
             cl = int(resp.headers.get("Content-Length", 0))
@@ -577,20 +585,25 @@ def _stream_web_content(client, url: str, *,
         if cl > max_size:
             return None, f"Page too large ({cl} bytes, limit {max_size})"
 
-        chunks: list[str] = []
+        chunks: list[bytes] = []
         size = 0
         stream_start = time.monotonic()
-        for chunk in resp.iter_content(chunk_size=64 * 1024, decode_unicode=True):
-            size += len(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        for chunk in resp.iter_content(chunk_size=64 * 1024):
+            # Check first chunk for PDF magic bytes
+            if not chunks and isinstance(chunk, bytes) and chunk[:4] == b"%PDF":
+                return None, _PDF_CONTENT_ERROR
+
+            size += len(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
             if size > max_size:
                 return None, f"Page exceeded {max_size // (1024*1024)}MB during download"
             if time.monotonic() - stream_start > timeout:
                 return None, f"Streaming exceeded {timeout}s wall-clock limit"
-            chunks.append(chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace"))
+            chunks.append(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8"))
     finally:
         resp.close()
 
-    html = "".join(chunks)
+    raw = b"".join(chunks)
+    html = raw.decode("utf-8", errors="replace")
     content = extract_readable_content(html)
     if not content:
         return None, "No readable content extracted"
@@ -603,6 +616,21 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
     log(f"Downloading web content: {url}")
     try:
         content, error = _stream_web_content(client, url)
+
+        # URL served PDF instead of HTML — download as PDF and convert
+        if error == _PDF_CONTENT_ERROR:
+            log(f"URL served PDF content, attempting PDF download: {url}")
+            _download_direct_pdf(url, source_id, client, sources_dir,
+                                 to_md=True, result=result)
+            if result.get("pdf_downloaded"):
+                meta["url"] = url
+                meta["type"] = "pdf"
+                return
+            # If PDF download also failed, fall through to error reporting
+            if not result["errors"]:
+                result["errors"].append(error)
+            return
+
         if error or not content:
             result["errors"].append(error or "No readable content extracted")
             return
