@@ -50,7 +50,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
    **What you get back:** A manifest telling you how many sources were found, downloaded, and triaged, which brief questions have strong vs. thin coverage, and any gaps already logged. Everything else is on disk (state.db, journal.md, sources/). You never see raw search JSON.
 
-   **If the manifest reports `tavily_available: false`:** Check `gensee_available`. If Gensee is available, the acquisition agent already used it as the web search fallback — no manual compensation needed. If both `tavily_available: false` and `gensee_available: false`, both web search APIs were down for the entire session. Compensate immediately — don't wait for gap-mode:
+   **If the manifest reports `tavily_available: false`:** Check `gensee_available` and `exa_available`. If either is available, the acquisition agent already used it as the web search fallback — no manual compensation needed. If all three web search providers are down (`tavily_available: false`, `gensee_available: false`, `exa_available: false`), compensate immediately — don't wait for gap-mode:
    1. **Identify web-dependent questions.** Review the brief for questions about recency-dependent topics, emerging technologies, current events, or topics with significant non-academic coverage.
    2. **Run 2 WebSearch queries per web-dependent question** using domain-specific terms from the brief (not generic terms). For example, for a question about recent robot perception studies: `WebSearch("robot uncanny valley perception 2024 2025")`.
    3. **Download promising results.** For each useful URL, run `${CLAUDE_SKILL_DIR}/download <src-id> --url <url>` to ingest it into the pipeline.
@@ -216,7 +216,7 @@ cleanup-orphans                   # remove metadata files on disk with no matchi
 | `Read` | Source files, notes, journal, metadata |
 | `Write` / `Edit` | journal.md, notes/, report.md |
 
-> **Note:** Web search has a three-tier fallback: Tavily (preferred) → Gensee → native `WebSearch`. Prefer `--provider tavily` or `--provider gensee` for web searches — they flow through the CLI pipeline and get logged to state.db automatically. Native `WebSearch` is the last resort when both API providers are unavailable.
+> **Note:** Web search has a four-tier fallback: Tavily (preferred) → Gensee → Exa → native `WebSearch`. Prefer CLI providers (`--provider tavily`, `--provider gensee`, or `--provider exa`) for web searches — they flow through the pipeline and get logged to state.db automatically. Native `WebSearch` is the last resort when all API providers are unavailable.
 
 ---
 

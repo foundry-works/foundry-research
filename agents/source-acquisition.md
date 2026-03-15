@@ -37,7 +37,7 @@ A directive from the supervisor containing:
 ### Initial mode
 Full source acquisition pipeline: connectivity test → broad searches → citation chasing → provider diversity → triage → downloads → recovery.
 
-**Before round 1 searches, test web search connectivity.** Test Tavily first: `{cli_dir}/search --provider tavily --query "test" --limit 1 --compact`. If it succeeds, set `tavily_available: true` and proceed normally. If it returns an error or 0 results, test Gensee: `{cli_dir}/search --provider gensee --query "test" --limit 1 --compact`. If Gensee succeeds, set `tavily_available: false, gensee_available: true` — use Gensee instead of Tavily for all web searches this session. If both fail, set both to false and log a journal entry: "Web search APIs unavailable (Tavily and Gensee both down) — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." For all subsequent searches, skip both web providers — don't waste search budget on broken channels.
+**Before round 1 searches, test web search connectivity.** Test providers in order until one succeeds: Tavily → Gensee → Exa. Run a single test search for each: `{cli_dir}/search --provider <name> --query "test" --limit 1 --compact`. Use the first provider that succeeds for all web searches this session. Set availability flags in your manifest (`tavily_available`, `gensee_available`, `exa_available`). If all three fail, log a journal entry: "Web search APIs unavailable (Tavily, Gensee, and Exa all down) — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Skip all web providers for subsequent searches.
 
 ### Gap mode
 Targeted follow-up after reading is complete. You receive additional context:
@@ -132,7 +132,7 @@ After each search round, spot-check result titles against these domain terms. If
 - **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
 - **Humanities/social science:** Crossref + OpenAlex; add Semantic Scholar for citations
 - **Financial:** yfinance + EDGAR; add Semantic Scholar/OpenAlex for academic context
-- **General technical:** tavily + GitHub; Reddit/HN for community perspective
+- **General technical:** tavily (or gensee/exa) + GitHub; Reddit/HN for community perspective
 - **When unsure:** search at least 3 providers including one web source
 
 ### Domain-specific query construction
@@ -228,19 +228,17 @@ After `recover-failed` completes, check whether any **high-priority** sources (t
 
 1. For each high-priority missing source, get its first author and title from `state sources --title-contains "keyword"` or from your triage output.
 
-2. Run a web search with author name + title keywords + "PDF" (use Tavily if available, otherwise Gensee):
+2. Run a web search with author name + title keywords + "PDF" (use whichever web provider is available — Tavily, Exa, or Gensee):
    ```
    {cli_dir}/search --provider tavily --query '"{first author last name}" "{key title words}" PDF' --limit 10
-   # If Tavily is down:
-   {cli_dir}/search --provider gensee --query '"{first author last name}" "{key title words}" PDF' --limit 10
+   # If Tavily is down, use exa or gensee instead
    ```
    This finds author lab sites, university repositories, ResearchGate, Academia.edu, OSF, and preprint servers.
 
 3. If that misses, try a broader title-only search:
    ```
    {cli_dir}/search --provider tavily --query '"{full paper title}" PDF' --limit 10
-   # If Tavily is down:
-   {cli_dir}/search --provider gensee --query '"{full paper title}" PDF' --limit 10
+   # If Tavily is down, use exa or gensee instead
    ```
 
 4. When a search finds a plausible URL (PDF link on an `.edu` domain, ResearchGate, OSF, or author site), download the source directly by ID:
@@ -290,7 +288,7 @@ Next step: [what to search next and why]
 
 **Assessing coverage per question with compact results:** You won't have abstracts, but titles are sufficient for coverage estimation. After each search round, scan result titles for keywords from each brief question. A title containing "cross-cultural" and "uncanny valley" is a strong signal for Q3 about cross-cultural variation. Use `state triage` (which scores title-keyword relevance against the brief) for a structured assessment after all rounds complete. This is an estimate — the readers will do the deep coverage assessment later.
 
-**Providers:** `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `gensee`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
+**Providers:** `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `exa`, `gensee`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
 
 Citation traversal (Semantic Scholar, PubMed only) — `--compact` and `--brief-keywords` apply here too:
 ```
@@ -459,13 +457,14 @@ After completing all search rounds, triage, and downloads, return a **compact JS
 
 ### Initial mode manifest
 
-The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `gensee_available`, and `content_validation`:
+The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `gensee_available`, `exa_available`, and `content_validation`:
 
 ```json
 {
   "mode": "initial",
   "tavily_available": true,
   "gensee_available": true,
+  "exa_available": true,
   "searches_run": 18,
   "sources_found": 142,
   "sources_after_dedup": 89,
