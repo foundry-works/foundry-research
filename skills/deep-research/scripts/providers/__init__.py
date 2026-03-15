@@ -13,6 +13,7 @@ _REGISTRY: dict[str, str] = {
     "reddit": "providers.reddit",
     "hn": "providers.hn",
     "tavily": "providers.tavily",
+    "gensee": "providers.gensee",
     "yfinance": "providers.yfinance_provider",
     "edgar": "providers.edgar",
     "crossref": "providers.crossref",
