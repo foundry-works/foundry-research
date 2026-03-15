@@ -94,6 +94,16 @@ For each cited source:
 
 **Why:** Reader notes contain manually extracted metadata that the automated enrichment pipeline (Crossref) misses — especially for papers from providers with sparse metadata (CORE, web sources). Checking two places before giving up resolves most incomplete references at near-zero cost.
 
+### Deduplication
+
+Before assigning reference numbers, deduplicate your cited sources:
+
+1. **Group by DOI** (exact match). When two source IDs (e.g., `src-042` and `src-189`) share the same DOI, they are the same paper — assign one reference number and cite all in-text occurrences under that number.
+2. **Group by title + first author** (fuzzy match, for sources without DOIs). If two sources have near-identical titles and the same first author, treat them as the same paper.
+3. **Never acknowledge a duplicate in a comment — resolve it.** If you notice two references point to the same paper, merge them. A comment like "Note: [6] and [10] are the same paper" is not a resolution — it's a deferral that erodes citation integrity.
+
+**Why this matters:** Different source IDs can resolve to the same underlying paper when multiple search providers return the same result. Without deduplication, the references list inflates and readers lose trust in citation accuracy.
+
 If a metadata file is missing or has incomplete fields after these checks, write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
 
 ## Return value

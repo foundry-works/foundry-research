@@ -51,7 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compact", action="store_true",
                         help="Return only (id, title, citation_count, doi, provider) per result — strips abstracts and full metadata")
     parser.add_argument("--search-type", default="manual",
-                        choices=["manual", "recovery", "citation"],
+                        choices=["manual", "recovery", "citation", "gap_search"],
                         help="Search type for state tracking (default: manual)")
     parser.add_argument("--brief-keywords", default=None,
                         help="Comma-separated domain terms from the research brief for title-relevance scoring at ingestion")
