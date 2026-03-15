@@ -79,11 +79,11 @@ All user feedback items get `severity: "high"` — the user's direction is alway
 - The feedback is purely about content direction (emphasis, structure, scope, tone) — not about factual accuracy
 - The user doesn't ask for a full review
 
-In quick mode, skip to **Step 4** (combined revision) with only the user's structured directives as the issues list. Log the mode decision.
+In quick mode, skip to **Step 3** (accuracy revision) with only the user's structured directives as the issues list. Log the mode decision.
 
 **Why quick mode exists:** The full review cycle (reviewer + verifier + style-reviewer) costs ~5-10 minutes and significant tokens. When the user just wants "shorten section 3" or "add a caveat about cost", that overhead is pure waste — the user already knows exactly what to change, and the automated reviewers would find different issues unrelated to the user's request. Quick mode respects the user's time and token budget.
 
-**Full mode** — run the complete two-pass review cycle — in all other cases. This is the default.
+**Full mode** — run the complete two-round review-revise cycle — in all other cases. This is the default.
 
 ### Step 1: Rename draft, read the brief, and check for prior revision
 
@@ -151,7 +151,7 @@ Evaluate the synthesis-reviewer's results to determine how to use the verifier's
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
 
-**If zero issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 3 (style review). Log that accuracy review found no issues.
+**If zero issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 4 (style review). Log that accuracy review found no issues.
 
 ### Step 2b: Deduplicate issues
 
@@ -171,66 +171,37 @@ Before passing issues to the reviser, deduplicate across reviewer and verifier r
    - **Add a `flagged_by` field** listing both source IDs (e.g., `["review-3", "verify-2"]`). This preserves the audit trail so the delivery summary can report which agents found which issues.
    - **Keep the issue ID of the more specific entry** (the one whose `suggested_fix` was preferred). Drop the other ID from the active issues list.
 
-4. **Flag co-located non-duplicates.** After dedup, scan the remaining issues for non-duplicates that target the same paragraph (same section + paragraph in their `location` field). For each co-located group, add a `co_located_with` field listing the other issue IDs (e.g., `"co_located_with": ["style-5"]` on review-2, and `"co_located_with": ["review-2"]` on style-5). **Why:** Two different issues targeting the same sentence create fragile edit sequences — the first edit changes surrounding text, causing the second edit's `old_string` to no longer match. The `co_located_with` signal tells the reviser to plan a single atomic edit for the group rather than sequential independent edits, turning a fragile heuristic into a deterministic grouping.
+4. **Flag co-located non-duplicates within the accuracy set.** After dedup, scan the remaining accuracy issues for non-duplicates that target the same paragraph (same section + paragraph in their `location` field). For each co-located group, add a `co_located_with` field listing the other issue IDs. **Why:** Two different issues targeting the same sentence create fragile edit sequences — the first edit changes surrounding text, causing the second edit's `old_string` to no longer match. The `co_located_with` signal tells the reviser to plan a single atomic edit for the group rather than sequential independent edits. Cross-type co-location (accuracy + style at the same paragraph) is no longer a concern because accuracy revision completes before style review begins — the style reviewer sees corrected text and flags issues against the final wording.
 
 5. **Log the merge count.** Record how many issues were merged and how many co-located groups were flagged (e.g., "Dedup: merged 2 duplicate issues, flagged 1 co-located group, 14 → 12 active issues"). This is reported in the delivery summary.
 
-### Step 3: Pass 2 — Style review
+### Step 3: Round 1 — Accuracy revision
 
-**Why style review runs after accuracy review, not in parallel:** The style reviewer needs to know which sections have accuracy problems — if a paragraph will be rewritten to fix a factual error, flagging its passive voice is wasted effort. Running accuracy review first lets the style reviewer skip sections already flagged for substantive changes. The cost is ~2-3 minutes of sequential execution, trivial compared to the research phase that produced the draft.
+Take the accuracy issues from Step 2/2b (reviewer + verifier after gating and dedup) plus any user feedback directives, and launch the accuracy reviser.
 
-**Why the style reviewer sees pre-revision text:** In the old pipeline, style review ran after accuracy *revision*, seeing corrected text. Now both reviews complete before any revision. This is acceptable because accuracy edits are typically small (correcting a number, adding a hedge, qualifying a claim) and rarely change the sentence structure that style issues target. The combined reviser processes accuracy issues first, so by the time it reaches style issues, those text regions are already corrected.
-
-**Build a `skip_locations` list** from the accuracy issues before launching the style reviewer. For each high or medium severity accuracy issue (from both the synthesis-reviewer and research-verifier after gating), extract its `location` field. Pass this as a JSON array in the style reviewer's agent prompt. Example: `"skip_locations": ["Section 3, paragraph 1", "Section 4, paragraph 2"]`. **Why JSON, not prose:** Prose descriptions like "the paragraph about AI faces in Section 4" require the style reviewer to interpret your intent — a process that's fragile and error-prone. A JSON array of location strings is unambiguous: the style reviewer checks each potential issue's location against the list mechanically, with no interpretation needed.
-
-Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
-- Session directory path (absolute)
-- Path to `report.md` (the pre-revision version — accuracy corrections haven't been applied yet)
-- Research brief
-- `skip_locations` JSON array (from above)
-
-The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
-
-**After it returns**, collect style issues from the style-reviewer's `issues` array — issues are already prefixed `style-N` by the reviewer.
-
-**Severity filtering — adaptive, not a hard cutoff:**
-
-1. Always include all high and medium severity style issues.
-2. Include a low-severity style issue as opportunistic ONLY if its section matches an existing high or medium severity issue (accuracy or style). Compare the section identifier (e.g., "Section 3") in the low-severity issue's `location` against all higher-priority issues' `location` fields. If no section match, exclude it — the reviser would skip it anyway since there are no nearby edits. **Why section-match instead of a count threshold:** The old "under 25 total" rule included low-severity issues the reviser almost always skipped (no nearby higher-priority edits in the same passage). This wasted planning tokens on issues with a predetermined outcome. Filtering by section proximity mirrors the reviser's own skip logic — if the issue isn't even in the same section as another edit, it was never going to be applied. The tradeoff: we might occasionally exclude a low that the reviser would have applied, but the reviser's "nearby" heuristic is generous enough that same-section is the practical minimum.
-3. When including low-severity style issues, add `"priority": "opportunistic"` to each one. The reviser applies opportunistic issues only when it's already editing nearby text for a higher-priority issue — it won't force an edit on an otherwise-clean passage.
-
-### Step 4: Combined revision
-
-Merge all issues — accuracy (reviewer + verifier + user feedback from Step 2/2b) and style (from Step 3) — into a single combined list and launch one reviser.
-
-**Why a single combined pass instead of two separate reviser launches:** The reviser processes both accuracy and style issues identically — the `pass_type` field was audit metadata, not a behavioral switch. Two separate Opus-tier launches (~110k tokens each) doubled the cost for no behavioral difference. A single pass with accuracy issues ordered first achieves the same result: accuracy edits land before style edits, so style fixes target corrected text.
-
-**Combined list ordering** (the reviser processes issues in this order):
+**Issue ordering** (the reviser processes issues in this order):
 1. User feedback directives (`user-N`) — always first, highest priority
 2. Accuracy issues by severity: high → medium (`review-N`, `verify-N`)
-3. Style issues by severity: high → medium (`style-N`)
 
-**Why accuracy before style:** Accuracy edits may change the text targeted by style issues. Processing accuracy first ensures the reviser doesn't style-edit a passage that's about to be rewritten for correctness. The issue ID prefixes (`review-N`, `verify-N`, `style-N`) make the ordering unambiguous.
-
-**Overflow guidance:** If the combined list exceeds 30 issues, split into two batches: first batch contains all user feedback + accuracy issues (up to 30), second batch contains the remainder (style issues, or overflow accuracy issues). Launch the reviser sequentially — first batch, then second batch on the updated file. **Why 30:** A typical reviser context handles ~25 issues comfortably; 30 gives headroom without risking quality degradation from context overload. Splitting accuracy-first ensures the higher-priority fixes land in the first pass.
+**Overflow guidance:** If the list exceeds 30 issues, split into two batches and launch the reviser sequentially — first batch, then second batch on the updated file. **Why 30:** A typical reviser context handles ~25 issues comfortably; 30 gives headroom without risking quality degradation from context overload.
 
 Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 - Session directory path (absolute)
 - Draft path: relative path to `report.md`
-- Pass type: `"combined"`
-- Combined issues list (ordered as above)
+- Pass type: `"accuracy"`
+- Accuracy issues list (ordered as above)
 
 The reviser makes surgical edits using the Edit tool and returns a manifest mapping each issue to the edit made (or explaining why it's unresolved).
 
 **After the reviser returns:**
 - Check the manifest for unresolved issues — note these for delivery
 - Verify `report.md` was updated (the reviser edits it in place)
-- Write the reviser's manifest to `revision/revision-manifest.json` as structured JSON. Include for each issue: issue ID, status, location, and fix applied (the `action`, `old_text_snippet`, and `new_text_snippet` fields). **Why persist here, before validation:** The manifest captures intent — what the reviser tried to do. Validation (Step 4b) confirms what actually landed. Both are useful for subsequent runs: the resolved list tells reviewers what was addressed, and validation status tells them whether it stuck.
-- Run post-revision validation (Step 4b below)
+- Write the reviser's manifest to `revision/revision-manifest.json` as structured JSON. Include for each issue: issue ID, status, location, and fix applied (the `action`, `old_text_snippet`, and `new_text_snippet` fields). **Why persist here, before validation:** The manifest captures intent — what the reviser tried to do. Validation confirms what actually landed. Both are useful for subsequent runs: the resolved list tells reviewers what was addressed, and validation status tells them whether it stuck.
+- Run post-revision validation (Step 3b below)
 
-**If zero total issues found** (no accuracy issues, no style issues, no user feedback): skip revision entirely, proceed to delivery. Log that both review passes found no issues.
+**If zero accuracy issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 4 (style review). Log that accuracy review found no issues.
 
-### Step 4b: Post-revision validation
+### Step 3b: Post-accuracy-revision validation
 
 The reviser's manifest claims edits were made, but claims aren't proof. Validate that each edit actually landed by checking the report text against the manifest's snippets.
 
@@ -255,17 +226,63 @@ After the retry (or if no retry was needed), record:
 - Count of edits that required retry
 - Count of edits that failed after retry (escalate to unresolved)
 
-### Step 5: Delivery
+### Step 4: Round 2 — Style review
+
+**Why style review runs after accuracy revision, not before:** The style reviewer needs to see the corrected text. If the style reviewer runs on pre-revision text, it flags issues in passages that the accuracy reviser will rewrite — producing stale suggestions the style reviser can't apply. Running style review after accuracy revision means every style flag targets text that has already been corrected for factual accuracy. This eliminates the need for `skip_locations` (which bluntly excluded entire paragraphs) and cross-type `co_located_with` flags (which added complexity to prevent fragile edit sequences). The tradeoff is ~3-5 minutes of additional wall-clock time (accuracy revision must complete before style review can start), but this is offset by higher-quality style flags and zero wasted edits.
+
+Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
+- Session directory path (absolute)
+- Path to `report.md` (the accuracy-corrected version)
+- Research brief
+
+No `skip_locations` needed — the style reviewer sees corrected text and can flag issues anywhere.
+
+The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
+
+**After it returns**, collect style issues from the style-reviewer's `issues` array — issues are already prefixed `style-N` by the reviewer.
+
+**Severity filtering:**
+
+1. Always include all high and medium severity style issues.
+2. Include a low-severity style issue as opportunistic ONLY if its section matches a high or medium severity style issue. Compare the section identifier (e.g., "Section 3") in the low-severity issue's `location` against higher-priority style issues' `location` fields. If no section match, exclude it — the reviser would skip it anyway since there are no nearby edits. **Why section-match:** Low-severity style issues far from any other edit are almost always skipped by the reviser. Filtering by section proximity mirrors the reviser's own skip logic and avoids burdening the reviser context with issues that have a predetermined outcome.
+3. When including low-severity style issues, add `"priority": "opportunistic"` to each one. The reviser applies opportunistic issues only when it's already editing nearby text for a higher-priority issue — it won't force an edit on an otherwise-clean passage.
+
+**Flag co-located style issues.** Scan the filtered style issues for non-duplicates that target the same paragraph. For each co-located group, add a `co_located_with` field listing the other issue IDs. **Why:** Same rationale as accuracy dedup — two issues targeting the same sentence create fragile edit sequences. The `co_located_with` signal tells the reviser to plan a single atomic edit.
+
+**If zero style issues found after filtering:** Skip style revision, proceed to delivery. Log that style review found no issues.
+
+### Step 5: Round 2 — Style revision
+
+Spawn a **`report-reviser`** subagent (Opus, foreground) with:
+- Session directory path (absolute)
+- Draft path: relative path to `report.md`
+- Pass type: `"style"`
+- Style issues list (high → medium, with opportunistic lows at the end)
+
+**After the reviser returns:**
+- Check the manifest for unresolved issues
+- Append the style revision entries to the existing `revision/revision-manifest.json` (do not overwrite the accuracy entries — the manifest should contain both rounds)
+- Run post-style-revision validation (Step 5b below)
+
+### Step 5b: Post-style-revision validation
+
+Same validation procedure as Step 3b, applied to the style reviser's manifest entries. Same retry logic (one retry cap).
+
+After validation, record:
+- Count of style edits that passed validation on first try
+- Count that required retry
+- Count that failed after retry (escalate to unresolved)
+
+### Step 6: Delivery
 
 1. Read the final `report.md`
-2. Present a summary to the user, distinguishing accuracy and style fixes by counting issue ID prefixes in the reviser manifest (`review-N` and `verify-N` = accuracy, `style-N` = style, `user-N` = user feedback):
-   - How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits)
-   - How many style issues were found and fixed (count `style-N` resolved edits)
+2. Present a summary to the user with results from both rounds:
+   - **Round 1 (accuracy):** How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits), plus user feedback items (`user-N`)
+   - **Round 2 (style):** How many style issues were found and fixed (count `style-N` resolved edits)
    - Verifier gating mode used (full, targeted, or skip) and why — so the user understands how verification results were applied. If targeted, note which claims were matched; if skip, note that prior verification exists
    - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
-   - Post-revision validation results: how many edits were confirmed on first try, how many required a retry, and how many failed validation entirely (if any). **Why report this:** Validation failures signal fragile edits — if retries are frequent, the issues list may have too many overlapping edits targeting the same passages, which is useful feedback for tuning the reviewers.
-   - Any unresolved issues (with explanations from the reviser manifest, including any edits that failed validation after retry)
-   - Any user feedback items and how they were addressed (count `user-N` resolved edits)
+   - Post-revision validation results for each round: how many edits were confirmed on first try, how many required a retry, and how many failed validation entirely (if any). **Why report this:** Validation failures signal fragile edits — if retries are frequent, the issues list may have too many overlapping edits targeting the same passages, which is useful feedback for tuning the reviewers.
+   - Any unresolved issues from either round (with explanations from the reviser manifest, including any edits that failed validation after retry)
 3. Note that the original draft is preserved at `report_draft.md` for comparison
 4. If there are unresolved issues, suggest what the user could do (e.g., provide the missing source, clarify their intent, run another revision pass)
 
