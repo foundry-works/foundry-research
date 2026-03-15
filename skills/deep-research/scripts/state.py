@@ -1521,6 +1521,8 @@ def cmd_download_pending(args):
                 "batch_size": batch_size,
                 "batches_run": batches_run,
                 "remaining": remaining_after,
+                "wall_clock_estimate_per_batch_seconds": batch_size * 30,
+                "total_batches_estimated_seconds": (batch_size * 30) * max_batches,
             })
             return
 
@@ -1663,6 +1665,7 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
         "failed_sources": sorted(remaining),
         "batch_size": len(source_attempts),
         "remaining": remaining_pending,
+        "wall_clock_estimate_seconds": len(source_attempts) * 30,
     }
 
 

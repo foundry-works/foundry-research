@@ -18,7 +18,11 @@ These rules prevent the most common token-wasting failure modes. Follow them str
 
 3. **Never read internal Claude files** — Paths under `/tmp/claude-*`, `/home/*/.claude/projects/*/tool-results/`, or `/home/*/.claude/projects/*/tasks/` are internal to the Claude runtime and may be cleared between turns. Run commands in the foreground to get their output directly.
 
-4. **Never background commands — they are irrecoverable.** Don't set `run_in_background: true` on any Bash call. You don't have the TaskOutput tool, so you cannot retrieve background results — they're lost. If a command is slow (e.g., `recover-failed` processing 50 sources), set a long `timeout` (up to 600000ms) instead. Don't use `sleep N && cat` loops either — all CLI commands here run synchronously and return results directly. Background tasks also leak notifications into the orchestrator's context as noise after you've returned, wasting tokens and creating confusion in the parent conversation.
+4. **Never background commands — they are irrecoverable.** Don't set `run_in_background: true` on any Bash call. You don't have the TaskOutput tool, so you cannot retrieve background results — they're lost. If a command is slow (e.g., `recover-failed` processing 50 sources, or `download-pending --auto-download` running multi-batch downloads), set a long `timeout` (up to 600000ms) instead. Don't use `sleep N && cat` loops either — all CLI commands here run synchronously and return results directly. Background tasks also leak notifications into the orchestrator's context as noise after you've returned, wasting tokens and creating confusion in the parent conversation.
+
+   **Timeout guidance for slow commands:** `download-pending --auto-download --batch-size 15 --max-batches 3` runs 3 batches with up to 3 fallback passes each. Wall-clock time: 3-8 minutes depending on network conditions and fallback depth. **Always set `timeout: 600000` on the Bash call.** This is the same guidance as `recover-failed` — both commands run multi-minute download cascades. The command output includes a `wall_clock_estimate_seconds` field — set your Bash timeout to at least 2× that value.
+
+   **If a command is backgrounded despite your timeout setting** (you see "Command running in background with ID: ..."), do NOT retry the same command — retrying creates duplicate downloads racing against the background task, and each retry that also gets backgrounded compounds the problem. Instead: (1) Note the background task ID in your working memory. (2) Continue with other work that doesn't depend on the download results (e.g., content validation on sources already on disk). (3) Before building your manifest, reconcile disk counts against state.db to detect unsettled state (see manifest reconciliation below).
 
 5. **Inspect before retrying** — When a command fails, run it once bare and read the raw output before adjusting. Retrying with different arguments blind wastes 2-5 tool calls per failure and often compounds the original problem (e.g., wrong key path → wrong extraction → wrong retry).
 
@@ -179,7 +183,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
+1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue. **Always set `timeout: 600000` on this Bash call** — multi-batch downloads with fallback passes take 3-8 minutes, well beyond the default 2-minute Bash timeout.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
 4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 15 total attempts across all channels, and auto-skips any channel that has 0 successes after 5 attempts. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
@@ -325,8 +329,8 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state manifest --mode gap --top 30       # gap-mode manifest
 
 # Downloads
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps --min-relevance 0.0  # gap mode
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0  # ⚠ slow command, set Bash timeout to 600000
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps --min-relevance 0.0  # gap mode — ⚠ same timeout
 {cli_dir}/state download-pending           # list sources without content (dry run)
 
 # Triage and sources — use during search rounds for coverage assessment
@@ -449,6 +453,10 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 ## Return Value
 
 After completing all search rounds, triage, and downloads, return a **compact JSON manifest only**. Do not narrate what you did — the journal has the details, state.db has the data.
+
+**Reconcile disk and state.db counts before building the manifest.** Run `ls sources/*.md 2>/dev/null | wc -l` to get the on-disk count, then run `{cli_dir}/state download-pending` (dry run, no `--auto-download`) to get the true remaining count from state.db. If the disk count and state.db's `content_file` count differ by more than 5, state.db hasn't fully synced — report the higher of the two as `downloads.success` and add a `downloads.success_note` field explaining the discrepancy. Never report `remaining: 0` unless both disk and state.db agree.
+
+**Why reconcile:** The incident manifest reported `remaining: 0` and `success: 107` when state.db showed 65 with content — a 42-source discrepancy that the orchestrator treated as informational rather than a blocker. Comparing both sources of truth catches this.
 
 **How to build the manifest:**
 
