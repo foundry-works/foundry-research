@@ -519,17 +519,20 @@ def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict,
         return {"duplicate": True, "matched": matched_id}
 
     source_id = _next_id(conn, "sources", "src", session_id)
+    # Accept explicit status from caller (e.g. "irrelevant" for zero-relevance
+    # sources at ingestion) — otherwise default to "pending".
+    status = data.get("status", "pending")
     conn.execute(
         """INSERT INTO sources (id, session_id, title, authors, year, abstract, doi, url,
            pdf_url, venue, citation_count, type, provider, content_file, pdf_file,
-           relevance_score, added_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           relevance_score, status, added_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (source_id, session_id, title, json.dumps(authors), year,
          data.get("abstract"), doi, url, data.get("pdf_url"),
          data.get("venue"), data.get("citation_count"),
          data.get("type", "academic"), data.get("provider", "unknown"),
          data.get("content_file"), data.get("pdf_file"),
-         data.get("relevance_score"), _now())
+         data.get("relevance_score"), status, _now())
     )
 
     # Write metadata JSON at ingestion time so triage and audit have access
@@ -893,7 +896,7 @@ def cmd_sources(args):
     # --providers: return only provider distribution counts (no source list)
     if getattr(args, "providers", False):
         rows = conn.execute(
-            "SELECT provider, COUNT(*) as count FROM sources WHERE session_id = ? GROUP BY provider ORDER BY count DESC",
+            "SELECT provider, COUNT(*) as count FROM sources WHERE session_id = ? AND status != 'irrelevant' GROUP BY provider ORDER BY count DESC",
             (sid,)
         ).fetchall()
         conn.close()
@@ -922,7 +925,7 @@ def cmd_sources(args):
         select_cols = _all_source_cols
 
     # Build query with optional filters
-    clauses = ["session_id = ?"]
+    clauses = ["session_id = ?", "status != 'irrelevant'"]
     params: list = [sid]
 
     title_contains = getattr(args, "title_contains", None)
@@ -1401,6 +1404,7 @@ def cmd_download_pending(args):
         """SELECT id, title, doi, url, pdf_url, type, status, relevance_score
            FROM sources WHERE session_id = ?
            AND content_file IS NULL AND pdf_file IS NULL
+           AND status != 'irrelevant'
            ORDER BY id""",
         (sid,)
     ).fetchall()
@@ -1716,9 +1720,17 @@ def cmd_audit(args):
     mismatched = []
     no_content = []
     abstract_only = []
+    irrelevant = []
 
     for s in sources:
         sid_val = s["id"]
+
+        # Separate irrelevant sources (zero keyword overlap at ingestion) —
+        # they're preserved for provenance but excluded from working counts.
+        if s.get("status") == "irrelevant":
+            irrelevant.append(sid_val)
+            continue
+
         has_content = False
 
         # Check content file
@@ -1818,6 +1830,25 @@ def cmd_audit(args):
                 and s["id"] in downloaded):
             downloaded_no_content_file.append(s["id"])
 
+    # Detect orphaned sources: status='downloaded' but no actual content on disk.
+    # This catches both null content_file with no file on disk, and content_file
+    # pointing to a file that was deleted or never written.
+    orphaned_sources = []
+    for s in sources:
+        if s.get("status") != "downloaded":
+            continue
+        sid_val = s["id"]
+        has_file = False
+        if s.get("content_file"):
+            has_file = os.path.exists(os.path.join(args.session_dir, s["content_file"]))
+        if not has_file:
+            for ext in (".md", ".pdf"):
+                if os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")):
+                    has_file = True
+                    break
+        if not has_file:
+            orphaned_sources.append(sid_val)
+
     # Build warnings
     warnings = []
     for sid_val in degraded_unread:
@@ -1834,12 +1865,17 @@ def cmd_audit(args):
         warnings.append(f'"{sq["question"]}" has insufficient coverage ({sq["finding_count"]} findings)')
     if no_content:
         warnings.append(f"{len(no_content)} sources have no on-disk content (abstract-only)")
+    if orphaned_sources:
+        warnings.append(
+            f"{len(orphaned_sources)} orphaned source(s) have status='downloaded' but no content on disk: "
+            f"{', '.join(orphaned_sources[:10])}. These are invisible to readers and synthesis."
+        )
     if len(gaps) > 0:
         warnings.append(f"{len(gaps)} open research gaps remain")
 
     # Human-readable summary to stderr
     log("=== Pre-Report Audit ===")
-    log(f"Sources tracked:     {len(sources)}")
+    log(f"Sources tracked:     {len(sources)} ({len(irrelevant)} irrelevant, excluded from counts below)")
     log(f"Sources downloaded:  {total_downloaded}  ({', '.join(downloaded[:10])}{'...' if len(downloaded) > 10 else ''})")
     log(f"Sources with notes:  {deep_reads}  ({', '.join(with_notes[:10])}{'...' if len(with_notes) > 10 else ''})")
     log(f"Degraded (unread):   {len(degraded_unread)}  ({', '.join(degraded_unread)})" if degraded_unread else "Degraded (unread):   0")
@@ -1867,6 +1903,7 @@ def cmd_audit(args):
 
     audit_result = {
         "sources_tracked": len(sources),
+        "sources_irrelevant": len(irrelevant),
         "sources_downloaded": total_downloaded,
         "sources_with_notes": deep_reads,
         "degraded_unread": degraded_unread,
@@ -1878,6 +1915,7 @@ def cmd_audit(args):
         "gaps": [{"id": g["id"], "text": g["text"], "question": g.get("question"), "status": g["status"]} for g in gaps],
         "sparse_questions": sparse_questions,
         "downloaded_no_content_file": downloaded_no_content_file,
+        "orphaned_sources": orphaned_sources,
         "methodology": {
             "deep_reads": deep_reads,
             "abstract_only": total_abstract_only,
@@ -1933,12 +1971,12 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
                  "content_file, pdf_file, is_read, quality, relevance_score, relevance_rationale, status")
     if title_filter:
         sources = [dict(r) for r in conn.execute(
-            f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND title LIKE ? ORDER BY id",
+            f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND title LIKE ? AND status != 'irrelevant' ORDER BY id",
             (session_id, f"%{title_filter}%")
         ).fetchall()]
     else:
         sources = [dict(r) for r in conn.execute(
-            f"SELECT {_src_cols} FROM sources WHERE session_id = ? ORDER BY id", (session_id,)
+            f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND status != 'irrelevant' ORDER BY id", (session_id,)
         ).fetchall()]
 
     # Score each source

@@ -136,7 +136,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     The synthesis-writer must be **foreground** (see rule 1).
 
-    **a. Enrich metadata.** Run `${CLAUDE_SKILL_DIR}/state enrich-metadata` to fill in missing DOIs, authors, and venues from Crossref. This queries by title for sources with incomplete metadata and updates both state.db and on-disk JSON files. Run once before synthesis — cleaner metadata produces cleaner references in the report.
+    **a. Enrich metadata.** Run `${CLAUDE_SKILL_DIR}/state enrich-metadata` to fill in missing DOIs, authors, and venues from Crossref. This queries by title for sources with incomplete metadata and updates both state.db and on-disk JSON files. Run once before synthesis — cleaner metadata produces cleaner references in the report. **After enrichment, check the response for sources that still have incomplete metadata** (missing title, authors, or year). List these source IDs in the synthesis handoff narrative so the writer knows which sources may need manual metadata extraction from their content files or reader notes. **Why:** The writer has instructions to check reader notes and content file headers for missing metadata, but knowing *which* sources to check saves it from re-discovering the gaps.
 
     **b. Hand off to synthesis-writer.** First, run `${CLAUDE_SKILL_DIR}/state summary --write-handoff` — this writes the full structured data (findings, gaps, sources, brief, source quality report) to `synthesis-handoff.json` and returns only the file path and counts. Then spawn a `synthesis-writer` subagent with:
     - The session directory path (absolute)

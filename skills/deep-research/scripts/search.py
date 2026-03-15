@@ -280,6 +280,10 @@ def _add_sources_to_state(args, result: dict) -> None:
                 title_lower = (src.get("title") or "").lower()
                 hits = sum(1 for t in terms if t in title_lower)
                 src["relevance_score"] = round(min(hits / max(len(terms), 1), 1.0), 3)
+                # Mark zero-relevance sources so they're excluded from triage and
+                # download queues while preserving their record for audit/provenance.
+                if src["relevance_score"] == 0.0:
+                    src["status"] = "irrelevant"
 
     resp = call_state(
         args.session_dir, "add-sources",

@@ -87,7 +87,14 @@ For each cited source:
 2. Extract `authors`, `title`, `year`, `venue`, and `doi`/`url` directly from the JSON fields
 3. Format the reference using exactly those values
 
-If a metadata file is missing or has incomplete fields (e.g., no authors, no venue), write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
+**Before writing the References section, scan cited sources' metadata files for completeness.** For any source with missing title, authors, or year:
+1. Check the reader note in `notes/src-NNN.md` — readers often extract author names, title, and year from the paper's header section
+2. Check the first 20 lines of the content file (`sources/src-NNN.md`) for header information (author block, title, date)
+3. Only fall back to `[metadata incomplete]` after both checks fail
+
+**Why:** Reader notes contain manually extracted metadata that the automated enrichment pipeline (Crossref) misses — especially for papers from providers with sparse metadata (CORE, web sources). Checking two places before giving up resolves most incomplete references at near-zero cost.
+
+If a metadata file is missing or has incomplete fields after these checks, write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
 
 ## Return value
 
