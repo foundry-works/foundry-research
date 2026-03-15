@@ -37,7 +37,7 @@ A directive from the supervisor containing:
 ### Initial mode
 Full source acquisition pipeline: connectivity test → broad searches → citation chasing → provider diversity → triage → downloads → recovery.
 
-**Before round 1 searches, test web search connectivity.** Test providers in order until one succeeds: Tavily → Gensee → Exa. Run a single test search for each using a short topic-relevant query derived from the research brief (e.g., for a brief about "uncanny valley mechanisms", use `--query "uncanny valley"` — never use a generic word like "test"): `{cli_dir}/search --provider <name> --query "<brief-derived>" --limit 1 --compact`. This avoids wasting API credits on irrelevant queries and prevents junk sources (e.g., speed test sites, dictionary pages) from polluting the source inventory. Use the first provider that succeeds for all web searches this session. Set availability flags in your manifest (`tavily_available`, `gensee_available`, `exa_available`). If all three fail, log a journal entry: "Web search APIs unavailable (Tavily, Gensee, and Exa all down) — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Skip all web providers for subsequent searches.
+**Before round 1 searches, test web search connectivity.** Test providers in order until one succeeds: Tavily → Perplexity → Linkup → Gensee → Exa. Run a single test search for each using a short topic-relevant query derived from the research brief (e.g., for a brief about "uncanny valley mechanisms", use `--query "uncanny valley"` — never use a generic word like "test"): `{cli_dir}/search --provider <name> --query "<brief-derived>" --limit 1 --compact`. This avoids wasting API credits on irrelevant queries and prevents junk sources (e.g., speed test sites, dictionary pages) from polluting the source inventory. Use the first provider that succeeds for all web searches this session. Set availability flags in your manifest (`tavily_available`, `perplexity_available`, `linkup_available`, `gensee_available`, `exa_available`). If all five fail, log a journal entry: "Web search APIs unavailable (Tavily, Perplexity, Linkup, Gensee, and Exa all down) — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Skip all web providers for subsequent searches.
 
 ### Gap mode
 Targeted follow-up after reading is complete. You receive additional context:
@@ -134,7 +134,7 @@ After each search round, spot-check result titles against these domain terms. If
 - **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
 - **Humanities/social science:** Crossref + OpenAlex; add Semantic Scholar for citations
 - **Financial:** yfinance + EDGAR; add Semantic Scholar/OpenAlex for academic context
-- **General technical:** tavily (or gensee/exa) + GitHub; Reddit/HN for community perspective
+- **General technical:** tavily (or perplexity/linkup/gensee/exa) + GitHub; Reddit/HN for community perspective
 - **When unsure:** search at least 3 providers including one web source
 
 ### Domain-specific query construction
@@ -290,7 +290,7 @@ Next step: [what to search next and why]
 
 **Assessing coverage per question with compact results:** You won't have abstracts, but titles are sufficient for coverage estimation. After each search round, scan result titles for keywords from each brief question. A title containing "cross-cultural" and "uncanny valley" is a strong signal for Q3 about cross-cultural variation. Use `state triage` (which scores title-keyword relevance against the brief) for a structured assessment after all rounds complete. This is an estimate — the readers will do the deep coverage assessment later.
 
-**Providers:** `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `exa`, `gensee`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
+**Providers:** `semantic_scholar`, `openalex`, `arxiv`, `pubmed`, `biorxiv`, `github`, `reddit`, `tavily`, `perplexity`, `linkup`, `exa`, `gensee`, `hn`, `crossref`, `core`, `yfinance`, `edgar`, `opencitations`, `dblp`
 
 Citation traversal (Semantic Scholar, PubMed only) — `--compact` and `--brief-keywords` apply here too:
 ```
@@ -459,12 +459,14 @@ After completing all search rounds, triage, and downloads, return a **compact JS
 
 ### Initial mode manifest
 
-The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `gensee_available`, `exa_available`, and `content_validation`:
+The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `perplexity_available`, `linkup_available`, `gensee_available`, `exa_available`, and `content_validation`:
 
 ```json
 {
   "mode": "initial",
   "tavily_available": true,
+  "perplexity_available": true,
+  "linkup_available": true,
   "gensee_available": true,
   "exa_available": true,
   "searches_run": 18,
