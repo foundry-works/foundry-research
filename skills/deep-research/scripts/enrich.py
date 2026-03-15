@@ -95,6 +95,8 @@ def main() -> None:
 
     results = []
     errors = []
+    stats = {"attempted": len(args.doi), "skipped": 0, "crossref_success": 0,
+             "openalex_fallback": 0, "s2_fallback": 0, "failed": 0}
 
     # Dedup DOIs (preserve order and parallel source_id alignment)
     seen_dois: set[str] = set()
@@ -116,7 +118,8 @@ def main() -> None:
             # Skip already-enriched sources unless --force
             if source_id and args.session_dir and not args.force:
                 if _is_already_enriched(source_id, metadata_dir):
-                    log(f"Already enriched {source_id}, skipping (use --force to re-fetch)")
+                    log(f"Already enriched {source_id} (Crossref), skipping (use --force to re-fetch)")
+                    stats["skipped"] += 1
                     continue
 
             # Check cascade wall-clock deadline
@@ -128,14 +131,23 @@ def main() -> None:
             try:
                 data = _fetch_metadata_cascade(doi, clients, args.mailto)
                 if data:
+                    provider = data.get("_provider", "unknown")
+                    if provider == "crossref":
+                        stats["crossref_success"] += 1
+                    elif provider == "openalex":
+                        stats["openalex_fallback"] += 1
+                    elif provider == "semantic_scholar":
+                        stats["s2_fallback"] += 1
                     # Merge into existing source metadata if source_id provided
                     if source_id and args.session_dir:
                         _merge_into_source(data, source_id, metadata_dir)
                         data["merged_into"] = source_id
                     results.append(data)
                 else:
+                    stats["failed"] += 1
                     errors.append(f"No data found for DOI: {doi} (all providers failed)")
             except Exception as e:
+                stats["failed"] += 1
                 log(f"Failed to enrich {doi}: {e}", level="error")
                 errors.append(f"Error for {doi}: {e}")
     finally:
@@ -148,9 +160,11 @@ def main() -> None:
 
     # Always include errors in response — even on partial success
     if results:
-        success_response(results, total_results=len(results), errors=errors)
+        success_response(results, total_results=len(results), errors=errors,
+                         enrichment_stats=stats)
     else:
-        error_response(errors, partial_results=results, error_code="enrichment_failed")
+        error_response(errors, partial_results=results, error_code="enrichment_failed",
+                       enrichment_stats=stats)
 
 
 def _create_clients(session_dir: str, user_agent: str, crossref_rate: float, openalex_rate: float) -> dict:
@@ -174,17 +188,24 @@ def _create_clients(session_dir: str, user_agent: str, crossref_rate: float, ope
 
 
 def _is_already_enriched(source_id: str, metadata_dir: str) -> bool:
-    """Check if a source already has complete metadata from a known provider."""
+    """Check if a source already has Crossref-specific enrichment.
+
+    Sources populated by Semantic Scholar or OpenAlex have basic fields (title, authors,
+    year, venue) but lack Crossref-specific data: volume, issue, pages, retraction status,
+    and authoritative venue names. Only skip if Crossref has already contributed.
+    """
     existing = read_source_metadata(metadata_dir, source_id)
     if not existing:
         return False
-    # Consider enriched if it has title, authors, year, and venue from a real provider
-    has_title = bool(existing.get("title"))
-    has_authors = bool(existing.get("authors"))
-    has_year = bool(existing.get("year"))
-    has_venue = bool(existing.get("venue"))
-    has_provider = existing.get("provider", "") in ("crossref", "openalex", "semantic_scholar")
-    return has_title and has_authors and has_year and has_venue and has_provider
+    # Require that Crossref specifically has enriched this source — not just any provider.
+    # S2/OpenAlex fill title/authors/year/venue but miss volume/issue/pages/retraction.
+    enriched_by = existing.get("enriched_by", [])
+    if isinstance(enriched_by, list) and "crossref" in enriched_by:
+        return True
+    # Legacy check: if provider itself is crossref, it came from Crossref originally
+    if existing.get("provider") == "crossref":
+        return True
+    return False
 
 
 def _fetch_metadata_cascade(doi: str, clients: dict, mailto: str | None = None) -> dict | None:
@@ -229,6 +250,15 @@ def _merge_into_source(enrichment_data: dict, source_id: str, metadata_dir: str)
 
     # Merge with deterministic precedence
     merged = merge_metadata(existing, normalized)
+
+    # Track which providers have enriched this source
+    enriched_by = merged.get("enriched_by", [])
+    if not isinstance(enriched_by, list):
+        enriched_by = []
+    if provider not in enriched_by:
+        enriched_by.append(provider)
+    merged["enriched_by"] = enriched_by
+
     write_source_metadata(metadata_dir, source_id, merged)
     log(f"Merged {provider} metadata into {source_id}")
 

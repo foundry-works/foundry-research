@@ -214,6 +214,15 @@ def _fetch_pmids(client, pmids, api_key) -> dict:
 
 def _build_query(query, args):
     """Build the full ESearch query with year range and type filters."""
+    # Warn when query has 5+ space-separated terms without Boolean operators.
+    # PubMed ANDs every token — over-specified queries return 0 results.
+    terms = query.strip().split()
+    has_boolean = any(t.upper() in ("AND", "OR", "NOT") for t in terms)
+    has_brackets = "(" in query or "[" in query
+    if len(terms) >= 5 and not has_boolean and not has_brackets:
+        log(f"PubMed query has {len(terms)} terms with no Boolean operators — "
+            f"likely to return 0 results. Use 2-3 core terms with OR groups: "
+            f'e.g., \'"term1" AND (term2 OR term3 OR term4)\'', level="warn")
     return _apply_filters(query, args)
 
 

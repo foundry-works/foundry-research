@@ -36,10 +36,27 @@ def add_arguments(parser) -> None:
         dest="sort",
         help="Sort order, e.g. cited_by_count:desc or publication_date:desc",
     )
+    parser.add_argument(
+        "--cited-by",
+        default=None,
+        dest="cited_by",
+        help="DOI or OpenAlex Work ID — return papers that cite this work (forward citations)",
+    )
+    parser.add_argument(
+        "--references",
+        default=None,
+        help="DOI or OpenAlex Work ID — return papers cited by this work (backward references)",
+    )
 
 
 def search(args) -> dict:
     """Search OpenAlex works and return a JSON envelope dict."""
+    # Citation traversal modes
+    cited_by = getattr(args, "cited_by", None)
+    references = getattr(args, "references", None)
+    if cited_by or references:
+        return _citation_traversal(args, cited_by=cited_by, references=references)
+
     query = getattr(args, "query", None)
     if not query:
         return error_response(["--query is required for openalex"], error_code="missing_query")
@@ -133,6 +150,124 @@ def search(args) -> dict:
     except Exception as e:
         log(f"OpenAlex search failed: {e}", level="error")
         return error_response([f"OpenAlex search failed: {e}"], error_code="provider_error")
+    finally:
+        http.close()
+
+
+def _resolve_openalex_id(identifier: str, http, headers: dict, params_base: dict) -> str | None:
+    """Resolve a DOI or OpenAlex ID to an OpenAlex Work ID (W-prefixed).
+
+    Accepts: DOI (10.xxx or DOI:10.xxx), OpenAlex ID (W1234 or https://openalex.org/W1234),
+    or Semantic Scholar hex ID (ignored — returns None).
+    """
+    identifier = identifier.strip()
+
+    # Already an OpenAlex ID
+    if identifier.startswith("W") and identifier[1:].isdigit():
+        return identifier
+    if identifier.startswith("https://openalex.org/W"):
+        return identifier.split("/")[-1]
+
+    # DOI — look up via OpenAlex
+    doi = identifier
+    if doi.startswith("DOI:"):
+        doi = doi[4:]
+    if "/" in doi:
+        url = f"{BASE_URL}/works/https://doi.org/{doi}"
+        try:
+            resp = http.get(url, params=params_base, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                oa_id = data.get("id", "")
+                if oa_id:
+                    return oa_id.split("/")[-1]  # extract W-ID from URL
+        except Exception as e:
+            log(f"OpenAlex DOI lookup failed for {doi}: {e}", level="warn")
+    return None
+
+
+def _citation_traversal(args, cited_by: str | None = None, references: str | None = None) -> dict:
+    """Citation traversal via OpenAlex filter API.
+
+    - cited_by: return papers that cite the given work (forward citations)
+      Uses filter=cites:WORK_ID
+    - references: return papers cited by the given work (backward references)
+      Uses filter=cited_by:WORK_ID
+    """
+    identifier = cited_by or references
+    limit = min(getattr(args, "limit", 10), 200)
+    session_dir = getattr(args, "session_dir", None) or __import__("tempfile").mkdtemp(prefix="openalex_")
+
+    config = get_config(session_dir)
+    api_key = config.get("openalex_api_key")
+    http = create_session(session_dir)
+
+    headers: dict[str, str] = {}
+    params_base: dict[str, str] = {}
+    if api_key:
+        headers["api_key"] = api_key
+    else:
+        params_base["mailto"] = _DEFAULT_MAILTO
+
+    try:
+        # Resolve identifier to OpenAlex Work ID
+        work_id = _resolve_openalex_id(identifier, http, headers, params_base)
+        if not work_id:
+            return error_response(
+                [f"Could not resolve '{identifier}' to an OpenAlex Work ID. "
+                 "Pass a DOI (e.g., 10.1234/abc) or OpenAlex ID (e.g., W1234567890)."],
+                error_code="resolve_failed",
+            )
+
+        # Build filter: cites for forward citations, cited_by for backward references
+        if cited_by:
+            filter_str = f"cites:{work_id}"
+            mode = "cited_by"
+        else:
+            filter_str = f"cited_by:{work_id}"
+            mode = "references"
+
+        params = {
+            **params_base,
+            "filter": filter_str,
+            "per_page": limit,
+            "sort": "cited_by_count:desc",
+            "cursor": "*",
+        }
+
+        # Apply additional filters
+        extra_filters = _build_filters(args)
+        if extra_filters:
+            params["filter"] = ",".join([filter_str] + extra_filters)
+
+        url = f"{BASE_URL}/works"
+        log(f"OpenAlex {mode}: {identifier} → {work_id}")
+        resp = http.get(url, params=params, headers=headers)
+
+        if resp.status_code != 200:
+            return _handle_error(resp)
+
+        data = resp.json()
+        meta = data.get("meta", {})
+        total_results = meta.get("count", 0)
+        raw_results = data.get("results", [])
+        results = [_normalize_work(work) for work in raw_results]
+
+        # Apply min_citations filter if specified
+        min_citations = getattr(args, "min_citations", None)
+        if min_citations:
+            results = [r for r in results if (r.get("citation_count") or 0) >= min_citations]
+
+        return success_response(
+            results,
+            total_results=total_results,
+            has_more=bool(meta.get("next_cursor")),
+            mode=mode,
+            paper_id=identifier,
+        )
+    except Exception as e:
+        log(f"OpenAlex citation traversal failed: {e}", level="error")
+        return error_response([f"OpenAlex citation traversal failed: {e}"], error_code="provider_error")
     finally:
         http.close()
 

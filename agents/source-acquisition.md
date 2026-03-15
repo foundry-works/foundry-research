@@ -73,7 +73,7 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 - **`--cited-by`** (forward) — papers that cited it. Recency-biased. For foundational papers (200+ citations), use `--min-citations N` to filter noise.
 - **For literature review topics** (systematic reviews, state-of-the-field, measurement/instrument research), citation chasing should account for **30-50% of total search effort.** These topics have well-connected citation networks where traversal finds more relevant sources per search than keyword queries. A session with 20 searches should have 6-10 citation traversals.
 - **Paper ID format:** Pass the S2 paper ID (40-char hex, visible in the `id` field of Semantic Scholar results) or a DOI. Raw DOIs like `10.1234/abc` are auto-prefixed to `DOI:10.1234/abc` by the search CLI. S2 hex IDs and already-prefixed identifiers (`DOI:...`, `ARXIV:...`) pass through unchanged.
-- **Fallback tree** when citation traversal returns 0: retry `--cited-by` without `--min-citations` → try `--references` → fall back to keyword search with paper's exact title
+- **Fallback tree** when citation traversal returns 0: retry `--cited-by` without `--min-citations` → try `--references` → try `--provider openalex --cited-by DOI:...` (OpenAlex has broader coverage for older papers and social science literature) → fall back to keyword search with paper's exact title
 - **CORE title lookups:** When searching CORE by exact paper title (citation chasing fallback), always pass `--title-mode`. CORE's full-text tokenizer chokes on colons, hyphens, and long subtitles — `--title-mode` strips these before querying, improving hit rate from ~50% to ~90%.
 
 **Skip citation chasing** if: the topic is non-academic (product comparisons, financial analysis) or round 1 found no papers with >50 citations.
@@ -148,6 +148,7 @@ Different providers need different query styles to return good results. Semantic
 
 - **PubMed (psychology/cognitive science):** Construct at least 2 queries using MeSH-adjacent terms rather than reusing the same keywords from Semantic Scholar. For example, for "uncanny valley" research: `"human-robot interaction" AND ("emotional response" OR "affective response")` or `"humanoid" AND ("perception" OR "eeriness")`. PubMed interprets multi-word phrases as MeSH lookups — unrecognized phrases return empty results, so use established terminology.
 - **PubMed (biomedical):** Use MeSH headings when available: `"Cognitive Behavioral Therapy"[MeSH] AND "Depression"[MeSH]`. When unsure of exact MeSH terms, use simpler phrases and let PubMed's automatic term mapping handle it.
+- **PubMed query complexity rule:** Never send 5+ space-separated terms to PubMed without Boolean operators. PubMed ANDs every space-separated token — a query like `uncanny valley fMRI EEG brain neuroimaging` requires ALL six terms to appear, which zeros out most result sets because non-MeSH tokens have no index entries. Use 2-3 core terms with explicit OR groups instead: `"uncanny valley" AND (fMRI OR EEG OR neuroimaging)`. If you need both a topic term and multiple modality/method terms, group the modalities with OR. This is the #1 cause of zero-result PubMed searches in practice.
 - **CORE:** Best for finding open-access full-text versions. Use `--title-mode` for exact title lookups. Less useful for exploratory keyword searches.
 
 ### Provider distribution self-check
@@ -381,7 +382,7 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
   "status": "ok",
   "results": {
     "sources": [
-      {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "provider": "semantic_scholar", "keyword_hits": 3}
+      {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "content_chars": 48230, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "provider": "semantic_scholar", "keyword_hits": 3}
     ],
     "summary": {"total": 89, "high_priority": 15, "medium_priority": 15, "skip_quality": 4, "brief_keywords_used": 8},
     "top_sources": [

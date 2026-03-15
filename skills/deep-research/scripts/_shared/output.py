@@ -45,7 +45,7 @@ def success_response(results: list | dict, total_results: int | None = None, **e
 
 
 def error_response(errors: list[str], partial_results: list | dict | None = None,
-                   error_code: str | None = None) -> str:
+                   error_code: str | None = None, **extra) -> str:
     """Print JSON error envelope to stdout and exit.
 
     Envelope: {"status": "error", "results": ..., "errors": [...], "total_results": N, "error_code": ...}
@@ -75,6 +75,7 @@ def error_response(errors: list[str], partial_results: list | dict | None = None
     }
     if error_code:
         envelope["error_code"] = error_code
+    envelope.update(extra)
 
     output = json.dumps(envelope, ensure_ascii=False)
     print(output)

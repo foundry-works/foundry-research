@@ -1046,7 +1046,7 @@ def _auto_enrich_crossref(doi: str, source_id: str, client, metadata_dir: str) -
         url = f"https://api.crossref.org/works/{doi}"
         resp = client.get(url, timeout=(15, 15))
         if resp.status_code != 200:
-            log(f"Crossref enrichment skipped: HTTP {resp.status_code} for {doi}", level="debug")
+            log(f"Crossref auto-enrichment failed: HTTP {resp.status_code} for {doi}", level="warn")
             return
 
         data = resp.json()
@@ -1067,7 +1067,7 @@ def _auto_enrich_crossref(doi: str, source_id: str, client, metadata_dir: str) -
         write_source_metadata(metadata_dir, source_id, merged)
         log(f"Auto-enriched {source_id} from Crossref (doi: {doi})")
     except Exception as e:
-        log(f"Auto-enrichment failed for {source_id}: {e}", level="debug")
+        log(f"Auto-enrichment failed for {source_id}: {e}", level="warn")
 
 
 def _build_metadata(args, source_id: str) -> dict:

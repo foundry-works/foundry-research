@@ -17,6 +17,7 @@ from providers import available_providers, get_provider  # noqa: E402
 # Flags that substitute for --query (provider -> set of flag dest names)
 _IDENTIFIER_FLAGS = {
     "semantic_scholar": {"cited_by", "references", "recommendations", "author"},
+    "openalex": {"cited_by", "references"},
     "reddit": {"post_url", "post_id", "browse"},
     "hn": {"story_id"},
     "biorxiv": {"doi", "list_categories"},

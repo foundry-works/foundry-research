@@ -2022,6 +2022,15 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
         elif isinstance(quality, (int, float)) and quality < 0.5:
             quality_flag = "low_score"
 
+        # Stat content file for content_chars (enables content-depth-aware dispatch)
+        content_chars = None
+        if has_content and s.get("content_file"):
+            content_path = os.path.join(session_dir, s["content_file"])
+            try:
+                content_chars = os.path.getsize(content_path)
+            except OSError:
+                pass
+
         scored.append({
             "id": s["id"],
             "title": s.get("title", ""),
@@ -2029,6 +2038,7 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
             "keyword_hits": keyword_hits,
             "score": round(score, 2),
             "has_content": has_content,
+            "content_chars": content_chars,
             "is_read": bool(s.get("is_read")),
             "quality_flag": quality_flag,
             "doi": s.get("doi"),
