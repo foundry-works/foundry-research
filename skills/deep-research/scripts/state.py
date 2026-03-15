@@ -1398,7 +1398,7 @@ def cmd_download_pending(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        """SELECT id, title, doi, url, pdf_url, type, status
+        """SELECT id, title, doi, url, pdf_url, type, status, relevance_score
            FROM sources WHERE session_id = ?
            AND content_file IS NULL AND pdf_file IS NULL
            ORDER BY id""",
@@ -1410,6 +1410,8 @@ def cmd_download_pending(args):
     sources_dir = os.path.join(args.session_dir, "sources")
     pending = []
     skipped_on_disk = 0
+    skipped_irrelevant = 0
+    min_relevance = getattr(args, "min_relevance", None)
     for r in rows:
         sid_val = r["id"]
         # Defense in depth: check disk even when DB says no content
@@ -1420,6 +1422,15 @@ def cmd_download_pending(args):
         if on_disk:
             skipped_on_disk += 1
             continue
+
+        # Skip sources with relevance_score at or below the floor.
+        # Sources with NULL relevance_score (not yet scored) are kept —
+        # the filter only blocks sources that were scored and found irrelevant.
+        if min_relevance is not None:
+            score = r["relevance_score"]
+            if score is not None and score <= min_relevance:
+                skipped_irrelevant += 1
+                continue
 
         item = {"source_id": sid_val, "title": r["title"], "type": r["type"] or "academic"}
         if r["doi"]:
@@ -1432,6 +1443,8 @@ def cmd_download_pending(args):
 
     if skipped_on_disk:
         log(f"{skipped_on_disk} sources already on disk, skipping")
+    if skipped_irrelevant:
+        log(f"{skipped_irrelevant} sources skipped (relevance_score <= {min_relevance})")
 
     # Gap-aware prioritization: boost sources whose titles match open gap terms
     if getattr(args, "prioritize_gaps", False) and pending:
@@ -1444,7 +1457,7 @@ def cmd_download_pending(args):
     max_batches = getattr(args, "max_batches", None)
 
     if args.auto_download and not pending:
-        success_response({
+        resp = {
             "downloaded": 0,
             "failed": 0,
             "failed_sources": [],
@@ -1452,7 +1465,10 @@ def cmd_download_pending(args):
             "batches_run": 0,
             "remaining": 0,
             "message": "nothing_pending",
-        })
+        }
+        if skipped_irrelevant:
+            resp["skipped_irrelevant"] = skipped_irrelevant
+        success_response(resp)
         return
 
     if args.auto_download and pending:
@@ -1793,12 +1809,27 @@ def cmd_audit(args):
     total_abstract_only = len(no_content) + len(abstract_only)
     web_sources = sum(1 for s in sources if (s.get("type") or "").lower() == "web")
 
+    # Detect downloaded sources with null content_file — these are invisible
+    # to readers and audit despite having files on disk
+    downloaded_no_content_file = []
+    for s in sources:
+        if (s.get("status") == "downloaded"
+                and not s.get("content_file")
+                and s["id"] in downloaded):
+            downloaded_no_content_file.append(s["id"])
+
     # Build warnings
     warnings = []
     for sid_val in degraded_unread:
         warnings.append(f"{sid_val} has degraded PDF quality — do not claim deep reading")
     for sid_val in mismatched:
         warnings.append(f"{sid_val} has mismatched content — downloaded PDF may be wrong paper")
+    if downloaded_no_content_file:
+        warnings.append(
+            f"{len(downloaded_no_content_file)} source(s) have status='downloaded' but null "
+            f"content_file despite on-disk files: {', '.join(downloaded_no_content_file[:10])}. "
+            f"Run 'state sync-files' to fix."
+        )
     for sq in sparse_questions:
         warnings.append(f'"{sq["question"]}" has insufficient coverage ({sq["finding_count"]} findings)')
     if no_content:
@@ -1846,6 +1877,7 @@ def cmd_audit(args):
         "open_gaps": len(gaps),
         "gaps": [{"id": g["id"], "text": g["text"], "question": g.get("question"), "status": g["status"]} for g in gaps],
         "sparse_questions": sparse_questions,
+        "downloaded_no_content_file": downloaded_no_content_file,
         "methodology": {
             "deep_reads": deep_reads,
             "abstract_only": total_abstract_only,
@@ -2668,6 +2700,63 @@ def cmd_sync_files(args):
     })
 
 
+# ---------------------------------------------------------------------------
+# cleanup-orphans
+# ---------------------------------------------------------------------------
+
+def cmd_cleanup_orphans(args):
+    """Remove metadata files on disk that have no matching source in state.db.
+
+    After deduplication removes sources from the database, their metadata JSON
+    files remain on disk. This command compares sources/metadata/src-NNN.json
+    files against source IDs in state.db and deletes orphans.
+    """
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    metadata_dir = os.path.join(args.session_dir, "sources", "metadata")
+    if not os.path.isdir(metadata_dir):
+        conn.close()
+        success_response({
+            "removed": 0,
+            "kept": 0,
+            "message": "No sources/metadata/ directory found"
+        })
+        return
+
+    # Get all source IDs in state.db
+    rows = conn.execute(
+        "SELECT id FROM sources WHERE session_id = ?", (sid,)
+    ).fetchall()
+    conn.close()
+    db_ids = {row["id"] for row in rows}
+
+    # Scan metadata files on disk
+    removed = []
+    kept = 0
+    for fname in os.listdir(metadata_dir):
+        if not fname.endswith(".json"):
+            continue
+        source_id = fname[:-5]  # strip .json
+        if source_id not in db_ids:
+            filepath = os.path.join(metadata_dir, fname)
+            try:
+                os.remove(filepath)
+                removed.append(source_id)
+                log(f"Removed orphan: {fname}")
+            except OSError as e:
+                log(f"Failed to remove {fname}: {e}")
+        else:
+            kept += 1
+
+    success_response({
+        "removed": len(removed),
+        "removed_ids": removed[:20],  # cap list to avoid huge output
+        "kept": kept,
+        "db_sources": len(db_ids),
+    })
+
+
 def cmd_enrich_metadata(args):
     """Enrich sources with missing DOI/author/venue from Crossref title search.
 
@@ -2991,6 +3080,9 @@ def main():
     p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: min(480, max(300, batch*30)))")
     p.add_argument("--prioritize-gaps", action="store_true", default=False, help="Reorder pending sources so gap-relevant ones download first")
     p.add_argument("--max-batches", type=int, default=None, help="Loop up to N batch iterations (re-querying pending between each). Returns aggregate totals with batches_run field.")
+    p.add_argument("--min-relevance", type=float, default=None,
+                   help="Skip sources with relevance_score at or below this value (e.g. 0.0). "
+                        "Sources with no score (NULL) are still downloaded. Default: no filter.")
     p.add_argument("--session-dir", **_sd)
 
     # audit
@@ -3029,6 +3121,10 @@ def main():
 
     # sync-files
     p = sub.add_parser("sync-files")
+    p.add_argument("--session-dir", **_sd)
+
+    # cleanup-orphans
+    p = sub.add_parser("cleanup-orphans")
     p.add_argument("--session-dir", **_sd)
 
     args = parser.parse_args()
@@ -3075,6 +3171,7 @@ def main():
         "recover-failed": cmd_recover_failed,
         "enrich-metadata": cmd_enrich_metadata,
         "sync-files": cmd_sync_files,
+        "cleanup-orphans": cmd_cleanup_orphans,
         "manifest": cmd_manifest,
     }
 

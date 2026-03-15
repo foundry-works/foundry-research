@@ -269,16 +269,44 @@ def check_content_mismatch(
         mismatched = True
 
     # Brief-keyword gate: if the research brief's domain-specific keywords
-    # don't appear anywhere in the first 2000 chars, the paper is likely
+    # don't appear anywhere in the first 5000 chars, the paper is likely
     # off-topic — even if title words matched (common domain words cause
     # false passes, e.g. "uncanny valley" in geology vs. psychology).
+    # Window is 5000 chars (not 2000) because many PDFs have long preambles
+    # (copyright notices, author affiliations, journal headers) that push
+    # domain content past a shorter window.
     # Only flags when title match is also weak to avoid false positives
     # on genuinely relevant papers with unusual introductions.
+    brief_hits = 0
     if (not mismatched and brief_keywords and title_hits < 3):
-        text_head = text[:2000].lower()
+        text_head = text[:5000].lower()
         brief_hits = sum(1 for kw in brief_keywords if kw.lower() in text_head)
         if brief_hits == 0:
             mismatched = True
+
+    # Title-to-content comparison: extract the actual title from the first
+    # few lines of the PDF and compare against the expected title from state.db.
+    # A title mismatch is the strongest signal of wrong content — the PDF cascade
+    # may have fetched a valid PDF at the right URL, but the content is a
+    # completely different paper.
+    if not mismatched and title and title_words and title_hits < 2:
+        # Extract candidate title from first 500 chars (before abstract/intro)
+        first_block = text[:500]
+        first_lines = [ln.strip() for ln in first_block.split("\n") if ln.strip()]
+        if first_lines:
+            # The actual title is typically the first non-empty line(s)
+            candidate_title = first_lines[0]
+            if len(first_lines) > 1 and len(first_lines[0]) < 30:
+                # Short first line might be a journal name — try combining first two
+                candidate_title = first_lines[0] + " " + first_lines[1]
+            candidate_kws = _extract_keywords(candidate_title)
+            expected_kws = set(title_words)
+            if candidate_kws and expected_kws:
+                overlap = sum(1 for w in candidate_kws if w in expected_kws)
+                # If the extracted title shares zero keywords with the expected
+                # title and brief keywords are also absent, it's a mismatch
+                if overlap == 0 and (not brief_keywords or brief_hits == 0):
+                    mismatched = True
 
     reason = ""
     if mismatched:
@@ -290,7 +318,7 @@ def check_content_mismatch(
         if abstract_overlap is not None:
             parts.append(f"abstract keyword overlap {abstract_overlap:.0%}")
         if brief_keywords:
-            parts.append(f"0/{len(brief_keywords)} brief keywords in first 2000 chars")
+            parts.append(f"{brief_hits}/{len(brief_keywords)} brief keywords in first 5000 chars")
         reason = f"content may be from wrong paper: {', '.join(parts)}"
 
     return {

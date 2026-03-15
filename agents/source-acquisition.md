@@ -135,6 +135,20 @@ After each search round, spot-check result titles against these domain terms. If
 - **General technical:** tavily + GitHub; Reddit/HN for community perspective
 - **When unsure:** search at least 3 providers including one web source
 
+### Domain-specific query construction
+
+Different providers need different query styles to return good results. Semantic Scholar handles natural-language keyword queries well, but PubMed needs MeSH-style structured terms to work effectively. When the brief's domain calls for a specific provider, adapt your queries:
+
+- **PubMed (psychology/cognitive science):** Construct at least 2 queries using MeSH-adjacent terms rather than reusing the same keywords from Semantic Scholar. For example, for "uncanny valley" research: `"human-robot interaction" AND ("emotional response" OR "affective response")` or `"humanoid" AND ("perception" OR "eeriness")`. PubMed interprets multi-word phrases as MeSH lookups — unrecognized phrases return empty results, so use established terminology.
+- **PubMed (biomedical):** Use MeSH headings when available: `"Cognitive Behavioral Therapy"[MeSH] AND "Depression"[MeSH]`. When unsure of exact MeSH terms, use simpler phrases and let PubMed's automatic term mapping handle it.
+- **CORE:** Best for finding open-access full-text versions. Use `--title-mode` for exact title lookups. Less useful for exploratory keyword searches.
+
+### Provider distribution self-check
+
+Before building your manifest, check provider distribution with `state sources --providers`. If any single provider exceeds 70% of sources, run 2-3 additional searches on underrepresented providers before returning. This is guidance, not a hard gate — if a provider dominates because it genuinely has the best coverage for the topic (e.g., arXiv for ML papers), that's acceptable. But for interdisciplinary topics (psychology + robotics, medicine + AI), concentration usually means the agent defaulted to the easiest provider rather than constructing effective queries for others.
+
+**Why this matters:** Provider concentration creates systematic blind spots. Each provider indexes different literature — Semantic Scholar has broad coverage but weak indexing of clinical psychology journals; PubMed has deep biomedical coverage but requires structured queries to work well. A 73% Semantic Scholar concentration for a psychology topic means PubMed's clinical and behavioral literature was undersampled.
+
 ---
 
 ## LLM Relevance Scoring
@@ -163,7 +177,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
+1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
 4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 15 total attempts across all channels, and auto-skips any channel that has 0 successes after 5 attempts. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
@@ -307,8 +321,8 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state manifest --mode gap --top 30       # gap-mode manifest
 
 # Downloads
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps  # gap mode
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0
+{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps --min-relevance 0.0  # gap mode
 {cli_dir}/state download-pending           # list sources without content (dry run)
 
 # Triage and sources — use during search rounds for coverage assessment
@@ -372,7 +386,7 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 ```json
 {
   "status": "ok",
-  "results": {"downloaded": 12, "failed": 3, "failed_sources": ["src-044", "src-071", "src-089"], "batch_size": 15, "batches_run": 3, "remaining": 0}
+  "results": {"downloaded": 12, "failed": 3, "failed_sources": ["src-044", "src-071", "src-089"], "batch_size": 15, "batches_run": 3, "remaining": 0, "skipped_irrelevant": 5}
 }
 ```
 

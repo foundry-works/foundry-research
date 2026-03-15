@@ -36,6 +36,8 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 3. **Delegate brief writing to the brief-writer agent.** Spawn a `brief-writer` subagent (Opus) with the user's query, assumption surfacing results, and session directory path. The agent generates 3-7 research questions including at least one tradeoffs question (what would experts argue about?) and one adversarial question (what's wrong with the obvious answer?). It writes `brief.json` to the session directory. After it returns, load the brief: `${CLAUDE_SKILL_DIR}/state set-brief --from-json brief.json`.
 
    **Why delegate:** The brief is the highest-leverage artifact in the pipeline — everything downstream (searches, source triage, reading priority, synthesis) flows from the questions. Descriptive-only questions produce catalog evidence that lists options without helping the reader decide. The brief-writer agent has one job and no time pressure, so it thinks carefully about what questions will surface strategic tensions, not just facts. See `agents/brief-writer.md` for the full prompt.
+
+   **After setting the brief, write a journal entry** documenting: the research questions chosen and why, expected source landscape (which providers, what coverage challenges — e.g., paywall-heavy field, recency-dependent questions), and your initial search strategy. This is milestone 1 of 5 — it anchors the session's direction so compressed contexts can recover it. Keep it to 3-5 lines.
 4. **Delegate source acquisition to the `source-acquisition` agent.** Spawn a `source-acquisition` subagent (Opus, foreground) with:
    - The session directory path (absolute)
    - The CLI directory path (`${CLAUDE_SKILL_DIR}`)
@@ -193,6 +195,7 @@ summary --write-handoff           # write full summary to synthesis-handoff.json
 download-pending                  # list sources without on-disk content
 download-pending --auto-download  # download pending (--batch-size 15, --parallel 3)
                                   # loop until response "remaining": 0
+                                  # --min-relevance 0.0 skips sources scored as irrelevant
 triage                            # rank sources by citation count × title relevance to brief
 triage --top 30                   # adjust how many sources to mark high+medium priority
 recover-failed                    # retry failed high-priority sources via CORE, Tavily, DOI landing page
@@ -201,6 +204,7 @@ audit                             # pre-report coverage & quality check
 audit --brief                     # counts only (no ID arrays except degraded_unread/reader_validated/mismatched)
 audit --strict                    # exit non-zero if warnings found
 enrich-metadata                   # fill missing DOI/author/venue from Crossref (run before synthesis)
+cleanup-orphans                   # remove metadata files on disk with no matching source in state.db
 ```
 
 **JSON input:** Pass JSON via `--from-json FILE` (write to a temp file first) or `--from-stdin` (pipe JSON via stdin). There is no `--json` flag — inline JSON breaks on special characters in titles/abstracts. Example: `echo '{"scope":"..."}' | ${CLAUDE_SKILL_DIR}/state set-brief --from-stdin`

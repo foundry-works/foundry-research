@@ -164,6 +164,16 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
         update["quality"] = result["quality"]
 
     if not update:
+        # Check if files exist on disk that we didn't pick up — this catches
+        # edge cases where download succeeded but result dict lacks the paths
+        if source_id:
+            sources_dir = os.path.join(session_dir, "sources")
+            md_exists = os.path.exists(os.path.join(sources_dir, f"{source_id}.md"))
+            pdf_exists = os.path.exists(os.path.join(sources_dir, f"{source_id}.pdf"))
+            if md_exists or pdf_exists:
+                log(f"WARNING: {source_id} has on-disk files "
+                    f"(md={md_exists}, pdf={pdf_exists}) but sync found "
+                    f"nothing to update — result dict may be missing paths")
         return True  # nothing to sync is not a failure
 
     resp = call_state(
@@ -778,10 +788,29 @@ def _early_mismatch_check(pdf_path: str, result: dict) -> bool:
     # Brief-keyword gate: catch cross-domain mismatches (e.g., psychology paper
     # returning finance content) even when title words partially match due to
     # shared generic terms. Only flags when title match is also weak.
+    # Uses full first-page text (not truncated) since first-page extraction
+    # already scopes to page 1.
+    brief_hits = 0
     if brief_keywords and title_hits < 3:
         brief_hits = sum(1 for kw in brief_keywords if kw.lower() in first_page_lower)
         if brief_hits == 0:
             return True
+
+    # Title-to-content comparison: extract the actual title from the first
+    # lines and compare against expected. Catches PDFs where the content is
+    # a completely different paper that happens to share some generic terms.
+    if title and title_words and title_hits < 2:
+        first_lines = [ln.strip() for ln in first_page[:500].split("\n") if ln.strip()]
+        if first_lines:
+            candidate_title = first_lines[0]
+            if len(first_lines) > 1 and len(first_lines[0]) < 30:
+                candidate_title = first_lines[0] + " " + first_lines[1]
+            candidate_kws = _extract_keywords(candidate_title)
+            expected_kws = set(title_words)
+            if candidate_kws and expected_kws:
+                overlap = sum(1 for w in candidate_kws if w in expected_kws)
+                if overlap == 0 and (not brief_keywords or brief_hits == 0):
+                    return True
 
     return False
 
