@@ -46,18 +46,16 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
    The agent handles the entire search-to-download pipeline: broad searches, citation chasing, provider diversity, query refinement, triage, downloads, and recovery. It writes journal entries and updates state.db throughout. It returns a compact JSON manifest with source counts, provider distribution, top papers, triage tiers, download results, coverage assessment per question, and any gaps logged.
 
-   **Include this reminder in every acquisition handoff prompt:** "Reminder: set `timeout: 600000` on all download-pending and recover-failed Bash calls. The default 120-second Bash timeout is too short for batch downloads with fallback cascades. If a command is auto-backgrounded despite your timeout, do not retry — note the background task ID and reconcile disk state before building the manifest." **Why reinforce here:** The agent prompt already has this guidance, but the orchestrator's handoff is the last touchpoint before the agent runs. Reinforcing it here costs nothing and addresses the case where the agent's own context gets compressed before reaching the download phase.
+   **Download commands are designed to fit within the default Bash timeout.** `download-pending --auto-download` defaults to batch-size 5 with an internal subprocess timeout of ~75 seconds — no timeout override needed. The agent calls it in a loop until `remaining: 0`. This eliminates the previous failure mode where large batches exceeded the 120-second Bash timeout and got auto-backgrounded.
 
    **Why delegate:** Search is the biggest token sink in the pipeline — each search returns 2-80KB of JSON, and with 15-20 searches plus repeated `state sources` queries, search-phase data accounts for ~60% of your input tokens. The source-acquisition agent absorbs all raw search data in its own context and returns only a ~500-token manifest. See `agents/source-acquisition.md` for the full prompt.
 
    **What you get back:** A manifest telling you how many sources were found, downloaded, and triaged, which brief questions have strong vs. thin coverage, and any gaps already logged. Everything else is on disk (state.db, journal.md, sources/). You never see raw search JSON.
 
-   **4b. Validate the acquisition manifest before proceeding.** The acquisition agent runs in a separate context and may have encountered backgrounded commands or state sync issues. Before moving to triage and reading:
-   1. Run `${CLAUDE_SKILL_DIR}/state download-pending` (dry run) — check that the `remaining` count matches the manifest's claim. If the manifest says `remaining: 0` but the dry run shows 50+ pending, downloads are still settling.
-   2. If the manifest's `downloads.success_note` mentions a discrepancy between state.db and disk, wait 60 seconds and re-check — background tasks from the agent's context may still be completing.
+   **4b. Validate the acquisition manifest before proceeding.** The acquisition agent runs in a separate context. Before moving to triage and reading:
+   1. Run `${CLAUDE_SKILL_DIR}/state download-pending` (dry run) — check that the `remaining` count matches the manifest's claim.
+   2. If the manifest's `downloads.success_note` mentions a discrepancy between state.db and disk, re-check — the agent's loop may not have fully settled.
    3. If background task notifications arrive (you see `<task-notification>` messages), check whether they change the source inventory before proceeding.
-
-   **Why this matters:** The acquisition agent builds its manifest from a point-in-time snapshot. If long-running download commands were auto-backgrounded by the system (exceeding the 120-second Bash default), the manifest may report fewer downloads than are actually in progress. Proceeding immediately means those sources are never read, even if they arrive seconds later.
 
    **If the manifest reports `tavily_available: false`:** Check `perplexity_available`, `linkup_available`, `gensee_available`, and `exa_available`. If any is available, the acquisition agent already used it as the web search fallback — no manual compensation needed. If all five web search providers are down (`tavily_available: false`, `perplexity_available: false`, `linkup_available: false`, `gensee_available: false`, `exa_available: false`), compensate immediately — don't wait for gap-mode:
    1. **Identify web-dependent questions.** Review the brief for questions about recency-dependent topics, emerging technologies, current events, or topics with significant non-academic coverage.
@@ -210,8 +208,9 @@ summary                           # brief + sources + findings + gaps
 summary --compact                 # counts + coverage indicators only (no findings text/source list)
 summary --write-handoff           # write full summary to synthesis-handoff.json, return path + counts
 download-pending                  # list sources without on-disk content
-download-pending --auto-download  # download pending (--batch-size 15, --parallel 3)
-                                  # loop until response "remaining": 0
+download-pending --auto-download  # download pending (--batch-size 5, --parallel 3)
+                                  # call in loop until response "remaining": 0
+                                  # fits within default 120s Bash timeout per call
                                   # --min-relevance 0.0 skips sources scored as irrelevant
 triage                            # rank sources by citation count × title relevance to brief
 triage --top 30                   # adjust how many sources to mark high+medium priority

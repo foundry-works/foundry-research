@@ -18,11 +18,11 @@ These rules prevent the most common token-wasting failure modes. Follow them str
 
 3. **Never read internal Claude files** — Paths under `/tmp/claude-*`, `/home/*/.claude/projects/*/tool-results/`, or `/home/*/.claude/projects/*/tasks/` are internal to the Claude runtime and may be cleared between turns. Run commands in the foreground to get their output directly.
 
-4. **Never background commands — they are irrecoverable.** Don't set `run_in_background: true` on any Bash call. You don't have the TaskOutput tool, so you cannot retrieve background results — they're lost. If a command is slow (e.g., `recover-failed` processing 50 sources, or `download-pending --auto-download` running multi-batch downloads), set a long `timeout` (up to 600000ms) instead. Don't use `sleep N && cat` loops either — all CLI commands here run synchronously and return results directly. Background tasks also leak notifications into the orchestrator's context as noise after you've returned, wasting tokens and creating confusion in the parent conversation.
+4. **Never background commands — they are irrecoverable.** Don't set `run_in_background: true` on any Bash call. You don't have the TaskOutput tool, so you cannot retrieve background results — they're lost. Don't use `sleep N && cat` loops either — all CLI commands here run synchronously and return results directly. Background tasks also leak notifications into the orchestrator's context as noise after you've returned, wasting tokens and creating confusion in the parent conversation.
 
-   **Timeout guidance for slow commands:** `download-pending --auto-download --batch-size 15 --max-batches 3` runs 3 batches with up to 3 fallback passes each. Wall-clock time: 3-8 minutes depending on network conditions and fallback depth. **Always set `timeout: 600000` on the Bash call.** This is the same guidance as `recover-failed` — both commands run multi-minute download cascades. The command output includes a `wall_clock_estimate_seconds` field — set your Bash timeout to at least 2× that value.
+   **Downloads are designed to fit within the default Bash timeout.** `download-pending --auto-download` defaults to batch-size 5 with an internal subprocess timeout of ~75 seconds — the entire call should complete within the default 120-second Bash timeout. Call it in a loop until the response shows `"remaining": 0`. No `--max-batches` or `timeout` override needed. The same applies to `recover-failed` — it processes in small batches by default.
 
-   **If a command is backgrounded despite your timeout setting** (you see "Command running in background with ID: ..."), do NOT retry the same command — retrying creates duplicate downloads racing against the background task, and each retry that also gets backgrounded compounds the problem. Instead: (1) Note the background task ID in your working memory. (2) Continue with other work that doesn't depend on the download results (e.g., content validation on sources already on disk). (3) Before building your manifest, reconcile disk counts against state.db to detect unsettled state (see manifest reconciliation below).
+   **If a command is backgrounded despite this** (you see "Command running in background with ID: ..."), do NOT retry the same command — retrying creates duplicate downloads racing against the background task. Instead: (1) Note the background task ID in your working memory. (2) Continue with other work that doesn't depend on the download results (e.g., content validation on sources already on disk). (3) Before building your manifest, reconcile disk counts against state.db to detect unsettled state (see manifest reconciliation below).
 
 5. **Inspect before retrying** — When a command fails, run it once bare and read the raw output before adjusting. Retrying with different arguments blind wastes 2-5 tool calls per failure and often compounds the original problem (e.g., wrong key path → wrong extraction → wrong retry).
 
@@ -199,22 +199,22 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0` — this loops internally up to 3 iterations, re-querying pending between each batch, and returns a single aggregate response. No manual looping needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue. **Always set `timeout: 600000` on this Bash call** — multi-batch downloads with fallback passes take 3-8 minutes, well beyond the default 2-minute Bash timeout.
+1. Run `state download-pending --auto-download --min-relevance 0.0` in a loop until the response shows `"remaining": 0`. Each call downloads a batch of 5 sources (default) and completes within the default Bash timeout — no timeout override needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
-4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 15 total attempts across all channels, and auto-skips any channel that has 0 successes after 5 attempts. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
+4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 5 attempts per call and auto-skips any channel that has 0 successes after 5 attempts. Call multiple times if needed. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
 
    **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
    - `--min-relevance 0.3` — skips sources whose LLM relevance score is below threshold
    - `--title-keywords <comma-separated>` — derive 5-10 domain-specific terms from the brief's scope/questions and pass them here; sources whose title contains none of these keywords are skipped
    - `--min-citations 30` — adjust the citation threshold as needed
-   - `--max-attempts N` — override the default budget of 15 total recovery attempts (raise for broad topics, lower when time is tight)
+   - `--max-attempts N` — override the default budget of 5 attempts per call (raise for broad topics, lower when time is tight)
 
    Example: `state recover-failed --min-relevance 0.3 --title-keywords "uncanny,valley,perception,humanoid,robot" --min-citations 30`
 
    The response includes `skipped_channels` (channels auto-disabled due to 0% success after 5 tries) and `budget_exhausted` (true if the attempt cap was reached before all eligible sources were tried). If CORE gets skipped, switch to Tavily author-page searches for the remaining high-priority failures using the web search recovery workflow below.
 
-   **`recover-failed` is slow** — it tries multiple download channels per source and can take 3-5 minutes for 20+ sources. Set `timeout: 600000` on the Bash call so it doesn't hit the default 2-minute timeout. If it times out, the agent loses the result and cannot retrieve it (see rule 4).
+   **`recover-failed` processes in small batches** — it tries multiple download channels per source but the internal timeout is capped to fit within the default Bash timeout. If you have many sources to recover, call it multiple times. If a single call seems to stall (unlikely with default batch sizes), set `timeout: 300000` on the Bash call.
 
    If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
 
@@ -349,9 +349,10 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state manifest --mode initial --top 30   # pre-assembled manifest (single command)
 {cli_dir}/state manifest --mode gap --top 30       # gap-mode manifest
 
-# Downloads
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --min-relevance 0.0  # ⚠ slow command, set Bash timeout to 600000
-{cli_dir}/state download-pending --auto-download --batch-size 15 --max-batches 3 --prioritize-gaps --min-relevance 0.0  # gap mode — ⚠ same timeout
+# Downloads — batch-size defaults to 5 (fits within default 120s Bash timeout)
+# Call in a loop until "remaining": 0 — no need for --max-batches or timeout overrides
+{cli_dir}/state download-pending --auto-download --min-relevance 0.0
+{cli_dir}/state download-pending --auto-download --prioritize-gaps --min-relevance 0.0  # gap mode
 {cli_dir}/state download-pending           # list sources without content (dry run)
 
 # Triage and sources — use during search rounds for coverage assessment
@@ -364,7 +365,7 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 {cli_dir}/state gap-search-plan            # suggested queries for open gaps
 
 # Recovery — ⚠ slow command, set Bash timeout to 600000
-{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3" --max-attempts 15
+{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
 
 # PDF conversion — batch-convert unconverted PDFs and rescue PDF-in-.md files
 {cli_dir}/state convert-pdfs
@@ -414,15 +415,15 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 }
 ```
 
-**`state download-pending --auto-download --batch-size N --max-batches M`**
+**`state download-pending --auto-download`** (call in a loop until `remaining: 0`)
 ```json
 {
   "status": "ok",
-  "results": {"downloaded": 12, "failed": 3, "failed_sources": ["src-044", "src-071", "src-089"], "batch_size": 15, "batches_run": 3, "remaining": 0, "skipped_irrelevant": 5}
+  "results": {"downloaded": 4, "failed": 1, "failed_sources": ["src-044"], "batch_size": 5, "remaining": 12, "skipped_irrelevant": 2}
 }
 ```
 
-**`state recover-failed --min-relevance 0.3 --title-keywords "..." --max-attempts 15`**
+**`state recover-failed --min-relevance 0.3 --title-keywords "..."`**
 ```json
 {
   "status": "ok",

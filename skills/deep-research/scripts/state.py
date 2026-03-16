@@ -1682,7 +1682,10 @@ def _auto_download_pending(session_dir: str, pending: list, parallel: int, timeo
             "--parallel", str(parallel),
         ]
 
-        timeout = timeout_override if timeout_override is not None else min(480, max(300, len(batch) * 30))
+        # Internal subprocess timeout: scale with batch size, but cap at 90s
+        # to stay within the default 120s Bash tool timeout (leaving margin for
+        # state queries and JSON serialization around the subprocess call).
+        timeout = timeout_override if timeout_override is not None else min(90, max(45, len(batch) * 15))
         log(f"Downloading {len(batch)} sources (parallel={parallel}, timeout: {timeout}s)...")
         try:
             result = subprocess.run(cmd, capture_output=True, timeout=timeout)
@@ -2500,7 +2503,7 @@ def cmd_recover_failed(args):
     search_script = os.path.join(scripts_dir, "search.py")
     download_script = os.path.join(scripts_dir, "download.py")
 
-    max_attempts = getattr(args, "max_attempts", 15) or 15
+    max_attempts = getattr(args, "max_attempts", 5) or 5
     recovered = []
     still_failed = []
     total_attempts = 0
@@ -3334,7 +3337,7 @@ def main():
     # download-pending
     p = sub.add_parser("download-pending")
     p.add_argument("--auto-download", action="store_true", help="Immediately download all pending sources")
-    p.add_argument("--batch-size", type=int, default=15, help="Max sources per batch (default 15). Caller loops until remaining=0.")
+    p.add_argument("--batch-size", type=int, default=5, help="Max sources per batch (default 5). Small batches complete within the default 120s Bash timeout; caller loops until remaining=0.")
     p.add_argument("--parallel", type=int, default=3, help="Parallel downloads for --auto-download (default 3)")
     p.add_argument("--timeout", type=int, default=None, help="Override download timeout in seconds (default: min(480, max(300, batch*30)))")
     p.add_argument("--prioritize-gaps", action="store_true", default=False, help="Reorder pending sources so gap-relevant ones download first")
@@ -3363,8 +3366,10 @@ def main():
                    help="Skip sources with relevance_score below this threshold (default 0.3)")
     p.add_argument("--title-keywords", type=str, default="",
                    help="Comma-separated keywords; require at least one match in source title to attempt recovery")
-    p.add_argument("--max-attempts", type=int, default=15,
-                   help="Maximum total recovery attempts across all channels (default 15). "
+    p.add_argument("--max-attempts", type=int, default=5,
+                   help="Maximum total recovery attempts per call (default 5). "
+                        "Small default keeps each call within the default Bash timeout. "
+                        "Call multiple times for more attempts. "
                         "Channels with 0 successes after 5 attempts are auto-skipped.")
     p.add_argument("--session-dir", **_sd)
 
