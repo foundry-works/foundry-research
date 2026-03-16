@@ -152,6 +152,14 @@ def main() -> None:
                         {k: v for k, v in item.items() if k in _COMPACT_FIELDS}
                         for item in results
                     ]
+                # Zero-result hint for long queries
+                ingested = len(full.get("results", []))
+                if ingested == 0 and args.query:
+                    words = args.query.split()
+                    if len(words) >= 5:
+                        full.setdefault("hints", []).append(
+                            f"Query has {len(words)} terms — consider splitting or dropping least-specific terms"
+                        )
                 print(json.dumps(full, ensure_ascii=False))
             else:
                 print(captured, end="")
@@ -170,6 +178,14 @@ def main() -> None:
 
     if not result or result.get("status") != "ok":
         return
+
+    # Zero-result hint for non-compact mode (logged to stderr)
+    if not compact:
+        ingested_count = len(result.get("results", []))
+        if ingested_count == 0 and args.query:
+            words = args.query.split()
+            if len(words) >= 5:
+                log(f"Hint: query has {len(words)} terms — consider splitting or dropping least-specific terms")
 
     # Auto-discover session dir if not explicitly provided
     if not args.session_dir:

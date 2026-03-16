@@ -135,6 +135,8 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("searches", "search_type", "TEXT NOT NULL DEFAULT 'manual'"),
     ("sources", "relevance_score", "REAL"),
     ("sources", "relevance_rationale", "TEXT"),
+    ("findings", "question_id", "TEXT"),
+    ("gaps", "question_id", "TEXT"),
 ]
 
 
@@ -418,7 +420,19 @@ def cmd_set_brief(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
-    questions = data.get("questions", [])
+    raw_questions = data.get("questions", [])
+    # Normalize questions to objects with IDs: [{"id": "Q1", "text": "..."}]
+    # Accepts plain strings (auto-assigned Q1, Q2, ...) or objects with id/text.
+    questions = []
+    for i, q in enumerate(raw_questions):
+        if isinstance(q, str):
+            questions.append({"id": f"Q{i + 1}", "text": q})
+        elif isinstance(q, dict) and "text" in q:
+            qid = q.get("id", f"Q{i + 1}")
+            questions.append({"id": qid, "text": q["text"]})
+        else:
+            questions.append({"id": f"Q{i + 1}", "text": str(q)})
+
     conn.execute(
         """INSERT OR REPLACE INTO brief (session_id, scope, questions, completeness_criteria, updated_at)
            VALUES (?, ?, ?, ?, ?)""",
@@ -622,39 +636,81 @@ def cmd_check_dup_batch(args):
     success_response(results)
 
 
-def _normalize_question(conn: sqlite3.Connection, session_id: str, question: str) -> str:
-    """Normalize question text by fuzzy-matching against brief questions.
+def _normalize_question(conn: sqlite3.Connection, session_id: str, question: str,
+                        question_id: str | None = None) -> tuple[str, str | None]:
+    """Normalize question text by matching against brief questions.
 
-    If the incoming question is a close match (token overlap > 0.9) to a brief
-    question, substitute the brief text. This prevents truncated or slightly
-    reworded questions from creating duplicate keys in findings_by_question.
+    Returns (question_text, question_id). Resolution priority:
+    1. question_id arg → look up by ID in brief questions
+    2. question starts with Q\\d+ → extract ID, match to brief
+    3. Token-overlap matching (backward compat, threshold 0.9)
     """
-    if not question:
-        return question
+    if not question and not question_id:
+        return question, question_id
     try:
         row = conn.execute(
             "SELECT questions FROM brief WHERE session_id = ?", (session_id,)
         ).fetchone()
         if not row:
-            return question
+            return question, question_id
         brief_questions = json.loads(row["questions"])
         if not isinstance(brief_questions, list):
-            return question
-        best_match = question
-        best_score = 0.0
+            return question, question_id
+
+        # Build lookup maps for both object-style and plain-string briefs
+        id_to_text: dict[str, str] = {}
+        text_list: list[str] = []
         for bq in brief_questions:
-            if not isinstance(bq, str):
-                continue
-            score = _token_overlap(question, bq)
-            if score > best_score:
-                best_score = score
-                best_match = bq
-        if best_score > 0.9 and best_match != question:
-            log(f"Normalized question text (overlap={best_score:.2f}): {question!r} → {best_match!r}")
-            return best_match
+            if isinstance(bq, dict):
+                qid = bq.get("id", "")
+                qtxt = bq.get("text", "")
+                if qid:
+                    id_to_text[qid.upper()] = qtxt
+                text_list.append(qtxt)
+            elif isinstance(bq, str):
+                text_list.append(bq)
+
+        # Priority 1: explicit question_id
+        if question_id:
+            matched = id_to_text.get(question_id.upper())
+            if matched:
+                return matched, question_id
+            # ID didn't match — fall through to text matching
+
+        # Priority 2: question starts with Q\d+ pattern
+        if question:
+            m = re.match(r"^Q(\d+)\b", question)
+            if m:
+                qid_candidate = f"Q{m.group(1)}"
+                matched = id_to_text.get(qid_candidate.upper())
+                if matched:
+                    return matched, qid_candidate
+
+        # Priority 3: token-overlap matching (backward compat)
+        if question:
+            best_match = question
+            best_score = 0.0
+            best_id: str | None = question_id
+            for bq in brief_questions:
+                if isinstance(bq, dict):
+                    bq_text = bq.get("text", "")
+                    bq_id = bq.get("id")
+                elif isinstance(bq, str):
+                    bq_text = bq
+                    bq_id = None
+                else:
+                    continue
+                score = _token_overlap(question, bq_text)
+                if score > best_score:
+                    best_score = score
+                    best_match = bq_text
+                    best_id = bq_id
+            if best_score > 0.9 and best_match != question:
+                log(f"Normalized question text (overlap={best_score:.2f}): {question!r} → {best_match!r}")
+                return best_match, best_id
     except Exception:
         pass
-    return question
+    return question, question_id
 
 
 def cmd_log_finding(args):
@@ -662,11 +718,12 @@ def cmd_log_finding(args):
     sid = _get_session_id(conn)
     finding_id = _next_id(conn, "findings", "finding", sid)
 
-    question = _normalize_question(conn, sid, args.question)
+    qid = getattr(args, "question_id", None)
+    question, question_id = _normalize_question(conn, sid, args.question, question_id=qid)
     source_ids = [s.strip() for s in args.sources.split(",")] if args.sources else []
     conn.execute(
-        "INSERT INTO findings (id, session_id, text, sources, question, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-        (finding_id, sid, args.text, json.dumps(source_ids), question, _now())
+        "INSERT INTO findings (id, session_id, text, sources, question, question_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (finding_id, sid, args.text, json.dumps(source_ids), question, question_id, _now())
     )
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
@@ -766,9 +823,11 @@ def cmd_log_gap(args):
     sid = _get_session_id(conn)
     gap_id = _next_id(conn, "gaps", "gap", sid)
 
+    qid = getattr(args, "question_id", None)
+    question, question_id = _normalize_question(conn, sid, args.question, question_id=qid)
     conn.execute(
-        "INSERT INTO gaps (id, session_id, text, question, status, timestamp) VALUES (?, ?, ?, ?, 'open', ?)",
-        (gap_id, sid, args.text, args.question, _now())
+        "INSERT INTO gaps (id, session_id, text, question, question_id, status, timestamp) VALUES (?, ?, ?, ?, ?, 'open', ?)",
+        (gap_id, sid, args.text, question, question_id, _now())
     )
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
@@ -1045,11 +1104,19 @@ def cmd_summary(args):
     finding_rows = conn.execute("SELECT * FROM findings WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
     findings_list = []
     for r in finding_rows:
-        findings_list.append({
+        f_entry: dict = {
             "id": r["id"], "text": r["text"],
             "sources": json.loads(r["sources"]) if r["sources"] else [],
             "question": r["question"],
-        })
+        }
+        # Include question_id if column exists and has a value
+        try:
+            qid = r["question_id"]
+            if qid:
+                f_entry["question_id"] = qid
+        except (IndexError, KeyError):
+            pass
+        findings_list.append(f_entry)
 
     # Gaps
     gap_rows = conn.execute("SELECT * FROM gaps WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
@@ -1121,11 +1188,13 @@ def cmd_summary(args):
 
     # --compact: counts and coverage indicators only
     if getattr(args, "compact", False):
-        # Build findings-per-question count map
+        # Build findings-per-question count map, keyed by "Q1: full text" when IDs available
         findings_by_question: dict[str, int] = {}
         for f in findings_list:
+            qid = f.get("question_id")
             q = f.get("question") or "unassigned"
-            findings_by_question[q] = findings_by_question.get(q, 0) + 1
+            key = f"{qid}: {q}" if qid and q != "unassigned" else q
+            findings_by_question[key] = findings_by_question.get(key, 0) + 1
 
         success_response({
             "brief": {"questions": brief_data["questions"]} if brief_data else None,
@@ -1772,29 +1841,45 @@ def cmd_audit(args):
         elif isinstance(quality, (int, float)) and quality < 0.5:
             degraded_unread.append(sid_val)
 
-    # Build question text list from brief
+    # Build question text list and ID-to-text map from brief
     question_texts = []
+    question_id_map: dict[str, str] = {}  # "Q1" -> full text
     for q in questions:
-        question_texts.append(q if isinstance(q, str) else q.get("text", str(q)))
+        if isinstance(q, dict):
+            qtxt = q.get("text", str(q))
+            qid = q.get("id", "")
+            question_texts.append(qtxt)
+            if qid:
+                question_id_map[qid.upper()] = qtxt
+        elif isinstance(q, str):
+            question_texts.append(q)
 
     # Match a finding's question field to brief questions.
-    # Agents sometimes use abbreviated labels ("Q1", "Q3: What mechanisms...")
-    # instead of the full question text, so we try:
-    #   1. Exact match
-    #   2. Finding question is a prefix/substring of a brief question
-    #   3. Brief question starts with the finding's question text
-    #   4. "Q<N>" pattern matches the Nth question (1-indexed)
-    import re
+    # Priority order:
+    #   0. question_id column match (highest priority — exact ID lookup)
+    #   1. Exact text match
+    #   2. "Q<N>" pattern in question text matches the Nth question
+    #   3. Finding question is a prefix/substring of a brief question
+    #   4. Brief question starts with the finding's question text
     _qn_pattern = re.compile(r"^Q(\d+)\b")
 
-    def _match_question(finding_q: str) -> str:
+    def _match_question(finding_q: str, finding_qid: str | None = None) -> str:
         """Return the matching brief question text, or the original string."""
+        # Priority 0: question_id column
+        if finding_qid:
+            matched = question_id_map.get(finding_qid.upper())
+            if matched:
+                return matched
         if finding_q in question_texts:
             return finding_q
         fq_lower = finding_q.lower().strip()
-        # Check Q<N> pattern first (e.g. "Q1", "Q3: What mechanisms...")
+        # Check Q<N> pattern (e.g. "Q1", "Q3: What mechanisms...")
         m = _qn_pattern.match(finding_q)
         if m:
+            qid_candidate = f"Q{m.group(1)}"
+            matched = question_id_map.get(qid_candidate.upper())
+            if matched:
+                return matched
             idx = int(m.group(1)) - 1
             if 0 <= idx < len(question_texts):
                 return question_texts[idx]
@@ -1808,7 +1893,9 @@ def cmd_audit(args):
     # Count findings per question
     findings_by_question: dict[str, list[str]] = {}
     for f in findings:
-        q = _match_question(f.get("question") or "unassigned")
+        # Try to get question_id from the finding
+        f_qid = f.get("question_id")
+        q = _match_question(f.get("question") or "unassigned", finding_qid=f_qid)
         findings_by_question.setdefault(q, []).append(f["id"])
 
     # Identify questions with insufficient coverage
@@ -3128,12 +3215,14 @@ def main():
     p.add_argument("--text", required=True)
     p.add_argument("--sources", default=None)
     p.add_argument("--question", default=None)
+    p.add_argument("--question-id", default=None, help="Question ID (e.g. Q1) — preferred over --question for matching")
     p.add_argument("--session-dir", **_sd)
 
     # log-gap
     p = sub.add_parser("log-gap")
     p.add_argument("--text", required=True)
     p.add_argument("--question", default=None)
+    p.add_argument("--question-id", default=None, help="Question ID (e.g. Q1) — preferred over --question for matching")
     p.add_argument("--session-dir", **_sd)
 
     # resolve-gap

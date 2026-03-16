@@ -843,6 +843,39 @@ def _early_mismatch_check(pdf_path: str, result: dict) -> bool:
     return False
 
 
+def _cleanup_mismatched_download(result: dict, source_id: str, sources_dir: str,
+                                  source_name: str) -> bool:
+    """Check if a completed download was flagged as mismatched after full conversion.
+
+    If mismatched, delete the generated files and reset result fields so the
+    cascade can continue to the next source. Returns True if mismatch was
+    detected and cleaned up.
+    """
+    if result.get("quality") != "mismatched":
+        return False
+
+    log(f"Full mismatch detected after conversion from {source_name}, trying next cascade source", level="warn")
+
+    # Remove generated files
+    for ext in (".pdf", ".md", ".toc"):
+        path = os.path.join(sources_dir, f"{source_id}{ext}")
+        if os.path.exists(path):
+            os.remove(path)
+
+    # Reset result fields so next cascade source starts clean
+    result["pdf_downloaded"] = False
+    result["pdf_file"] = None
+    result["pdf_size_bytes"] = 0
+    result["md_converted"] = False
+    result["content_file"] = None
+    result["content_length"] = 0
+    result["toc_file"] = None
+    result["source_used"] = None
+    result["quality"] = None
+    result.pop("quality_details", None)
+    return True
+
+
 def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                      _metadata_dir: str, to_md: bool, config: dict, result: dict,
                      cancel: threading.Event | None = None) -> None:
@@ -875,7 +908,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                         continue
                     _record_pdf_success(result, source_id, "annas_archive",
                                         pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
-                    return
+                    if not _cleanup_mismatched_download(result, source_id, sources_dir, "annas_archive"):
+                        return
                 continue
             elif source_name == "scihub":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
@@ -886,7 +920,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                         continue
                     _record_pdf_success(result, source_id, "scihub",
                                         pdf_path, os.path.getsize(pdf_path), sources_dir, to_md)
-                    return
+                    if not _cleanup_mismatched_download(result, source_id, sources_dir, "scihub"):
+                        return
                 continue
         except Exception as e:
             log(f"{source_name} lookup failed: {e}", level="warn")
@@ -908,6 +943,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 continue
             _record_pdf_success(result, source_id, source_name,
                                 pdf_path, dl_result["size_bytes"], sources_dir, to_md)
+            if _cleanup_mismatched_download(result, source_id, sources_dir, source_name):
+                continue
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
 

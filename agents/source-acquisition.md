@@ -109,6 +109,15 @@ Track provider results across your searches. If a provider returns 0 results on 
 3. Spot-check the last few results for relevance after each search
 4. Never run empty or single-word generic queries
 
+### Zero-result query reformulation
+
+When a keyword search returns 0 results, try a simplified reformulation before moving on:
+- **Drop the least specific terms.** Academic databases match on conjunction — a 6-term query requires all 6 terms to appear. Remove specialty qualifiers and retry with 2-3 core terms.
+- **Split into shorter queries.** "uncanny valley curve shape cliff monotonic category boundary" → two searches: "uncanny valley curve shape" and "uncanny valley category boundary".
+- **Try synonyms.** Field-specific vocabulary varies across subfields and databases. "eeriness" vs. "uncanny" vs. "creepiness"; "HRI" vs. "human-robot interaction".
+
+Don't reformulate endlessly — one retry per zero-result search. If the reformulation also returns 0, the topic may genuinely lack coverage on that provider. Log it and move on.
+
 ### Domain-specific search strategies
 
 **Instrument/measurement topics** (questionnaires, scales, assessment tools):
