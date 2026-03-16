@@ -41,19 +41,31 @@ Flag paragraphs that cover multiple distinct ideas and would be clearer split in
 
 **What's NOT an issue:** Paragraphs that build a single argument through multiple supporting points are fine — the key is whether they have one throughline or multiple competing ones.
 
-#### 3. List opportunities
+#### 3. Information density
+Flag sentences that pack multiple independent claims, statistics, citations, or caveats into a single clause. The rule of thumb is **one claim per sentence** — if a sentence makes a claim, supports it with evidence, and adds a caveat, those should usually be separate sentences. High density is the most common readability problem in research syntheses because the author has internalized the material and forgets how much cognitive load each data point adds for a first-time reader.
+
+**What's NOT an issue:** A sentence that is long but structurally clear (e.g., a compound sentence with two parallel clauses sharing one subject) is fine. Density is about cognitive load per clause, not word count — a 40-word sentence with one idea is better than a 25-word sentence with three.
+
+#### 4. List opportunities
 Flag dense prose that enumerates items (comparisons, options, steps, criteria) which would be more scannable as a bulleted or numbered list. Three or more parallel items in running text are candidates.
 
 **What's NOT an issue:** Not everything needs to be a list. Narrative flow and argument building are better as prose.
 
+#### 5. Executive summary accessibility
+Scan the executive summary first and independently — it is the section most likely to be read by non-specialists in isolation. Flag jargon, density, or structural issues that would prevent a reader from understanding the summary without reading the body. The executive summary should be self-contained: a reader should be able to grasp the key findings and their confidence levels without referring to later sections.
+
+**What's NOT an issue:** The executive summary can reference section numbers for readers who want depth. It does not need to repeat all caveats — just the headline findings and their strength.
+
 ### Mechanical dimensions (scan second)
 
-#### 4. Jargon and unexplained terms
+#### 6. Jargon and unexplained terms
 Flag technical terms, acronyms, or domain-specific language used without a brief definition or enough context for a non-specialist to understand. The first use of a term should include a plain-language gloss.
 
-**What's NOT an issue:** Truly common terms that any educated reader knows (e.g., "DNA", "GDP", "algorithm"). Terms defined earlier in the report and used consistently afterward.
+This includes **statistical notation and effect-size measures** (e.g., eta-squared, Cohen's d, odds ratios, polynomial degree specifications) — these look like they should be self-explanatory because they're numbers, but a non-specialist cannot interpret "eta-squared = 0.682" without knowing it's an effect size or what constitutes a large vs. small value. Flag these the same way you'd flag an unexplained acronym: a brief parenthetical gloss at first use is sufficient.
 
-#### 5. Filler and throat-clearing
+**What's NOT an issue:** Truly common terms that any educated reader knows (e.g., "DNA", "GDP", "algorithm"). Terms defined earlier in the report and used consistently afterward. Standard p-values (p < 0.05) don't need glossing — they're widely understood enough. Sample sizes (N=358) don't need glossing either.
+
+#### 7. Filler and throat-clearing
 Flag phrases that add words without meaning: "it is important to note that", "it should be mentioned that", "needless to say", "in terms of", "the fact that", "it is worth noting that". The substance should lead.
 
 ## Constraint: do not change meaning
