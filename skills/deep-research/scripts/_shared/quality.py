@@ -318,10 +318,7 @@ def check_content_mismatch(
         weights.append(3.0)
         scores.append(title_to_title)
 
-    if weights:
-        match_score = sum(w * s for w, s in zip(weights, scores)) / sum(weights)
-    else:
-        match_score = 1.0
+    match_score = sum(w * s for w, s in zip(weights, scores, strict=False)) / sum(weights) if weights else 1.0
 
     # Threshold: flag as mismatched when composite score is low.
     # 0.3 catches papers that share a few generic keywords but are clearly
@@ -333,11 +330,10 @@ def check_content_mismatch(
     # Hard fail: title-to-title overlap below 0.5 is a strong standalone
     # signal even if other scores are moderate (e.g., shared generic terms
     # boost title_rate and brief_rate but the actual document title is wrong).
-    if not mismatched and title_to_title is not None and title_to_title < 0.15:
-        # Only hard-fail when title keyword rate is also weak — avoids
-        # false positives from reformatted/abbreviated titles in the PDF.
-        if title_rate < 0.5:
-            mismatched = True
+    # Only hard-fail when title keyword rate is also weak — avoids
+    # false positives from reformatted/abbreviated titles in the PDF.
+    if not mismatched and title_to_title is not None and title_to_title < 0.15 and title_rate < 0.5:
+        mismatched = True
 
     score_details = {
         "title_rate": round(title_rate, 3),

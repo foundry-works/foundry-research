@@ -36,7 +36,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Search CORE works and return a JSON envelope dict.
 
     Works with or without an API key:
@@ -79,7 +79,7 @@ def search(args) -> dict:
         http.close()
 
 
-def _keyword_search(http, args) -> dict:
+def _keyword_search(http, args) -> str:
     """Execute a keyword search against CORE /search/works."""
     query = args.query
     limit = min(getattr(args, "limit", 10), 100)  # CORE caps at 100
@@ -133,7 +133,7 @@ def _keyword_search(http, args) -> dict:
     )
 
 
-def _id_lookup(http, core_id: str) -> dict:
+def _id_lookup(http, core_id: str) -> str:
     """Look up a single work by CORE ID."""
     url = f"{BASE_URL}/works/{core_id}"
     log(f"CORE ID lookup: {core_id}")
@@ -237,7 +237,7 @@ def _extract_venue(item: dict) -> str:
     return item.get("publisher", "") or ""
 
 
-def _handle_error(resp) -> dict:
+def _handle_error(resp) -> str:
     """Convert an HTTP error response into an error envelope."""
     status = resp.status_code
     try:

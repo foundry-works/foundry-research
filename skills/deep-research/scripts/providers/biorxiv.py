@@ -46,7 +46,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Search bioRxiv/medRxiv and return a JSON envelope dict."""
     if getattr(args, "list_categories", False):
         return _list_categories(args)
@@ -70,7 +70,7 @@ def search(args) -> dict:
         http.close()
 
 
-def _list_categories(args) -> dict:
+def _list_categories(args) -> str:
     """Fetch available categories by sampling recent papers from bioRxiv and/or medRxiv."""
     server = getattr(args, "server", "both")
     servers = _resolve_servers(server)
@@ -107,7 +107,7 @@ def _list_categories(args) -> dict:
     return success_response(result)
 
 
-def _openalex_search(http, args, session_dir: str) -> dict:
+def _openalex_search(http, args, session_dir: str) -> str:
     """Delegate keyword search to OpenAlex, filtering to Cold Spring Harbor Laboratory (bioRxiv/medRxiv)."""
     query = args.query
     limit = min(getattr(args, "limit", 10), 200)
@@ -155,7 +155,7 @@ def _openalex_search(http, args, session_dir: str) -> dict:
     )
 
 
-def _doi_lookup(http, args) -> dict:
+def _doi_lookup(http, args) -> str:
     """Look up a single paper by DOI."""
     doi = args.doi
     server = getattr(args, "server", "both")
@@ -182,7 +182,7 @@ def _doi_lookup(http, args) -> dict:
     return error_response([f"DOI {doi} not found on {server}"], error_code="not_found")
 
 
-def _browse_by_date(http, args) -> dict:
+def _browse_by_date(http, args) -> str:
     """Browse recent papers by date range, optionally filtered by category."""
     server = getattr(args, "server", "both")
     days = getattr(args, "days", 30)
@@ -263,7 +263,7 @@ def _resolve_servers(server: str) -> list[str]:
     return [server]
 
 
-def _handle_openalex_error(resp) -> dict:
+def _handle_openalex_error(resp) -> str:
     """Convert an OpenAlex HTTP error response into an error envelope."""
     status = resp.status_code
     try:

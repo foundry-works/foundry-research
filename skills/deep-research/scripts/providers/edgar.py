@@ -1,6 +1,5 @@
 """SEC EDGAR provider — full-text search, company filings, XBRL facts/concepts."""
 
-import json
 import os
 import tempfile
 
@@ -45,7 +44,7 @@ def add_arguments(parser):
     parser.add_argument("--download", action="store_true", default=False, help="Download filing document")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="edgar_")
     # SEC official limit: 10 req/s per IP (sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)
     rate_limits = {"efts.sec.gov": 10.0, "data.sec.gov": 10.0, "www.sec.gov": 10.0}
@@ -55,19 +54,18 @@ def search(args) -> dict:
     try:
         if args.accession:
             return _fetch_filing(client, args)
-        elif args.ticker and args.type == "facts":
+        if args.ticker and args.type == "facts":
             return _get_facts(client, args)
-        elif args.ticker and args.type == "concept":
+        if args.ticker and args.type == "concept":
             return _get_concept(client, args)
-        elif args.ticker:
+        if args.ticker:
             return _get_company_filings(client, args)
-        elif args.query:
+        if args.query:
             return _efts_search(client, args)
-        else:
-            return error_response(
-                ["Provide --query for full-text search, --ticker for company data, or --accession for a specific filing"],
-                error_code="missing_input",
-            )
+        return error_response(
+            ["Provide --query for full-text search, --ticker for company data, or --accession for a specific filing"],
+            error_code="missing_input",
+        )
     except Exception as e:
         log(f"EDGAR API error: {e}", level="error")
         return error_response([str(e)], error_code="api_error")
@@ -101,7 +99,7 @@ def _resolve_cik(client, ticker: str) -> tuple[str, str] | None:
         return None
 
 
-def _efts_search(client, args) -> dict:
+def _efts_search(client, args) -> str:
     """Full-text search across SEC filings via EFTS."""
     params = {
         "q": args.query,
@@ -158,7 +156,7 @@ def _efts_search(client, args) -> dict:
     return success_response(results, total_results=total, provider="edgar", has_more=total > args.offset + len(results))
 
 
-def _get_company_filings(client, args) -> dict:
+def _get_company_filings(client, args) -> str:
     """Get filings for a company by ticker."""
     resolved = _resolve_cik(client, args.ticker)
     if not resolved:
@@ -222,7 +220,7 @@ def _get_company_filings(client, args) -> dict:
     )
 
 
-def _get_facts(client, args) -> dict:
+def _get_facts(client, args) -> str:
     """Get XBRL company facts."""
     resolved = _resolve_cik(client, args.ticker)
     if not resolved:
@@ -261,7 +259,7 @@ def _get_facts(client, args) -> dict:
     )
 
 
-def _extract_concept_from_facts(facts: dict, concept: str, ticker: str, cik: str, entity_name: str) -> dict:
+def _extract_concept_from_facts(facts: dict, concept: str, ticker: str, cik: str, entity_name: str) -> str:
     """Extract a specific concept from company facts."""
     for taxonomy, concepts in facts.items():
         if concept in concepts:
@@ -304,7 +302,7 @@ def _extract_concept_from_facts(facts: dict, concept: str, ticker: str, cik: str
     )
 
 
-def _get_concept(client, args) -> dict:
+def _get_concept(client, args) -> str:
     """Get company concept time series."""
     if not args.concept:
         return error_response(["--concept is required for concept mode"], error_code="missing_concept")
@@ -354,7 +352,7 @@ def _get_concept(client, args) -> dict:
     )
 
 
-def _fetch_filing(client, args) -> dict:
+def _fetch_filing(client, args) -> str:
     """Fetch a specific filing by accession number."""
     accession = args.accession.strip()
 

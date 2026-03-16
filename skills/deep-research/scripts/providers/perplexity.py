@@ -22,7 +22,7 @@ def add_arguments(parser):
     parser.add_argument("--language", nargs="+", default=None, help="ISO 639-1 language codes (max 10)")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     api_key = os.environ.get("PERPLEXITY_API_KEY")
     if not api_key:
         return error_response(
@@ -47,7 +47,7 @@ def search(args) -> dict:
         client.close()
 
 
-def _search(client, args, api_key: str) -> dict:
+def _search(client, args, api_key: str) -> str:
     """Search via Perplexity's /search endpoint."""
     limit = args.limit
     if limit > _MAX_RESULTS:

@@ -2,6 +2,7 @@
 """Unified search CLI — routes queries to provider-specific modules."""
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -9,10 +10,11 @@ import sys
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from providers import available_providers, get_provider  # noqa: E402
+
 from _shared.config import _discover_session_dir_from_marker  # noqa: E402
 from _shared.output import error_response, log, set_quiet  # noqa: E402
 from _shared.state_client import call_state  # noqa: E402
-from providers import available_providers, get_provider  # noqa: E402
 
 # Flags that substitute for --query (provider -> set of flag dest names)
 _IDENTIFIER_FLAGS = {
@@ -134,7 +136,7 @@ def main() -> None:
         import io
         old_stdout = sys.stdout
         buf = io.StringIO()
-        sys.stdout = buf  # type: ignore[assignment]
+        sys.stdout = buf
 
     result_str = mod.search(args)
 
@@ -169,10 +171,8 @@ def main() -> None:
     # Parse result back into dict for state integration (use full data, not compact)
     result = None
     if isinstance(result_str, str):
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             result = json.loads(result_str)
-        except (json.JSONDecodeError, TypeError):
-            pass
     elif isinstance(result_str, dict):
         result = result_str
 

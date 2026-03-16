@@ -43,7 +43,7 @@ def add_arguments(parser):
     parser.add_argument("--author", default=None, help="Author name to search for")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="s2_")
     config = get_config(session_dir)
     client = _create_client(session_dir, config)
@@ -76,7 +76,7 @@ def _create_client(session_dir, config):
     return client
 
 
-def _keyword_search(client, args) -> dict:
+def _keyword_search(client, args) -> str:
     params = {"query": args.query, "fields": PAPER_FIELDS, "limit": args.limit, "offset": args.offset}
 
     if args.year_range:
@@ -109,7 +109,7 @@ def _keyword_search(client, args) -> dict:
     )
 
 
-def _forward_citations(client, args) -> dict:
+def _forward_citations(client, args) -> str:
     paper_id = _normalize_paper_id(args.cited_by)
     url = f"{BASE_URL}/paper/{paper_id}/citations"
     params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
@@ -149,7 +149,7 @@ def _forward_citations(client, args) -> dict:
     return success_response(papers, total_results=total, **extra)
 
 
-def _backward_references(client, args) -> dict:
+def _backward_references(client, args) -> str:
     paper_id = _normalize_paper_id(args.references)
     url = f"{BASE_URL}/paper/{paper_id}/references"
     params = {"fields": CITATION_FIELDS, "limit": args.limit, "offset": args.offset}
@@ -178,7 +178,7 @@ def _backward_references(client, args) -> dict:
     )
 
 
-def _get_recommendations(client, args) -> dict:
+def _get_recommendations(client, args) -> str:
     paper_id = _normalize_paper_id(args.recommendations)
     url = f"{RECS_URL}/forpaper/{paper_id}"
     params = {"fields": CITATION_FIELDS, "limit": args.limit}
@@ -205,7 +205,7 @@ def _get_recommendations(client, args) -> dict:
     )
 
 
-def _author_search(client, args) -> dict:
+def _author_search(client, args) -> str:
     url = f"{BASE_URL}/author/search"
     params = {"query": args.author, "fields": AUTHOR_FIELDS, "limit": args.limit, "offset": args.offset}
 

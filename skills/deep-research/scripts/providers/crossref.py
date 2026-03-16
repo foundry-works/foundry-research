@@ -55,7 +55,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Search Crossref works and return a JSON envelope dict."""
     session_dir = getattr(args, "session_dir", None) or tempfile.mkdtemp(prefix="crossref_")
     config = get_config(session_dir)
@@ -84,7 +84,7 @@ def search(args) -> dict:
         http.close()
 
 
-def _keyword_search(http, args, config: dict) -> dict:
+def _keyword_search(http, args, config: dict) -> str:
     """Execute a keyword search against Crossref /works."""
     query = args.query
     limit = min(getattr(args, "limit", 10), 1000)
@@ -136,7 +136,7 @@ def _keyword_search(http, args, config: dict) -> dict:
     )
 
 
-def _doi_lookup(http, doi: str, config: dict) -> dict:
+def _doi_lookup(http, doi: str, config: dict) -> str:
     """Look up a single work by DOI."""
     # Strip URL prefix if present
     doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
@@ -184,7 +184,7 @@ def _build_filters(args) -> list[str]:
 
     subject = getattr(args, "subject", None)
     if subject:
-        filters.append(f"has-abstract:true")
+        filters.append("has-abstract:true")
 
     return filters
 
@@ -221,7 +221,7 @@ def _normalize_work(item: dict) -> dict:
     return paper
 
 
-def _handle_error(resp) -> dict:
+def _handle_error(resp) -> str:
     """Convert an HTTP error response into an error envelope."""
     status = resp.status_code
     try:
@@ -232,10 +232,7 @@ def _handle_error(resp) -> dict:
     except Exception:
         message = resp.text[:500]
 
-    if status == 429:
-        error_code = "rate_limited"
-    else:
-        error_code = f"http_{status}"
+    error_code = "rate_limited" if status == 429 else f"http_{status}"
 
     log(f"Crossref API error {status}: {message}", level="error")
     return error_response([f"Crossref API returned {status}: {message}"], error_code=error_code)

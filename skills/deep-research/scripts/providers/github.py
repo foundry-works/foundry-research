@@ -20,7 +20,7 @@ def add_arguments(parser):
     parser.add_argument("--include-readme", action="store_true", default=False, help="Include README content for --repo mode")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="gh_")
     config = get_config(session_dir)
     client = _create_client(session_dir, config)
@@ -82,7 +82,7 @@ def _pagination_page(args) -> int:
     return (args.offset // args.limit) + 1
 
 
-def _repo_search(client, args, config: dict) -> dict:
+def _repo_search(client, args, config: dict) -> str:
     query = _build_query(args)
     page = _pagination_page(args)
 
@@ -117,7 +117,7 @@ def _repo_search(client, args, config: dict) -> dict:
     )
 
 
-def _code_search(client, args, config: dict) -> dict:
+def _code_search(client, args, config: dict) -> str:
     token = _get_token(config)
     if not token:
         return error_response(
@@ -152,7 +152,7 @@ def _code_search(client, args, config: dict) -> dict:
     )
 
 
-def _discussions_search(client, args, config: dict) -> dict:
+def _discussions_search(client, args, config: dict) -> str:
     """Search for discussions using the issues search endpoint with type:discussion qualifier.
 
     GitHub REST API has no dedicated discussions search endpoint, so we use
@@ -189,7 +189,7 @@ def _discussions_search(client, args, config: dict) -> dict:
     )
 
 
-def _repo_details(client, args, config: dict) -> dict:
+def _repo_details(client, args, config: dict) -> str:
     repo = args.repo
     if "/" not in repo:
         return error_response(

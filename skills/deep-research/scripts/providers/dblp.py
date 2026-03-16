@@ -39,7 +39,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Route to publication, author, or venue search."""
     session_dir = getattr(args, "session_dir", None) or tempfile.mkdtemp(prefix="dblp_")
 
@@ -78,7 +78,7 @@ def _dblp_get(client, path: str, params: dict):
     return resp  # return last response if all mirrors fail
 
 
-def _publication_search(client, args) -> dict:
+def _publication_search(client, args) -> str:
     """Search DBLP publications by keyword."""
     query = args.query
     limit = min(getattr(args, "limit", 10), 1000)
@@ -132,7 +132,7 @@ def _publication_search(client, args) -> dict:
     )
 
 
-def _author_search(client, args) -> dict:
+def _author_search(client, args) -> str:
     """Search DBLP for authors."""
     query = args.author
     limit = min(getattr(args, "limit", 10), 1000)
@@ -184,7 +184,7 @@ def _author_search(client, args) -> dict:
     )
 
 
-def _venue_search(client, args) -> dict:
+def _venue_search(client, args) -> str:
     """Search DBLP for venues (conferences/journals)."""
     query = args.venue
     limit = min(getattr(args, "limit", 10), 1000)
@@ -229,7 +229,7 @@ def _venue_search(client, args) -> dict:
     )
 
 
-def _handle_error(resp) -> dict:
+def _handle_error(resp) -> str:
     """Convert HTTP error to error envelope."""
     status = resp.status_code
     if status == 429:

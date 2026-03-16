@@ -40,7 +40,7 @@ def add_arguments(parser):
                         help="Fetch full details (abstracts) for search results")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="pubmed_")
     config = get_config(session_dir)
     api_key = config.get("ncbi_api_key")
@@ -85,7 +85,7 @@ def search(args) -> dict:
 # Search modes
 # ---------------------------------------------------------------------------
 
-def _keyword_search(client, args, api_key) -> dict:
+def _keyword_search(client, args, api_key) -> str:
     query = _build_query(args.query, args)
     pmids, count, query_translation = _esearch(client, query, args.limit, args.offset, args.sort, api_key)
 
@@ -108,7 +108,7 @@ def _keyword_search(client, args, api_key) -> dict:
     )
 
 
-def _elink_search(client, args, api_key, pmid, linkname, mode) -> dict:
+def _elink_search(client, args, api_key, pmid, linkname, mode) -> str:
     params = {"dbfrom": "pubmed", "db": "pubmed", "id": pmid, "linkname": linkname, "retmode": "json"}
     if api_key:
         params["api_key"] = api_key
@@ -140,7 +140,7 @@ def _elink_search(client, args, api_key, pmid, linkname, mode) -> dict:
     )
 
 
-def _related_search(client, args, api_key) -> dict:
+def _related_search(client, args, api_key) -> str:
     pmid = args.related
     params = {"dbfrom": "pubmed", "db": "pubmed", "id": pmid, "cmd": "neighbor_score", "retmode": "json"}
     if api_key:
@@ -178,7 +178,7 @@ def _related_search(client, args, api_key) -> dict:
     )
 
 
-def _mesh_search(client, args, api_key) -> dict:
+def _mesh_search(client, args, api_key) -> str:
     query = f'"{args.mesh}"[MeSH Terms]'
     query = _apply_filters(query, args)
     pmids, count, query_translation = _esearch(client, query, args.limit, args.offset, args.sort, api_key)
@@ -203,7 +203,7 @@ def _mesh_search(client, args, api_key) -> dict:
     )
 
 
-def _fetch_pmids(client, pmids, api_key) -> dict:
+def _fetch_pmids(client, pmids, api_key) -> str:
     papers = _efetch_papers(client, pmids, api_key)
     return success_response(papers, total_results=len(papers), provider="pubmed", mode="fetch", has_more=False)
 

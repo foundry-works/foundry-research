@@ -21,7 +21,7 @@ def add_arguments(parser):
     parser.add_argument("--comment-limit", type=int, default=20, help="Max comments to retrieve (default: 20)")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="reddit_")
     client = create_session(session_dir, user_agent=USER_AGENT, rate_limits={"www.reddit.com": 0.15})
 
@@ -47,7 +47,7 @@ def search(args) -> dict:
         client.close()
 
 
-def _global_search(client, args) -> dict:
+def _global_search(client, args) -> str:
     params = {"q": args.query, "sort": args.sort, "t": args.time, "limit": args.limit}
     url = f"{BASE_URL}/search.json"
 
@@ -90,7 +90,7 @@ def _subreddit_search(client, args, subreddit: str) -> tuple[list[dict], str | N
     return results, after
 
 
-def _multi_subreddit_search(client, args) -> dict:
+def _multi_subreddit_search(client, args) -> str:
     all_results = []
     any_has_more = False
 
@@ -115,7 +115,7 @@ def _multi_subreddit_search(client, args) -> dict:
     )
 
 
-def _browse_subreddit(client, args) -> dict:
+def _browse_subreddit(client, args) -> str:
     subreddit = args.browse
     sort = args.sort if args.sort in ("hot", "top", "new") else "hot"
     params = {"limit": args.limit}
@@ -145,7 +145,7 @@ def _browse_subreddit(client, args) -> dict:
     )
 
 
-def _fetch_post(client, args, url: str | None = None, post_id: str | None = None) -> dict:
+def _fetch_post(client, args, url: str | None = None, post_id: str | None = None) -> str:
     if url:
         # Strip trailing slash and append .json
         permalink = url.rstrip("/")

@@ -25,7 +25,7 @@ def add_arguments(parser):
     parser.add_argument("--expiration", default=None, help="Options expiration date YYYY-MM-DD")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     try:
         import yfinance as yf
     except ImportError:
@@ -66,15 +66,15 @@ def search(args) -> dict:
 def _dispatch(ticker, symbol: str, data_type: str, args) -> dict | None:
     if data_type == "history":
         return _get_history(ticker, symbol, args)
-    elif data_type == "financials":
+    if data_type == "financials":
         return _get_financials(ticker, symbol, args)
-    elif data_type == "profile":
+    if data_type == "profile":
         return _get_profile(ticker, symbol)
-    elif data_type == "options":
+    if data_type == "options":
         return _get_options(ticker, symbol, args)
-    elif data_type == "dividends":
+    if data_type == "dividends":
         return _get_dividends(ticker, symbol)
-    elif data_type == "holders":
+    if data_type == "holders":
         return _get_holders(ticker, symbol)
     return None
 
@@ -86,7 +86,7 @@ def _get_history(ticker, symbol: str, args) -> dict:
 
     data = []
     for date, row in df.iterrows():
-        point = {"date": str(date.date()) if hasattr(date, "date") else str(date)}
+        point: dict[str, str | int | float] = {"date": str(date.date()) if hasattr(date, "date") else str(date)}
         for col in ("Open", "High", "Low", "Close", "Volume"):
             if col in row and not _is_nan(row[col]):
                 point[col.lower()] = round(row[col], 4) if col != "Volume" else int(row[col])
@@ -214,11 +214,10 @@ def _get_options(ticker, symbol: str, args) -> dict:
                     continue
                 if isinstance(val, float):
                     record[col] = round(val, 4)
+                elif hasattr(val, "isoformat"):
+                    record[col] = val.isoformat()
                 else:
                     record[col] = val
-                # Convert Timestamp columns to string
-                if hasattr(val, "isoformat"):
-                    record[col] = val.isoformat()
             records.append(record)
         return records
 

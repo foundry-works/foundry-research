@@ -49,7 +49,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Search OpenAlex works and return a JSON envelope dict."""
     # Citation traversal modes
     cited_by = getattr(args, "cited_by", None)
@@ -116,7 +116,7 @@ def search(args) -> dict:
 
         for page_num in range(pages_to_skip + 1):
             url = f"{BASE_URL}/works"
-            log(f"OpenAlex request: page {page_num + 1}, cursor={params.get('cursor', '*')[:20]}...")
+            log(f"OpenAlex request: page {page_num + 1}, cursor={str(params.get('cursor', '*'))[:20]}...")
 
             resp = http.get(url, params=params, headers=headers)
 
@@ -186,7 +186,7 @@ def _resolve_openalex_id(identifier: str, http, headers: dict, params_base: dict
     return None
 
 
-def _citation_traversal(args, cited_by: str | None = None, references: str | None = None) -> dict:
+def _citation_traversal(args, cited_by: str | None = None, references: str | None = None) -> str:
     """Citation traversal via OpenAlex filter API.
 
     - cited_by: return papers that cite the given work (forward citations)
@@ -195,6 +195,11 @@ def _citation_traversal(args, cited_by: str | None = None, references: str | Non
       Uses filter=cited_by:WORK_ID
     """
     identifier = cited_by or references
+    if not identifier:
+        return error_response(
+            ["--cited-by or --references is required for citation traversal"],
+            error_code="missing_query",
+        )
     limit = min(getattr(args, "limit", 10), 200)
     session_dir = getattr(args, "session_dir", None) or __import__("tempfile").mkdtemp(prefix="openalex_")
 
@@ -306,7 +311,7 @@ def _normalize_work(work: dict) -> dict:
     return paper
 
 
-def _handle_error(resp) -> dict:
+def _handle_error(resp) -> str:
     """Convert an HTTP error response into an error envelope."""
     status = resp.status_code
 

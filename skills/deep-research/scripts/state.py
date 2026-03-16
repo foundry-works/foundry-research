@@ -2,6 +2,7 @@
 """Session state tracker — SQLite-backed search history, source dedup, findings, gaps, and metrics."""
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -266,11 +267,9 @@ def _check_duplicate(conn: sqlite3.Connection, session_id: str,
             sim = _title_similarity(title, row["title"])
             if sim > 0.95:
                 return True, row["id"]
-            if sim >= 0.85:
-                # Gray zone: require author + year match
-                if authors and _authors_overlap(row["authors"], authors):
-                    if year and row["year"] and abs(year - row["year"]) <= 1:
-                        return True, row["id"]
+            # Gray zone: require author + year match
+            if sim >= 0.85 and authors and _authors_overlap(row["authors"], authors) and year and row["year"] and abs(year - row["year"]) <= 1:
+                return True, row["id"]
 
     return False, None
 
@@ -341,7 +340,7 @@ def cmd_init(args):
 
     # Write marker file for auto-discovery by subsequent commands
     write_session_marker(session_dir)
-    log(f"Session marker written to .deep-research-session (auto-discovery enabled)")
+    log("Session marker written to .deep-research-session (auto-discovery enabled)")
 
     success_response({"session_id": session_id, "session_dir": session_dir})
 
@@ -589,7 +588,8 @@ def _write_ingestion_metadata(session_dir: str, source_id: str, data: dict,
         if os.path.exists(filepath):
             # Merge with existing — don't overwrite fields that already have values
             try:
-                existing = json.loads(open(filepath, encoding="utf-8").read())
+                with open(filepath, encoding="utf-8") as _f:
+                    existing = json.loads(_f.read())
                 for k, v in meta.items():
                     if k not in existing or existing[k] is None:
                         existing[k] = v
@@ -899,7 +899,7 @@ def cmd_gap_search_plan(args):
                 "type": "keyword",
                 "query": keyword_query,
                 "providers": ["semantic_scholar", "pubmed", "openalex"],
-                "rationale": f"Keyword search using terms from gap text and question"
+                "rationale": "Keyword search using terms from gap text and question"
             })
 
         # Suggestion 2: find most-cited source related to this gap for citation chase
@@ -933,7 +933,7 @@ def cmd_gap_search_plan(args):
             "suggested_searches": suggested_searches,
         })
 
-    success_response({"gaps": plans, "total_open": len(plans)})
+    return success_response({"gaps": plans, "total_open": len(plans)})
 
 
 def cmd_searches(args):
@@ -1146,33 +1146,48 @@ def cmd_summary(args):
 
     # --write-handoff: write full summary to file, return only path + counts
     if getattr(args, "write_handoff", False):
-        # Build source quality report from DB quality field + on-disk notes
+        # 1. Filter sources to only those cited in findings/gaps — the writer
+        #    reads individual metadata files per source, so the full 500+ source
+        #    catalogue is unused bulk (~120 KB).
+        cited_ids: set[str] = set()
+        for f in findings_list:
+            cited_ids.update(f.get("sources", []))
+        for g in gaps_list:
+            cited_ids.update(g.get("sources", []))
+        full_result["sources"] = [s for s in source_list if s["id"] in cited_ids]
+
+        # 2. Strip redundant question text from findings — each finding repeats
+        #    the full question string (250-500 chars × 50-80 findings ≈ 28 KB).
+        #    The writer can cross-reference brief.questions by question_id.
+        for f in full_result["findings"]:
+            f.pop("question", None)
+
+        # 3. Build source quality report with counts only — the writer needs
+        #    totals for the Methodology section, not per-source ID lists.
         notes_dir = os.path.join(args.session_dir, "notes")
-        quality_tiers: dict[str, list[str]] = {
-            "on_topic_with_evidence": [],
-            "abstract_only_relevant": [],
-            "degraded_unread": [],
-            "mismatched": [],
-            "reader_validated": [],
+        quality_counts: dict[str, int] = {
+            "on_topic_with_evidence": 0,
+            "abstract_only_relevant": 0,
+            "degraded_unread": 0,
+            "mismatched": 0,
+            "reader_validated": 0,
         }
         for r in source_rows:
             sid_val = r["id"]
             q = r["quality"] or ""
             has_note = os.path.exists(os.path.join(notes_dir, f"{sid_val}.md"))
             if q == "mismatched":
-                quality_tiers["mismatched"].append(sid_val)
+                quality_counts["mismatched"] += 1
             elif q == "reader_validated":
-                quality_tiers["reader_validated"].append(sid_val)
+                quality_counts["reader_validated"] += 1
             elif q == "abstract_only":
-                quality_tiers["abstract_only_relevant"].append(sid_val)
+                quality_counts["abstract_only_relevant"] += 1
             elif q == "degraded" and not has_note:
-                quality_tiers["degraded_unread"].append(sid_val)
+                quality_counts["degraded_unread"] += 1
             elif has_note:
-                quality_tiers["on_topic_with_evidence"].append(sid_val)
+                quality_counts["on_topic_with_evidence"] += 1
 
-        full_result["source_quality_report"] = {
-            k: {"count": len(v), "ids": v} for k, v in quality_tiers.items()
-        }
+        full_result["source_quality_report"] = quality_counts
 
         handoff_path = os.path.join(args.session_dir, "synthesis-handoff.json")
         with open(handoff_path, "w") as f:
@@ -1774,7 +1789,7 @@ def cmd_audit(args):
     ).fetchall()
     searches_by_type = {}
     for s in all_searches:
-        st = s["search_type"] if "search_type" in s.keys() else "manual"
+        st = s.get("search_type", "manual")
         searches_by_type[st] = searches_by_type.get(st, 0) + 1
 
     # Load gaps
@@ -1841,7 +1856,7 @@ def cmd_audit(args):
                 mismatched.append(sid_val)
             elif quality == "abstract_only":
                 abstract_only.append(sid_val)
-        elif isinstance(quality, (int, float)) and quality < 0.5:
+        elif isinstance(quality, int | float) and quality < 0.5:
             degraded_unread.append(sid_val)
 
     # Build question text list and ID-to-text map from brief
@@ -2109,17 +2124,15 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
         quality_flag = None
         if isinstance(quality, str) and quality in ("mismatched", "degraded", "empty"):
             quality_flag = quality
-        elif isinstance(quality, (int, float)) and quality < 0.5:
+        elif isinstance(quality, int | float) and quality < 0.5:
             quality_flag = "low_score"
 
         # Stat content file for content_chars (enables content-depth-aware dispatch)
         content_chars = None
         if has_content and s.get("content_file"):
             content_path = os.path.join(session_dir, s["content_file"])
-            try:
+            with contextlib.suppress(OSError):
                 content_chars = os.path.getsize(content_path)
-            except OSError:
-                pass
 
         scored.append({
             "id": s["id"],
@@ -2381,7 +2394,7 @@ def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):
         if matching > 0:
             potentially_resolved.append(gap["id"])
         else:
-            unresolvable.append({"gap_id": gap["id"], "reason": f"No new high/medium sources with content match gap terms"})
+            unresolvable.append({"gap_id": gap["id"], "reason": "No new high/medium sources with content match gap terms"})
 
     # New sources/downloads — count sources added after initial acquisition
     # (approximation: sources whose id number is higher than the gap threshold)
@@ -2568,11 +2581,10 @@ def cmd_recover_failed(args):
                                 "--session-dir", args.session_dir,
                             ]
                             dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
-                            if dl_proc.returncode == 0:
-                                if any(os.path.exists(os.path.join(sources_dir, f"{sid}{ext}")) for ext in (".md", ".pdf")):
-                                    log(f"Recovered {sid} via {provider} PDF search")
-                                    channel_stats[provider]["successes"] += 1
-                                    return True
+                            if dl_proc.returncode == 0 and any(os.path.exists(os.path.join(sources_dir, f"{sid}{ext}")) for ext in (".md", ".pdf")):
+                                log(f"Recovered {sid} via {provider} PDF search")
+                                channel_stats[provider]["successes"] += 1
+                                return True
                 except (json.JSONDecodeError, TypeError):
                     pass
         except (subprocess.TimeoutExpired, Exception) as e:
@@ -2633,12 +2645,11 @@ def cmd_recover_failed(args):
                     "--session-dir", args.session_dir,
                 ]
                 dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
-                if dl_proc.returncode == 0:
-                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
-                        log(f"Recovered {sid_val} via DOI landing page")
-                        recovered.append(sid_val)
-                        channel_stats["doi"]["successes"] += 1
-                        success = True
+                if dl_proc.returncode == 0 and any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                    log(f"Recovered {sid_val} via DOI landing page")
+                    recovered.append(sid_val)
+                    channel_stats["doi"]["successes"] += 1
+                    success = True
             except (subprocess.TimeoutExpired, Exception) as e:
                 log(f"DOI landing page recovery failed for {sid_val}: {e}", level="debug")
 
@@ -2684,13 +2695,12 @@ def cmd_recover_failed(args):
                                     "--session-dir", args.session_dir,
                                 ]
                                 dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
-                                if dl_proc.returncode == 0:
-                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
-                                        log(f"Recovered {sid_val} via CORE")
-                                        recovered.append(sid_val)
-                                        channel_stats["core"]["successes"] += 1
-                                        success = True
-                                        break
+                                if dl_proc.returncode == 0 and any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                                    log(f"Recovered {sid_val} via CORE")
+                                    recovered.append(sid_val)
+                                    channel_stats["core"]["successes"] += 1
+                                    success = True
+                                    break
                     except (json.JSONDecodeError, TypeError):
                         pass
             except (subprocess.TimeoutExpired, Exception) as e:
@@ -2744,10 +2754,8 @@ def _load_json_raw(path: str) -> dict | list:
             return json.load(f)
     except FileNotFoundError:
         error_response([f"File not found: {path}"])
-        raise SystemExit(1)
     except json.JSONDecodeError as e:
         error_response([f"Invalid JSON in {path}: {e}"])
-        raise SystemExit(1)
 
 
 def _resolve_json_input(args) -> tuple[str, bool]:
@@ -2765,24 +2773,21 @@ def _resolve_json_input(args) -> tuple[str, bool]:
             data = json.loads(raw)  # validate JSON
         except json.JSONDecodeError as e:
             error_response([f"Invalid JSON from stdin: {e}"])
-            raise SystemExit(1)
         # Write to temp file so _load_json_raw works uniformly
         session_dir = getattr(args, "session_dir", None) or "."
-        tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False)
-        json.dump(data, tf)
-        tf.close()
-        return tf.name, True
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=session_dir, delete=False) as tf:
+            tf_name = tf.name
+            json.dump(data, tf)
+        return tf_name, True
     error_response(["No JSON input specified. Use --from-json FILE or --from-stdin"])
-    raise SystemExit(1)
+    return None
 
 
 def _cleanup_json_input(path: str, is_temp: bool) -> None:
     """Remove temp file created by _resolve_json_input if needed."""
     if is_temp:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(path)
-        except OSError:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -3252,7 +3257,7 @@ def cmd_enrich_metadata(args):
     conn.commit()
     conn.close()
 
-    result = {
+    result: dict[str, int | list[str]] = {
         "enriched": enriched,
         "attempted": attempted,
         "total_missing": len(rows),

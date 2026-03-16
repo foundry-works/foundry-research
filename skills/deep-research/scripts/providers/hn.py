@@ -25,7 +25,7 @@ def add_arguments(parser):
     parser.add_argument("--comment-limit", type=int, default=30, help="Max comments for story detail (default: 30)")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="hn_")
     client = create_session(session_dir, rate_limits={"hn.algolia.com": 0.5})
 
@@ -40,7 +40,7 @@ def search(args) -> dict:
         client.close()
 
 
-def _search_items(client, args) -> dict:
+def _search_items(client, args) -> str:
     query = args.query
     if not query:
         return error_response(["--query is required for HN search"], error_code="missing_query")
@@ -98,7 +98,7 @@ def _format_hit(hit: dict) -> dict:
     }
 
 
-def _fetch_story_detail(client, args) -> dict:
+def _fetch_story_detail(client, args) -> str:
     """Fetch a full story with its comment tree."""
     story_id = args.story_id
     url = f"{API_BASE}/items/{story_id}"

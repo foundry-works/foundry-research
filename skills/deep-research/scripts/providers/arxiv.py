@@ -99,7 +99,7 @@ def add_arguments(parser):
     parser.add_argument("--to-md", action="store_true", default=False, help="Convert downloaded PDFs to markdown via pymupdf4llm")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     session_dir = args.session_dir or tempfile.mkdtemp(prefix="arxiv_")
     client = create_session(session_dir, rate_limits={"export.arxiv.org": 1.0})
 
@@ -423,6 +423,8 @@ def _convert_to_md(pdf_path) -> str | None:
     try:
         import pymupdf4llm
         md_text = pymupdf4llm.to_markdown(str(pdf_path))
+        if not isinstance(md_text, str):
+            md_text = str(md_text)
         md_path = Path(str(pdf_path).replace(".pdf", ".md"))
         md_path.write_text(md_text, encoding="utf-8")
         log(f"Converted to markdown: {md_path}")

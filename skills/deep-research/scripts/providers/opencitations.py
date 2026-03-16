@@ -25,7 +25,7 @@ def add_arguments(parser) -> None:
     )
 
 
-def search(args) -> dict:
+def search(args) -> str:
     """Route to citation traversal based on flags."""
     session_dir = getattr(args, "session_dir", None) or tempfile.mkdtemp(prefix="oc_")
 
@@ -63,7 +63,7 @@ def search(args) -> dict:
         client.close()
 
 
-def _forward_citations(client, args) -> dict:
+def _forward_citations(client, args) -> str:
     """Get papers that cite the given DOI."""
     doi = _clean_doi(args.cited_by)
     limit = getattr(args, "limit", 10)
@@ -112,7 +112,7 @@ def _forward_citations(client, args) -> dict:
     )
 
 
-def _backward_references(client, args) -> dict:
+def _backward_references(client, args) -> str:
     """Get papers that the given DOI cites."""
     doi = _clean_doi(args.references)
     limit = getattr(args, "limit", 10)
@@ -252,13 +252,13 @@ def _extract_doi_from_id(oc_id: str) -> str:
     return ""
 
 
-def _handle_error(resp, doi: str) -> dict:
+def _handle_error(resp, doi: str) -> str:
     """Convert HTTP error to error envelope."""
     status = resp.status_code
     if status == 404:
         return error_response([f"DOI not found in OpenCitations: {doi}"], error_code="not_found")
     if status == 429:
-        return error_response([f"OpenCitations rate limited (429)"], error_code="rate_limited")
+        return error_response(["OpenCitations rate limited (429)"], error_code="rate_limited")
 
     try:
         body = resp.text[:500]

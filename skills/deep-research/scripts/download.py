@@ -2,6 +2,7 @@
 """Content & PDF downloader — web extraction, PDF cascade, local ingestion."""
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -27,14 +28,14 @@ from _shared.metadata import (  # noqa: E402
 )
 from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E402
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
-from _shared.state_client import call_state  # noqa: E402
 from _shared.pdf_utils import download_pdf, extract_first_page_text, pdf_to_markdown  # noqa: E402
 from _shared.quality import (  # noqa: E402
-    assess_quality,
-    check_content_mismatch,
     _extract_candidate_title,
     _extract_keywords,
+    assess_quality,
+    check_content_mismatch,
 )
+from _shared.state_client import call_state  # noqa: E402
 
 # arXiv download constraints
 _ARXIV_DELAY = 3.0  # seconds between arXiv downloads (ToS)
@@ -86,6 +87,7 @@ def _get_brief_keywords(session_dir: str) -> list[str]:
     paper matching "uncanny valley" title words in a psychology session).
     """
     import sqlite3
+
     from _shared.quality import _extract_keywords
 
     db_path = os.path.join(session_dir, "state.db")
@@ -1329,6 +1331,7 @@ def _lookup_source_id_from_state(session_dir: str, doi: str | None,
         return None
     try:
         import sqlite3
+
         from _shared.doi_utils import canonicalize_url as _canon_url
 
         conn = sqlite3.connect(db_path)
@@ -1382,10 +1385,8 @@ def _generate_source_id(sources_dir: str) -> str:
                 if name.startswith("src-") and name.endswith(".json"):
                     sid = name[:-5]  # strip .json
                     existing.add(sid)
-                    try:
+                    with contextlib.suppress(IndexError, ValueError):
                         max_n = max(max_n, int(sid.split("-")[1]))
-                    except (IndexError, ValueError):
-                        pass
 
         # Also check source files directly
         if os.path.isdir(sources_dir):
@@ -1406,10 +1407,8 @@ def _generate_source_id(sources_dir: str) -> str:
                             pass
 
                     existing.add(base)
-                    try:
+                    with contextlib.suppress(IndexError, ValueError):
                         max_n = max(max_n, int(base.split("-")[1]))
-                    except (IndexError, ValueError):
-                        pass
 
         # Start search from max_n+1 instead of 1 to avoid linear scan
         n = max_n + 1

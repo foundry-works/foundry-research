@@ -116,11 +116,10 @@ def main() -> None:
             log(f"Enriching DOI: {doi}" + (f" (source: {source_id})" if source_id else ""))
 
             # Skip already-enriched sources unless --force
-            if source_id and args.session_dir and not args.force:
-                if _is_already_enriched(source_id, metadata_dir):
-                    log(f"Already enriched {source_id} (Crossref), skipping (use --force to re-fetch)")
-                    stats["skipped"] += 1
-                    continue
+            if source_id and args.session_dir and not args.force and _is_already_enriched(source_id, metadata_dir):
+                log(f"Already enriched {source_id} (Crossref), skipping (use --force to re-fetch)")
+                stats["skipped"] += 1
+                continue
 
             # Check cascade wall-clock deadline
             if time.monotonic() > cascade_deadline:
@@ -203,9 +202,7 @@ def _is_already_enriched(source_id: str, metadata_dir: str) -> bool:
     if isinstance(enriched_by, list) and "crossref" in enriched_by:
         return True
     # Legacy check: if provider itself is crossref, it came from Crossref originally
-    if existing.get("provider") == "crossref":
-        return True
-    return False
+    return existing.get("provider") == "crossref"
 
 
 def _fetch_metadata_cascade(doi: str, clients: dict, mailto: str | None = None) -> dict | None:

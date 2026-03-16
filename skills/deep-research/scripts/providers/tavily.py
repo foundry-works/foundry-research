@@ -22,7 +22,7 @@ def add_arguments(parser):
     parser.add_argument("--include-raw-content", action="store_true", default=False, help="Include full page content in search results (can be very large)")
 
 
-def search(args) -> dict:
+def search(args) -> str:
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
         return error_response(
@@ -49,7 +49,7 @@ def search(args) -> dict:
         client.close()
 
 
-def _search(client, args, api_key: str) -> dict:
+def _search(client, args, api_key: str) -> str:
     """Search via Tavily's /search endpoint."""
     limit = args.limit
     if limit > _MAX_RESULTS:
@@ -113,7 +113,7 @@ def _search(client, args, api_key: str) -> dict:
     )
 
 
-def _extract(client, args, api_key: str) -> dict:
+def _extract(client, args, api_key: str) -> str:
     """Extract content from URLs via Tavily's /extract endpoint."""
     body = {
         "urls": args.urls,
