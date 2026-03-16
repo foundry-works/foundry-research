@@ -2507,16 +2507,82 @@ def cmd_recover_failed(args):
     recovered = []
     still_failed = []
     total_attempts = 0
-    channel_stats = {"core": {"attempts": 0, "successes": 0},
-                     "tavily": {"attempts": 0, "successes": 0},
-                     "doi": {"attempts": 0, "successes": 0}}
+    # Web search providers for recovery, in preference order.
+    # Each provider checks its own env var (e.g. TAVILY_API_KEY) at search time;
+    # we detect availability here so we don't waste budget on unconfigured providers.
+    _WEB_PROVIDER_KEYS = [
+        ("tavily", "TAVILY_API_KEY"),
+        ("perplexity", "PERPLEXITY_API_KEY"),
+        ("linkup", "LINKUP_API_KEY"),
+        ("exa", "EXA_API_KEY"),
+        ("gensee", "GENSEE_API_KEY"),
+    ]
+    web_providers = [name for name, env in _WEB_PROVIDER_KEYS if os.environ.get(env)]
+    if not web_providers:
+        log("No web search provider API keys found — web recovery channel disabled", level="warn")
+
+    # Build channel_stats for all channels we might use
+    channel_stats = {"doi": {"attempts": 0, "successes": 0},
+                     "core": {"attempts": 0, "successes": 0}}
+    for wp in web_providers:
+        channel_stats[wp] = {"attempts": 0, "successes": 0}
     skipped_channels = []
     budget_exhausted = False
 
     def _channel_available(ch: str) -> bool:
         """Return False if a channel should be skipped (0 successes after 5+ attempts)."""
-        s = channel_stats[ch]
+        s = channel_stats.get(ch)
+        if not s:
+            return False
         return not (s["attempts"] >= 5 and s["successes"] == 0)
+
+    def _try_web_search(provider: str, sid: str, paper_title: str) -> bool:
+        """Try recovering a source via a web search provider. Returns True on success."""
+        if not paper_title or not _channel_available(provider):
+            return False
+        try:
+            channel_stats[provider]["attempts"] += 1
+            cmd = [
+                sys.executable, search_script,
+                "--provider", provider,
+                "--query", f'"{paper_title[:150]}" pdf',
+                "--limit", "3",
+                "--session-dir", args.session_dir,
+                "--search-type", "recovery",
+            ]
+            proc = subprocess.run(cmd, capture_output=True, timeout=30)
+            if proc.returncode == 0:
+                try:
+                    result = json.loads(proc.stdout.decode())
+                    results = result.get("results", {})
+                    if isinstance(results, dict):
+                        results = results.get("results", [])
+                    for r in (results if isinstance(results, list) else []):
+                        url = r.get("url", "")
+                        if url and url.lower().endswith(".pdf"):
+                            dl_cmd = [
+                                sys.executable, download_script,
+                                "--pdf-url", url,
+                                "--source-id", sid,
+                                "--to-md",
+                                "--session-dir", args.session_dir,
+                            ]
+                            dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
+                            if dl_proc.returncode == 0:
+                                if any(os.path.exists(os.path.join(sources_dir, f"{sid}{ext}")) for ext in (".md", ".pdf")):
+                                    log(f"Recovered {sid} via {provider} PDF search")
+                                    channel_stats[provider]["successes"] += 1
+                                    return True
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        except (subprocess.TimeoutExpired, Exception) as e:
+            log(f"{provider} recovery failed for {sid}: {e}", level="debug")
+
+        # Check if this provider should be skipped going forward
+        if not _channel_available(provider) and provider not in skipped_channels:
+            skipped_channels.append(provider)
+            log(f"{provider} channel skipped: 0 successes after 5 attempts")
+        return False
 
     for item in failed:
         sid_val = item["source_id"]
@@ -2536,56 +2602,16 @@ def cmd_recover_failed(args):
             still_failed.append(sid_val)
             continue
 
-        # Strategy 1: CORE search by title
+        # Strategy 1: Web search providers (try each configured provider in order)
         success = False
-        if title and _channel_available("core"):
-            try:
-                channel_stats["core"]["attempts"] += 1
-                total_attempts += 1
-                cmd = [
-                    sys.executable, search_script,
-                    "--provider", "core",
-                    "--query", title[:200],
-                    "--limit", "3",
-                    "--session-dir", args.session_dir,
-                    "--search-type", "recovery",
-                ]
-                proc = subprocess.run(cmd, capture_output=True, timeout=30)
-                if proc.returncode == 0:
-                    try:
-                        result = json.loads(proc.stdout.decode())
-                        results = result.get("results", {})
-                        if isinstance(results, dict):
-                            results = results.get("results", [])
-                        # Look for a result with a download_url or pdf_url
-                        for r in (results if isinstance(results, list) else []):
-                            pdf_url = r.get("pdf_url") or r.get("download_url")
-                            if pdf_url:
-                                # Try downloading this PDF
-                                dl_cmd = [
-                                    sys.executable, download_script,
-                                    "--pdf-url", pdf_url,
-                                    "--source-id", sid_val,
-                                    "--to-md",
-                                    "--session-dir", args.session_dir,
-                                ]
-                                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
-                                if dl_proc.returncode == 0:
-                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
-                                        log(f"Recovered {sid_val} via CORE")
-                                        recovered.append(sid_val)
-                                        channel_stats["core"]["successes"] += 1
-                                        success = True
-                                        break
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-            except (subprocess.TimeoutExpired, Exception) as e:
-                log(f"CORE recovery failed for {sid_val}: {e}", level="debug")
-
-            # Check if CORE should be skipped going forward
-            if not _channel_available("core") and "core" not in skipped_channels:
-                skipped_channels.append("core")
-                log("CORE channel skipped: 0 successes after 5 attempts")
+        for wp in web_providers:
+            if total_attempts >= max_attempts:
+                break
+            total_attempts += 1
+            if _try_web_search(wp, sid_val, title):
+                recovered.append(sid_val)
+                success = True
+                break
 
         if success:
             continue
@@ -2593,61 +2619,7 @@ def cmd_recover_failed(args):
             still_failed.append(sid_val)
             continue
 
-        # Strategy 2: Tavily search for "title pdf"
-        if title and _channel_available("tavily"):
-            try:
-                channel_stats["tavily"]["attempts"] += 1
-                total_attempts += 1
-                cmd = [
-                    sys.executable, search_script,
-                    "--provider", "tavily",
-                    "--query", f'"{title[:150]}" pdf',
-                    "--limit", "3",
-                    "--session-dir", args.session_dir,
-                    "--search-type", "recovery",
-                ]
-                proc = subprocess.run(cmd, capture_output=True, timeout=30)
-                if proc.returncode == 0:
-                    try:
-                        result = json.loads(proc.stdout.decode())
-                        results = result.get("results", {})
-                        if isinstance(results, dict):
-                            results = results.get("results", [])
-                        for r in (results if isinstance(results, list) else []):
-                            url = r.get("url", "")
-                            if url and url.lower().endswith(".pdf"):
-                                dl_cmd = [
-                                    sys.executable, download_script,
-                                    "--pdf-url", url,
-                                    "--source-id", sid_val,
-                                    "--to-md",
-                                    "--session-dir", args.session_dir,
-                                ]
-                                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
-                                if dl_proc.returncode == 0:
-                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
-                                        log(f"Recovered {sid_val} via Tavily PDF search")
-                                        recovered.append(sid_val)
-                                        channel_stats["tavily"]["successes"] += 1
-                                        success = True
-                                        break
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-            except (subprocess.TimeoutExpired, Exception) as e:
-                log(f"Tavily recovery failed for {sid_val}: {e}", level="debug")
-
-            # Check if Tavily should be skipped going forward
-            if not _channel_available("tavily") and "tavily" not in skipped_channels:
-                skipped_channels.append("tavily")
-                log("Tavily channel skipped: 0 successes after 5 attempts")
-
-        if success:
-            continue
-        if total_attempts >= max_attempts:
-            still_failed.append(sid_val)
-            continue
-
-        # Strategy 3: DOI landing page as web source
+        # Strategy 2: DOI landing page as web source
         if doi and _channel_available("doi"):
             try:
                 channel_stats["doi"]["attempts"] += 1
@@ -2674,6 +2646,59 @@ def cmd_recover_failed(args):
             if not _channel_available("doi") and "doi" not in skipped_channels:
                 skipped_channels.append("doi")
                 log("DOI channel skipped: 0 successes after 5 attempts")
+
+        if success:
+            continue
+        if total_attempts >= max_attempts:
+            still_failed.append(sid_val)
+            continue
+
+        # Strategy 3: CORE keyword search (last resort — unreliable for title matching)
+        if title and _channel_available("core"):
+            try:
+                channel_stats["core"]["attempts"] += 1
+                total_attempts += 1
+                cmd = [
+                    sys.executable, search_script,
+                    "--provider", "core",
+                    "--query", title[:200],
+                    "--limit", "3",
+                    "--session-dir", args.session_dir,
+                    "--search-type", "recovery",
+                ]
+                proc = subprocess.run(cmd, capture_output=True, timeout=30)
+                if proc.returncode == 0:
+                    try:
+                        result = json.loads(proc.stdout.decode())
+                        results = result.get("results", {})
+                        if isinstance(results, dict):
+                            results = results.get("results", [])
+                        for r in (results if isinstance(results, list) else []):
+                            pdf_url = r.get("pdf_url") or r.get("download_url")
+                            if pdf_url:
+                                dl_cmd = [
+                                    sys.executable, download_script,
+                                    "--pdf-url", pdf_url,
+                                    "--source-id", sid_val,
+                                    "--to-md",
+                                    "--session-dir", args.session_dir,
+                                ]
+                                dl_proc = subprocess.run(dl_cmd, capture_output=True, timeout=60)
+                                if dl_proc.returncode == 0:
+                                    if any(os.path.exists(os.path.join(sources_dir, f"{sid_val}{ext}")) for ext in (".md", ".pdf")):
+                                        log(f"Recovered {sid_val} via CORE")
+                                        recovered.append(sid_val)
+                                        channel_stats["core"]["successes"] += 1
+                                        success = True
+                                        break
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            except (subprocess.TimeoutExpired, Exception) as e:
+                log(f"CORE recovery failed for {sid_val}: {e}", level="debug")
+
+            if not _channel_available("core") and "core" not in skipped_channels:
+                skipped_channels.append("core")
+                log("CORE channel skipped: 0 successes after 5 attempts")
 
         if not success:
             still_failed.append(sid_val)

@@ -74,7 +74,7 @@ In gap mode, skip broad searches. Run targeted searches for each gap (minimum 2 
 - **For literature review topics** (systematic reviews, state-of-the-field, measurement/instrument research), citation chasing should account for **30-50% of total search effort.** These topics have well-connected citation networks where traversal finds more relevant sources per search than keyword queries. A session with 20 searches should have 6-10 citation traversals.
 - **Paper ID format:** Pass the S2 paper ID (40-char hex, visible in the `id` field of Semantic Scholar results) or a DOI. Raw DOIs like `10.1234/abc` are auto-prefixed to `DOI:10.1234/abc` by the search CLI. S2 hex IDs and already-prefixed identifiers (`DOI:...`, `ARXIV:...`) pass through unchanged.
 - **Fallback tree** when citation traversal returns 0: retry `--cited-by` without `--min-citations` → try `--references` → try `--provider openalex --cited-by DOI:...` (OpenAlex has broader coverage for older papers and social science literature) → fall back to keyword search with paper's exact title
-- **CORE title lookups:** When searching CORE by exact paper title (citation chasing fallback), always pass `--title-mode`. CORE's full-text tokenizer chokes on colons, hyphens, and long subtitles — `--title-mode` strips these before querying, improving hit rate from ~50% to ~90%.
+- **Don't use CORE for title lookups.** CORE's search reliably returns 0 for exact-title queries — in observed sessions, ~65% of CORE title-mode searches return nothing, even with normalization. For citation-chasing fallbacks by title, use Semantic Scholar (paste the exact title as query) or OpenAlex. Reserve CORE for broad keyword searches where it reliably surfaces open-access full text.
 
 **Skip citation chasing** if: the topic is non-academic (product comparisons, financial analysis) or round 1 found no papers with >50 citations.
 
@@ -159,7 +159,7 @@ Different providers need different query styles to return good results. Semantic
 - **PubMed (biomedical):** Use MeSH headings when available: `"Cognitive Behavioral Therapy"[MeSH] AND "Depression"[MeSH]`. When unsure of exact MeSH terms, use simpler phrases and let PubMed's automatic term mapping handle it.
 - **PubMed query complexity rule:** Never send 5+ space-separated terms to PubMed without Boolean operators. PubMed ANDs every space-separated token — a query like `uncanny valley fMRI EEG brain neuroimaging` requires ALL six terms to appear, which zeros out most result sets because non-MeSH tokens have no index entries. Use 2-3 core terms with explicit OR groups instead: `"uncanny valley" AND (fMRI OR EEG OR neuroimaging)`. If you need both a topic term and multiple modality/method terms, group the modalities with OR. This is the #1 cause of zero-result PubMed searches in practice.
 - **Semantic Scholar:** Uses relevance-based ranking, not boolean matching — `AND`, `OR`, and quoted phrases don't filter results the way they do on PubMed. Long keyword lists like "uncanny valley neural fMRI EEG brain" are interpreted as a disjunctive relevance query, returning papers matching *any* subset of terms (generic fMRI papers, generic EEG papers, etc.). Use 2-3 highly specific terms per query (e.g., "uncanny valley fMRI") rather than 5+ broad terms. For known seminal papers, search by exact title rather than keyword combinations. For narrow subdomains (neuroimaging of X, physiological response to Y), lean on citation traversal (`--cited-by`, `--references`) over broad keyword sweeps — traversal is higher precision because it follows the citation graph rather than relying on term overlap.
-- **CORE:** Best for finding open-access full-text versions. Use `--title-mode` for exact title lookups. Less useful for exploratory keyword searches.
+- **CORE:** Best for broad keyword searches that surface open-access full text. **Do not use CORE for exact title lookups** — its tokenizer is unreliable for title matching and most title queries return 0 results. For finding a specific paper by title, use Semantic Scholar or OpenAlex instead.
 
 ### Provider distribution self-check
 
@@ -202,7 +202,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 1. Run `state download-pending --auto-download --min-relevance 0.0` in a loop until the response shows `"remaining": 0`. Each call downloads a batch of 5 sources (default) and completes within the default Bash timeout — no timeout override needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
-4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels (CORE, Tavily, DOI landing pages). **Recovery has a budget** — it defaults to 5 attempts per call and auto-skips any channel that has 0 successes after 5 attempts. Call multiple times if needed. This prevents the failure mode where 50+ CORE queries run in a row with zero yield (e.g., psychology papers behind APA/Wiley paywalls that CORE never has).
+4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels. Recovery tries three strategy tiers in order: **(1) web search providers** (Tavily → Perplexity → Linkup → Exa → Gensee — whichever have API keys configured), **(2) DOI landing pages**, **(3) CORE keyword search** (last resort — unreliable for title matching). **Recovery has a budget** — it defaults to 5 attempts per call and auto-skips any channel that has 0 successes after 5 attempts. Call multiple times if needed.
 
    **Always** pass both relevance filters — without them, recovery wastes budget on off-topic high-citation papers (PRISMA guidelines, COVID burden studies, etc.) that entered state.db from broad keyword searches:
    - `--min-relevance 0.3` — skips sources whose LLM relevance score is below threshold
@@ -212,7 +212,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
    Example: `state recover-failed --min-relevance 0.3 --title-keywords "uncanny,valley,perception,humanoid,robot" --min-citations 30`
 
-   The response includes `skipped_channels` (channels auto-disabled due to 0% success after 5 tries) and `budget_exhausted` (true if the attempt cap was reached before all eligible sources were tried). If CORE gets skipped, switch to Tavily author-page searches for the remaining high-priority failures using the web search recovery workflow below.
+   The response includes `skipped_channels` (channels auto-disabled due to 0% success after 5 tries) and `budget_exhausted` (true if the attempt cap was reached before all eligible sources were tried).
 
    **`recover-failed` processes in small batches** — it tries multiple download channels per source but the internal timeout is capped to fit within the default Bash timeout. If you have many sources to recover, call it multiple times. If a single call seems to stall (unlikely with default batch sizes), set `timeout: 300000` on the Bash call.
 
@@ -339,7 +339,7 @@ Citation traversal (Semantic Scholar, PubMed only) — `--compact` and `--brief-
 ```
 
 Common flags: `--limit N`, `--offset N`, `--year-range YYYY-YYYY`, `--open-access-only`, `--min-citations N`
-CORE-specific: `--title-mode` (normalize query for exact title lookup — use when citation-chasing via CORE)
+CORE-specific: `--title-mode` (normalize query for title lookup — rarely useful; prefer Semantic Scholar or OpenAlex for title searches)
 
 Searches are auto-tracked — they automatically log to state.db and add sources. No manual `log-search` or `add-sources` needed.
 
