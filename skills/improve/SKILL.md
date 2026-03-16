@@ -18,16 +18,16 @@ Three input categories. Read only what's listed — nothing else.
 
 ### 1. Session directories (required argument)
 
-The user provides one or more `deep-research-*` directory paths as arguments. For each directory, read `REFLECTION.md` (and optionally `reflection.json` if present).
+The user provides one or more `deep-research-*` directory paths as arguments. For each directory, read `reflection.json` (the structured reflection output).
 
 If no session directories are provided, fail immediately with:
 > "Please provide one or more session directory paths: `/improve ./deep-research-topicA ./deep-research-topicB`"
 
-For each provided directory, validate that `REFLECTION.md` exists. If a directory is missing its reflection, warn and skip it: "No REFLECTION.md in {dir} — run `/reflect {dir}` first. Skipping." If all directories lack reflections, stop with error.
+For each provided directory, validate that `reflection.json` exists. If a directory is missing its reflection, warn and skip it: "No reflection.json in {dir} — run `/reflect {dir}` first. Skipping." If all directories lack reflections, stop with error.
 
 **Why explicit paths, not auto-discovery:** Auto-globbing for `deep-research-*/REFLECTION.md` silently includes every session in the working directory, which may not be what the user wants — they may have old sessions, in-progress sessions, or sessions they've already acted on. Explicit paths let the user control exactly which reflections feed the analysis.
 
-**Read ONLY reflection files from session directories.** Never read state.db, report.md, journal.md, notes/, or sources/. Reflections already contain the distilled analysis — re-reading raw session data duplicates `/reflect`'s work and wastes context on artifacts that have already been interpreted.
+**Read ONLY `reflection.json` from session directories.** Never read state.db, report.md, journal.md, notes/, or sources/. Reflections already contain the distilled analysis — re-reading raw session data duplicates `/reflect`'s work and wastes context on artifacts that have already been interpreted.
 
 ### 2. Pipeline files
 
@@ -169,8 +169,8 @@ Assessment of how proposed changes align with PRINCIPLES.md. Flag any tensions �
 
 ## Process
 
-1. **Validate inputs.** Parse the session directory paths from the user's arguments. For each, confirm `REFLECTION.md` exists. If 0 valid sessions remain after validation, stop with error. If 1 valid session, warn: "Only 1 reflection available — cross-session pattern detection requires 2+ sessions. Proceeding with limited analysis."
-2. **Read all reflection files.** Read every valid session's `REFLECTION.md` (and `reflection.json` if present) fully.
+1. **Validate inputs.** Parse the session directory paths from the user's arguments. For each, confirm `reflection.json` exists. If 0 valid sessions remain after validation, stop with error. If 1 valid session, warn: "Only 1 reflection available — cross-session pattern detection requires 2+ sessions. Proceeding with limited analysis."
+2. **Read all reflection files.** Read every valid session's `reflection.json` fully.
 3. **Read pipeline files.** Read the skill prompts, agent prompts, and scripts listed in the Inputs section.
 4. **Read PRINCIPLES.md.**
 5. **Analyze.** Work through Steps 1-4 of the Analysis Framework: extract and tabulate, identify cross-session patterns, classify improvements, prioritize.
