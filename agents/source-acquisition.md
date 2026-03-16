@@ -188,6 +188,10 @@ This scores source abstracts against the research brief using Haiku, writing `re
 
 After LLM relevance scoring, run `state triage` to rank sources by citation count × relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
 
+**Relevance floor for ambiguous queries.** When brief keywords are domain-specific, sources scoring below 0.3 relevance should be deprioritized below the download cutoff unless they have strong citation evidence (>100 citations in the field). This matters most for ambiguous query terms that match across disciplines — "uncanny valley" returns geology and theology papers at 0.1-0.3 relevance that pass the 0.0 floor but are clearly off-topic. The relevance floor complements venue/domain validation (which catches mismatches post-download) by reducing them pre-download. **Why 0.3, not higher:** Interdisciplinary papers legitimately bridging two fields may score 0.3-0.5 on keyword overlap. A floor above 0.3 risks filtering useful cross-domain work.
+
+**Web-source triage for academic-domain sessions.** When 3+ academic providers are in use (Semantic Scholar, PubMed, OpenAlex, arXiv, bioRxiv, CORE), the session is academically well-covered and web sources serve a different role. Web sources from Linkup/Tavily/Perplexity/Exa without citation counts should only be prioritized for download when they fill a specific gap that academic sources don't address — practitioner perspectives, recent developments not yet in academic literature, or community discussion that reveals real-world context. Deprioritize web sources scoring <0.3 relevance when academic coverage is adequate. **Why:** Web sources represent a small fraction of total sources but can have high noise-to-signal ratios (Reddit threads, blog posts, dictionary entries). Each one that gets downloaded consumes a slot that could go to an academic source with richer evidence.
+
 **Web-first questions.** The orchestrator may flag specific questions as recency-dependent (e.g., "Q4 is recency-dependent — web sources and preprints are primary evidence"). For these questions, citation count is the wrong ranking signal — the best evidence is recent and uncited. When triaging sources for recency-dependent questions, rank by: (a) publication date (newer is better), (b) domain authority (arxiv, pmc, acm, frontiers > blog posts > reddit), (c) keyword relevance to the question. Ensure tavily/web results for these questions aren't buried below high-citation academic papers that cover the broader topic but not the recent developments.
 
 ---
@@ -225,7 +229,8 @@ After all downloads and recovery attempts complete, validate content for the **t
 
 1. For each source with a content file, read the first 10 lines of the content file
 2. Check if the actual content plausibly matches the metadata title/abstract — look for author names, key domain terms, venue name, or methodology keywords from the abstract
-3. If obviously mismatched (different topic, different authors, garbled/stub content), call `{cli_dir}/state set-quality --id src-NNN --quality mismatched`
+3. **Check venue/journal against the research domain.** A paper published in a geology, theology, or otherwise unrelated journal is almost certainly a content mismatch regardless of title keyword overlap — flag it immediately. For ambiguous query terms that appear across disciplines (e.g., "uncanny valley" spans psychology, geology, animation), venue is a more reliable mismatch signal than title keywords. A paper in *Geomorphology* is obviously wrong for psychology research even if the title contains every keyword. Also check: if domain terms from the brief scope are absent from the first 10 lines of content, treat this as strong mismatch evidence.
+4. If obviously mismatched (different topic, different authors, wrong domain/venue, garbled/stub content), call `{cli_dir}/state set-quality --id src-NNN --quality mismatched`
 4. Report validation results in the manifest under `content_validation`:
 
 ```json
