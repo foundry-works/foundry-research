@@ -274,11 +274,11 @@ def _file_counts(session_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 MILESTONE_PATTERNS = [
-    r"brief\s+set",
-    r"source.acquisition\s+return",
-    r"readers?\s+complete",
-    r"gap.mode\s+return",
-    r"synthesis\s+handoff",
+    r"brief",
+    r"source.acqui",
+    r"reader|reading|deep.read",
+    r"gap.mode|gap.analysis|gap.search|gap.driven",
+    r"synth|pre.synthesis|draft\s+complete|report\s+draft",
 ]
 
 

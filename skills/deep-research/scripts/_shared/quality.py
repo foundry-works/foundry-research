@@ -186,6 +186,19 @@ def _extract_keywords(text: str, stopwords: set[str] = _STOPWORDS, min_len: int 
     ]
 
 
+def _extract_candidate_title(text: str) -> str:
+    """Extract the document's actual title from the first few lines."""
+    first_block = text[:500]
+    first_lines = [ln.strip() for ln in first_block.split("\n") if ln.strip()]
+    if not first_lines:
+        return ""
+    candidate = first_lines[0]
+    if len(first_lines) > 1 and len(first_lines[0]) < 30:
+        # Short first line might be a journal name — combine first two
+        candidate = first_lines[0] + " " + first_lines[1]
+    return candidate
+
+
 def check_content_mismatch(
     text: str,
     title: str = "",
@@ -195,49 +208,61 @@ def check_content_mismatch(
 ) -> dict:
     """Check if extracted text plausibly matches expected metadata.
 
-    Looks for title keywords and author surnames in the text. If zero matches
-    are found, the content is likely from the wrong paper (e.g., wrong PDF
-    retrieved from a mirror).
-
-    When an abstract is provided, also checks abstract-keyword overlap against
-    the content. This catches the failure mode where a paper shares common
-    words with the title (e.g., "children" and "behavior") but is about a
-    completely different topic (e.g., dental hygiene, not temperament).
+    Uses a composite scoring model: each signal (title keywords, author
+    surnames, abstract overlap, brief keywords, title-to-title) produces
+    a 0-1 score. The weighted average determines the match. This replaces
+    the old conjunctive gate logic where ALL gates had to fail — that was
+    too lenient because a paper sharing a few generic keywords ("child",
+    "development") would pass even when completely off-topic.
 
     Returns:
-        {"mismatched": bool, "title_hits": int, "author_hits": int,
-         "abstract_overlap": float | None, "reason": str}
+        {"mismatched": bool, "match_score": float,
+         "scores": {"title_rate": float, "author_rate": float,
+                    "abstract_overlap": float|None, "brief_rate": float|None,
+                    "title_to_title": float|None},
+         "title_hits": int, "author_hits": int,
+         "abstract_overlap": float|None, "reason": str}
     """
     if not text or (not title and not authors):
-        return {"mismatched": False, "title_hits": 0, "author_hits": 0,
+        return {"mismatched": False, "match_score": 1.0,
+                "scores": {"title_rate": 1.0, "author_rate": 1.0,
+                           "abstract_overlap": None, "brief_rate": None,
+                           "title_to_title": None},
+                "title_hits": 0, "author_hits": 0,
                 "abstract_overlap": None, "reason": ""}
 
     text_lower = text[:20000].lower()  # check first ~20k chars for speed
 
-    # Extract meaningful title keywords (3+ chars, skip stopwords)
+    # --- Signal 1: Title keyword hit rate ---
     title_words = _extract_keywords(title) if title else []
     title_hits = sum(1 for w in title_words if w in text_lower) if title_words else 0
+    title_rate = (title_hits / len(title_words)) if title_words else 1.0
 
-    # Check author surnames in first page (~3000 chars) and full header
-    # Most legitimate PDFs have author names on the first page.
+    # --- Signal 2: Author surname presence ---
     first_page_lower = text[:3000].lower()
     author_hits = 0
     author_first_page_hits = 0
+    author_count = 0
     if authors:
-        for author in authors[:5]:  # check first 5 authors
+        for author in authors[:5]:
             parts = author.split(",")
             surname = parts[0].strip().lower() if parts else ""
             if surname and len(surname) >= 3:
+                author_count += 1
                 if surname in text_lower:
                     author_hits += 1
                 if surname in first_page_lower:
                     author_first_page_hits += 1
+    author_rate = (author_hits / author_count) if author_count else 1.0
+    # Penalize when authors appear in text but not on first page —
+    # legitimate papers almost always list authors on page 1.
+    if author_count and author_hits > 0 and author_first_page_hits == 0:
+        author_rate *= 0.3  # significant penalty
 
-    # Abstract-keyword overlap check
+    # --- Signal 3: Abstract keyword overlap ---
     abstract_overlap = None
     if abstract and len(abstract) >= 50:
         abstract_kws = _extract_keywords(abstract)
-        # Deduplicate and take top 10 by length (longer = more domain-specific)
         seen = set()
         unique_kws = []
         for kw in sorted(abstract_kws, key=len, reverse=True):
@@ -245,97 +270,103 @@ def check_content_mismatch(
                 seen.add(kw)
                 unique_kws.append(kw)
         abstract_kws = unique_kws[:10]
-
         if abstract_kws:
-            # Check against first 5000 words (~first few pages)
             text_check = text_lower[:15000]
             hits = sum(1 for kw in abstract_kws if kw in text_check)
             abstract_overlap = hits / len(abstract_kws)
 
-    # Mismatch: we have metadata to check against but found nothing
-    has_title_keywords = len(title_words) >= 2
-    has_authors = bool(authors and len(authors) >= 1)
-
-    if has_title_keywords and has_authors:
-        mismatched = title_hits == 0 and author_hits == 0
-    elif has_title_keywords:
-        mismatched = title_hits == 0
-    elif has_authors:
-        mismatched = author_hits == 0
-    else:
-        mismatched = False
-
-    # First-page author check: if authors exist in the full text but NOT on
-    # the first page, and title match is weak, flag as mismatched.
-    # Legitimate papers almost always have author names on page 1.
-    if (not mismatched and has_authors and author_hits > 0
-            and author_first_page_hits == 0 and title_hits < 3):
-        mismatched = True
-
-    # Abstract-keyword gate: even if title/author passed, flag as mismatched
-    # when abstract overlap is very low AND title match is weak.
-    # This catches papers that share generic title words but are off-topic.
-    # Threshold: title_hits < 2 because even 2 hits from generic words
-    # (children, behavior, measurement) appear on completely wrong papers.
-    if (not mismatched and abstract_overlap is not None
-            and abstract_overlap < 0.2 and title_hits < 2):
-        mismatched = True
-
-    # Brief-keyword gate: if the research brief's domain-specific keywords
-    # don't appear anywhere in the first 5000 chars, the paper is likely
-    # off-topic — even if title words matched (common domain words cause
-    # false passes, e.g. "uncanny valley" in geology vs. psychology).
-    # Window is 5000 chars (not 2000) because many PDFs have long preambles
-    # (copyright notices, author affiliations, journal headers) that push
-    # domain content past a shorter window.
-    # Only flags when title match is also weak to avoid false positives
-    # on genuinely relevant papers with unusual introductions.
-    brief_hits = 0
-    if (not mismatched and brief_keywords and title_hits < 3):
+    # --- Signal 4: Brief keyword presence ---
+    brief_rate = None
+    if brief_keywords:
         text_head = text[:5000].lower()
         brief_hits = sum(1 for kw in brief_keywords if kw.lower() in text_head)
-        if brief_hits == 0:
-            mismatched = True
+        brief_rate = brief_hits / len(brief_keywords)
 
-    # Title-to-content comparison: extract the actual title from the first
-    # few lines of the PDF and compare against the expected title from state.db.
-    # A title mismatch is the strongest signal of wrong content — the PDF cascade
-    # may have fetched a valid PDF at the right URL, but the content is a
-    # completely different paper.
-    if not mismatched and title and title_words and title_hits < 2:
-        # Extract candidate title from first 500 chars (before abstract/intro)
-        first_block = text[:500]
-        first_lines = [ln.strip() for ln in first_block.split("\n") if ln.strip()]
-        if first_lines:
-            # The actual title is typically the first non-empty line(s)
-            candidate_title = first_lines[0]
-            if len(first_lines) > 1 and len(first_lines[0]) < 30:
-                # Short first line might be a journal name — try combining first two
-                candidate_title = first_lines[0] + " " + first_lines[1]
+    # --- Signal 5: Title-to-title comparison ---
+    # Strongest single signal — compare extracted document title against
+    # expected title. A food/nutrition paper won't have any overlap with
+    # "Child Temperament Questionnaire validation" in its actual title.
+    title_to_title = None
+    if title and title_words:
+        candidate_title = _extract_candidate_title(text)
+        if candidate_title:
             candidate_kws = _extract_keywords(candidate_title)
             expected_kws = set(title_words)
             if candidate_kws and expected_kws:
                 overlap = sum(1 for w in candidate_kws if w in expected_kws)
-                # If the extracted title shares zero keywords with the expected
-                # title and brief keywords are also absent, it's a mismatch
-                if overlap == 0 and (not brief_keywords or brief_hits == 0):
-                    mismatched = True
+                title_to_title = overlap / max(len(candidate_kws), len(expected_kws))
+
+    # --- Composite score ---
+    # Weighted average of available signals. Weights reflect diagnostic value:
+    # title-to-title is the strongest single indicator; abstract overlap is
+    # strong for topic matching; title keywords and authors are supporting.
+    weights = []
+    scores = []
+    if title_words:
+        weights.append(2.0)
+        scores.append(title_rate)
+    if author_count:
+        weights.append(1.5)
+        scores.append(author_rate)
+    if abstract_overlap is not None:
+        weights.append(2.5)
+        scores.append(abstract_overlap)
+    if brief_rate is not None:
+        weights.append(2.0)
+        scores.append(brief_rate)
+    if title_to_title is not None:
+        weights.append(3.0)
+        scores.append(title_to_title)
+
+    if weights:
+        match_score = sum(w * s for w, s in zip(weights, scores)) / sum(weights)
+    else:
+        match_score = 1.0
+
+    # Threshold: flag as mismatched when composite score is low.
+    # 0.3 catches papers that share a few generic keywords but are clearly
+    # off-topic, while avoiding false positives on legitimate papers that
+    # happen to have unusual introductions or reformatted titles.
+    _MISMATCH_THRESHOLD = 0.3
+    mismatched = match_score < _MISMATCH_THRESHOLD
+
+    # Hard fail: title-to-title overlap below 0.5 is a strong standalone
+    # signal even if other scores are moderate (e.g., shared generic terms
+    # boost title_rate and brief_rate but the actual document title is wrong).
+    if not mismatched and title_to_title is not None and title_to_title < 0.15:
+        # Only hard-fail when title keyword rate is also weak — avoids
+        # false positives from reformatted/abbreviated titles in the PDF.
+        if title_rate < 0.5:
+            mismatched = True
+
+    score_details = {
+        "title_rate": round(title_rate, 3),
+        "author_rate": round(author_rate, 3),
+        "abstract_overlap": round(abstract_overlap, 3) if abstract_overlap is not None else None,
+        "brief_rate": round(brief_rate, 3) if brief_rate is not None else None,
+        "title_to_title": round(title_to_title, 3) if title_to_title is not None else None,
+    }
 
     reason = ""
     if mismatched:
         parts = []
+        parts.append(f"composite match score {match_score:.2f} < {_MISMATCH_THRESHOLD}")
         parts.append(
-            f"{title_hits}/{len(title_words)} title keywords and "
-            f"{author_hits}/{len(authors or [])} author surnames found"
+            f"{title_hits}/{len(title_words)} title keywords, "
+            f"{author_hits}/{author_count} authors"
         )
         if abstract_overlap is not None:
-            parts.append(f"abstract keyword overlap {abstract_overlap:.0%}")
-        if brief_keywords:
-            parts.append(f"{brief_hits}/{len(brief_keywords)} brief keywords in first 5000 chars")
+            parts.append(f"abstract overlap {abstract_overlap:.0%}")
+        if brief_rate is not None:
+            parts.append(f"brief keyword rate {brief_rate:.0%}")
+        if title_to_title is not None:
+            parts.append(f"title-to-title overlap {title_to_title:.0%}")
         reason = f"content may be from wrong paper: {', '.join(parts)}"
 
     return {
         "mismatched": mismatched,
+        "match_score": round(match_score, 3),
+        "scores": score_details,
         "title_hits": title_hits,
         "author_hits": author_hits,
         "abstract_overlap": abstract_overlap,

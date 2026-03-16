@@ -37,7 +37,7 @@ _CAPTCHA_SIZE_THRESHOLD = 100 * 1024  # 100KB
 _CAPTCHA_MARKERS = (b"<html", b"captcha", b"<!doctype")
 
 # PDF cascade source names
-CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "annas_archive", "scihub"]
+CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "osf", "annas_archive", "scihub"]
 
 
 def _get_brief_keywords(session_dir: str) -> list[str]:
@@ -899,6 +899,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 pdf_url = _resolve_arxiv_for_doi(doi, client)
             elif source_name == "pmc":
                 pdf_url = _resolve_pmc(doi, client)
+            elif source_name == "osf":
+                pdf_url = _resolve_osf(doi, client, config, result.get("title", ""))
             elif source_name == "annas_archive":
                 pdf_path = os.path.join(sources_dir, f"{source_id}.pdf")
                 if download_annas_archive(doi, pdf_path, config, client):
@@ -1053,6 +1055,95 @@ def _resolve_pmc(doi: str, client) -> str | None:
                 return f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/"
     except Exception:
         pass
+    return None
+
+
+def _resolve_osf(doi: str, client, config: dict, title: str = "") -> str | None:
+    """Look up PDF URL from OSF preprints (PsyArXiv, SocArXiv, EdArXiv, etc.).
+
+    Two paths:
+    1. PsyArXiv DOI fast path — DOIs starting with 10.31234/osf.io/ contain the
+       preprint ID directly, so we fetch the preprint record and follow the
+       primary_file link to get the download URL.
+    2. Title search fallback — for non-PsyArXiv DOIs, search OSF preprints by
+       title and return the download URL if a single confident match is found.
+    """
+    headers = {}
+    token = config.get("osf_token")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    # --- Fast path: PsyArXiv DOI (10.31234/osf.io/{id}) ---
+    psyarxiv_prefix = "10.31234/osf.io/"
+    if doi.lower().startswith(psyarxiv_prefix):
+        preprint_id = doi[len(psyarxiv_prefix):]
+        return _osf_preprint_pdf_url(preprint_id, client, headers)
+
+    # --- Fallback: title search across all OSF preprint providers ---
+    if not title:
+        return None
+
+    search_url = "https://api.osf.io/v2/preprints/"
+    params = {
+        "filter[title]": title,
+        "page[size]": "5",
+    }
+    try:
+        resp = client.get(search_url, params=params, headers=headers, timeout=(15, 30))
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data") or []
+        if len(data) == 0:
+            return None
+
+        # Pick the first result whose title is a close match
+        title_lower = title.lower().strip()
+        for item in data:
+            attrs = item.get("attributes") or {}
+            candidate_title = (attrs.get("title") or "").lower().strip()
+            if candidate_title == title_lower:
+                preprint_id = item.get("id")
+                if preprint_id:
+                    url = _osf_preprint_pdf_url(preprint_id, client, headers)
+                    if url:
+                        return url
+
+    except Exception as e:
+        log(f"OSF title search failed: {e}", level="warn")
+
+    return None
+
+
+def _osf_preprint_pdf_url(preprint_id: str, client, headers: dict) -> str | None:
+    """Given an OSF preprint ID, resolve the primary file download URL."""
+    preprint_url = f"https://api.osf.io/v2/preprints/{preprint_id}/"
+    try:
+        resp = client.get(preprint_url, headers=headers, timeout=(15, 15))
+        if resp.status_code != 200:
+            return None
+        preprint_data = resp.json().get("data") or {}
+
+        # Get primary file link
+        rels = preprint_data.get("relationships") or {}
+        primary_file = rels.get("primary_file") or {}
+        pf_links = primary_file.get("links") or {}
+        related_href = pf_links.get("related") or {}
+        file_url = related_href.get("href") if isinstance(related_href, dict) else related_href
+        if not file_url:
+            return None
+
+        # Fetch the file record to get the download link
+        file_resp = client.get(file_url, headers=headers, timeout=(15, 15))
+        if file_resp.status_code != 200:
+            return None
+        file_data = file_resp.json().get("data") or {}
+        file_links = file_data.get("links") or {}
+        download_url = file_links.get("download")
+        if download_url:
+            log(f"OSF found PDF download URL: {download_url}")
+            return download_url
+    except Exception as e:
+        log(f"OSF preprint lookup failed for {preprint_id}: {e}", level="warn")
     return None
 
 

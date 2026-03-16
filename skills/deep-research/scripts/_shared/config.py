@@ -14,6 +14,7 @@ _ENV_KEYS = {
     "annas_secret_key": "ANNAS_SECRET_KEY",
     "sec_edgar_email": "SEC_EDGAR_EMAIL",
     "core_api_key": "CORE_API_KEY",
+    "osf_token": "OSF_TOKEN",
 }
 
 # All known config keys with None defaults
@@ -26,6 +27,7 @@ _DEFAULT_CONFIG: dict[str, str | None] = {
     "annas_secret_key": None,
     "sec_edgar_email": None,
     "core_api_key": None,
+    "osf_token": None,
 }
 
 # Global config file path
@@ -44,6 +46,7 @@ RATE_LIMITS = {
     "hn.algolia.com": 1.0,
     "sci-hub.*": 0.2,
     "arxiv.org": 1.0,
+    "api.osf.io": 1.0,  # ~100 req/hr unauthenticated ≈ 1.7/min
     "ncbi.nlm.nih.gov": 3.0,
     "query2.finance.yahoo.com": 0.4,
     "efts.sec.gov": 10.0,

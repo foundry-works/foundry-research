@@ -2842,6 +2842,100 @@ def cmd_sync_files(args):
 
 
 # ---------------------------------------------------------------------------
+# reconcile — post-batch sync of on-disk files to state.db status
+# ---------------------------------------------------------------------------
+
+def cmd_reconcile(args):
+    """Scan sources/ on disk, cross-reference with state.db, update status.
+
+    When parallel download batches complete, later batches may write files
+    after earlier batches' sync has already run. This leaves files on disk
+    with status still 'pending' in state.db. reconcile fixes that gap by:
+    1. Linking content_file for any source with on-disk .md but no DB record
+    2. Promoting status to 'downloaded' for any source with content on disk
+       but status not yet 'downloaded' (or 'reader_validated')
+
+    Safe to run multiple times — idempotent.
+    """
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    sources_dir = os.path.join(args.session_dir, "sources")
+
+    if not os.path.isdir(sources_dir):
+        success_response({"linked": 0, "promoted": 0,
+                          "message": "No sources/ directory found"})
+        conn.close()
+        return
+
+    # Build map of source_id -> on-disk files
+    disk_md = set()
+    disk_pdf = set()
+    for fname in os.listdir(sources_dir):
+        name, ext = os.path.splitext(fname)
+        if ext == ".md":
+            disk_md.add(name)
+        elif ext == ".pdf":
+            disk_pdf.add(name)
+
+    # Get all sources for this session
+    rows = conn.execute(
+        "SELECT id, content_file, pdf_file, status FROM sources WHERE session_id = ?",
+        (sid,)
+    ).fetchall()
+
+    linked = 0
+    promoted = 0
+
+    for row in rows:
+        src_id = row["id"]
+        current_cf = row["content_file"]
+        current_pf = row["pdf_file"]
+        current_status = row["status"]
+
+        updates = {}
+
+        # Link content_file if file exists on disk but not recorded
+        if src_id in disk_md and not current_cf:
+            updates["content_file"] = f"sources/{src_id}.md"
+            linked += 1
+            log(f"Linked {src_id} -> sources/{src_id}.md")
+
+        # Link pdf_file if file exists on disk but not recorded
+        if src_id in disk_pdf and not current_pf:
+            updates["pdf_file"] = f"sources/{src_id}.pdf"
+
+        # Promote status if source has content on disk but isn't downloaded
+        has_content = (current_cf or src_id in disk_md)
+        already_done = current_status in ("downloaded", "reader_validated")
+        if has_content and not already_done:
+            updates["status"] = "downloaded"
+            promoted += 1
+            log(f"Promoted {src_id} status -> downloaded")
+
+        if updates:
+            set_clause = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(
+                f"UPDATE sources SET {set_clause} WHERE id = ? AND session_id = ?",
+                (*updates.values(), src_id, sid)
+            )
+
+    conn.commit()
+
+    if linked > 0 or promoted > 0:
+        _regenerate_snapshot(args.session_dir, conn, sid)
+
+    conn.close()
+
+    success_response({
+        "linked": linked,
+        "promoted": promoted,
+        "total_on_disk_md": len(disk_md),
+        "total_on_disk_pdf": len(disk_pdf),
+        "total_sources": len(rows),
+    })
+
+
+# ---------------------------------------------------------------------------
 # convert-pdfs
 # ---------------------------------------------------------------------------
 
@@ -3391,6 +3485,10 @@ def main():
     p = sub.add_parser("convert-pdfs")
     p.add_argument("--session-dir", **_sd)
 
+    # reconcile
+    p = sub.add_parser("reconcile")
+    p.add_argument("--session-dir", **_sd)
+
     # cleanup-orphans
     p = sub.add_parser("cleanup-orphans")
     p.add_argument("--session-dir", **_sd)
@@ -3440,6 +3538,7 @@ def main():
         "enrich-metadata": cmd_enrich_metadata,
         "sync-files": cmd_sync_files,
         "convert-pdfs": cmd_convert_pdfs,
+        "reconcile": cmd_reconcile,
         "cleanup-orphans": cmd_cleanup_orphans,
         "manifest": cmd_manifest,
     }

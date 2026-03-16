@@ -10,7 +10,7 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 
 - **Biomedical/clinical:** PubMed + bioRxiv + Semantic Scholar
 - **CS/ML/AI:** arXiv + Semantic Scholar + OpenAlex
-- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
+- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex + OSF/PsyArXiv (preprints)
 - **Humanities/social science:** Crossref + OpenAlex + Semantic Scholar
 - **Financial:** yfinance + EDGAR + academic providers for context
 - **General technical:** tavily + GitHub; Reddit/HN for community perspective
@@ -90,6 +90,18 @@ Don't over-research simple questions. Don't under-research complex ones.
 ```
 
 Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`, `[reddit]`, `[hn]`.
+
+---
+
+## Paywall Recovery Beyond the Cascade
+
+The download cascade (OpenAlex → Unpaywall → arXiv → PMC → OSF → Anna's Archive → Sci-Hub) handles the common paths automatically. When it still fails — especially in paywall-heavy fields like psychology, education, or medicine — the underlying principle is that **authors often self-archive their work** outside of publisher paywalls:
+
+- **Institutional repositories** — many universities require faculty to deposit preprints or postprints. A web search for `"{author surname}" "{short title}" filetype:pdf` often surfaces these.
+- **Author pages** — ResearchGate, Academia.edu, and personal faculty pages frequently host author-uploaded copies.
+- **Discipline-specific preprint servers** — the cascade already checks OSF/PsyArXiv and arXiv, but emerging servers (e.g., EdArXiv, SocArXiv, EarthArXiv) may have coverage the cascade doesn't yet include.
+
+When using web search (Exa/tavily) for recovery, the most effective pattern is `"{exact title}" filetype:pdf` — this finds direct PDF links that the DOI-based cascade missed. Fall back to `"{author surname}" "{short title}"` if the exact title returns nothing.
 
 **Citation rules:**
 - Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
