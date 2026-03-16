@@ -29,60 +29,50 @@ The user provides a session directory path (e.g., `./deep-research-topic/`). All
 
 ## How to Read Session Data
 
-Use `sqlite3` via Bash to query `state.db`. Use `Read` for report.md, journal.md, and metadata JSON files. Use `Glob` to count files matching patterns.
+### Metrics script
 
-### Core queries
-
-```bash
-# Schema discovery — always run this first to confirm table/column names
-sqlite3 SESSION_DIR/state.db ".schema"
-
-# Research brief
-sqlite3 SESSION_DIR/state.db "SELECT scope, questions, completeness_criteria FROM brief LIMIT 1"
-
-# All searches with efficiency data
-sqlite3 SESSION_DIR/state.db "SELECT provider, query, search_mode, search_type, result_count, ingested_count FROM searches"
-
-# Source inventory with quality tiers
-sqlite3 SESSION_DIR/state.db "SELECT id, title, type, provider, quality, status, relevance_score, content_file, is_read FROM sources"
-
-# Provider distribution
-sqlite3 SESSION_DIR/state.db "SELECT provider, count(*) as n FROM sources GROUP BY provider ORDER BY n DESC"
-
-# Source type distribution
-sqlite3 SESSION_DIR/state.db "SELECT type, count(*) as n FROM sources GROUP BY type ORDER BY n DESC"
-
-# Quality tier distribution
-sqlite3 SESSION_DIR/state.db "SELECT quality, count(*) as n FROM sources GROUP BY quality ORDER BY n DESC"
-
-# Findings with source backing
-sqlite3 SESSION_DIR/state.db "SELECT id, question, text, sources FROM findings"
-
-# Findings per research question
-sqlite3 SESSION_DIR/state.db "SELECT question, count(*) as n FROM findings GROUP BY question"
-
-# Gaps and resolution status
-sqlite3 SESSION_DIR/state.db "SELECT id, question, text, status FROM gaps"
-
-# Financial metrics (if any)
-sqlite3 SESSION_DIR/state.db "SELECT ticker, metric, value, period, source FROM metrics"
-```
-
-### File counts
+Run the metrics script to compute all Layer 1 deterministic metrics in a single call:
 
 ```bash
-# Downloaded source content
-glob: sources/*.md
-
-# Reader notes (deep reads)
-glob: notes/*.md
-
-# Metadata files
-glob: sources/metadata/*.json
-
-# TOC files
-glob: sources/*.toc
+python3 ${CLAUDE_SKILL_DIR}/scripts/metrics.py SESSION_DIR
 ```
+
+This outputs a JSON object to stdout with all search, source, coverage, report, file count, and journal metrics. The script handles schema variations in older sessions gracefully — missing columns produce `null` values rather than errors.
+
+Key output fields in `metrics`:
+- **Search:** `searches_total`, `searches_zero_ingested`, `search_providers`, `search_modes`, `search_types`, `searches_by_provider`
+- **Source:** `sources_total`, `sources_downloaded`, `sources_with_notes`, `sources_with_doi`, `sources_with_venue`, `sources_with_citations`, `sources_orphaned`, `sources_by_provider`, `sources_by_type`, `sources_by_quality`, `sources_by_status`, `sources_by_year`, `metadata_json_count`, `notes_on_disk`
+- **Coverage:** `findings_total`, `findings_by_question`, `findings_unsourced`, `gaps_total`, `gaps_resolved`, `gaps_open`
+- **Report:** `report_exists`, `report_word_count`, `report_section_count`, `report_reference_count`, `report_unique_citations`, `report_citation_instances`, `report_max_citation`, `report_phantom_refs`
+- **Files:** `source_md_files`, `notes_md_files`, `metadata_json_files`, `toc_files`
+- **Journal:** `journal_exists`, `journal_char_count`, `journal_milestones_found`, `journal_milestones_detail`
+
+Top-level envelope: `{"status": "ok"|"partial"|"error", "errors": [...], "metrics": {...}}`
+
+### Exploration queries (optional)
+
+For Layer 2 interpretation you may still want to browse raw data. Use `sqlite3` via heredoc (avoids zsh `!` escaping issues with `!=`):
+
+```bash
+cat << 'EOF' | sqlite3 SESSION_DIR/state.db
+-- Research brief
+SELECT scope, questions, completeness_criteria FROM brief LIMIT 1;
+
+-- All searches with efficiency data
+SELECT provider, query, search_mode, search_type, result_count, ingested_count FROM searches;
+
+-- Source inventory with quality tiers
+SELECT id, title, type, provider, quality, status, relevance_score, content_file, is_read FROM sources;
+
+-- Findings with source backing
+SELECT id, question, text, sources FROM findings;
+
+-- Gaps and resolution status
+SELECT id, question, text, status FROM gaps;
+EOF
+```
+
+Use `Read` for report.md, journal.md, sample metadata JSON files, and reader notes.
 
 ---
 
@@ -503,9 +493,9 @@ Write `reflection.json` to the session directory alongside state.db and report.m
 
 Think of evaluation as a natural progression: **observe → interpret → score**.
 
-1. **Orient:** Run `.schema` on state.db. Count sources, searches, findings, gaps. Read the brief to understand what was asked. Get the lay of the land before diving into details.
+1. **Orient:** Run the metrics script to get all Layer 1 numbers in one call. Read the brief from the output to understand what was asked. Get the lay of the land before diving into details.
 
-2. **Gather:** Compute all Layer 1 metrics. Read report.md, journal.md, sample metadata files and reader notes. Run the sqlite3 queries listed above. You're building a complete picture of what happened in this session.
+2. **Gather:** Read report.md, journal.md, sample metadata files, and reader notes. Use the exploration queries if you need to browse raw data for Layer 2 interpretation. The metrics script already computed the deterministic numbers — this step is about understanding the qualitative content.
 
 3. **Interpret:** Detect session context (domain, scale, constraints, scope). Decide how context affects what "good" looks like for each dimension. This is where your judgment matters most — the same metrics mean different things in different contexts.
 
