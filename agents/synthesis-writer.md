@@ -48,7 +48,7 @@ A directive from the supervisor containing:
 - How many sources were searched, downloaded, and deep-read
 - Which providers were used
 - What gaps remain unresolved
-- Use the `source_quality_report` from `synthesis-handoff.json` for source counts by quality tier (on-topic with evidence, abstract-only, degraded, mismatched, reader-validated) — do not re-derive these from individual metadata files
+- Use the `source_quality_report` from `synthesis-handoff.json` for source counts by quality tier (on-topic with evidence, abstract-only, degraded, mismatched, reader-validated) — do not re-derive these from individual metadata files. The report contains integer counts per tier, not ID lists.
 - Use audit data from the directive if provided
 
 **Cross-reference journal.md for methodology accuracy.** Before writing the Methodology section, read `journal.md` in the session directory. It contains the supervisor's search-round logs — which providers were queried, what citation chasing was attempted (including failed attempts), and what gap-resolution strategies were tried. Use this to verify your methodology claims against what actually happened. Specifically: if citation chasing was attempted but returned 0 results, report it accurately (e.g., "Citation traversal on [paper] yielded no additional sources") rather than omitting it. Omitting failed strategies makes the methodology look less thorough than it was, and misrepresents the search effort. Conversely, don't claim strategies that the journal doesn't document.
@@ -106,6 +106,12 @@ Before assigning reference numbers, deduplicate your cited sources:
 **Why this matters:** Different source IDs can resolve to the same underlying paper when multiple search providers return the same result. Without deduplication, the references list inflates and readers lose trust in citation accuracy.
 
 If a metadata file is missing or has incomplete fields after these checks, write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
+
+### Sequential renumbering
+
+After finalizing the references list (post-dedup, post-drop), verify that reference numbers run `[1]` through `[N]` with no gaps. If a source was dropped or merged during synthesis, renumber the remaining references sequentially and update every in-text `[N]` citation to match.
+
+**Why:** Gaps (e.g., `[7]` → `[9]`) look like broken citations to readers and automated verifiers. Renumbering is cheap — scan for `[N]` patterns and confirm continuity — and prevents a cosmetic issue from undermining citation trust.
 
 ## Return value
 

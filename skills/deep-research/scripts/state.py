@@ -1084,8 +1084,14 @@ def cmd_summary(args):
             "completeness_criteria": brief["completeness_criteria"],
         }
 
-    # Searches
+    # Searches — break out by type so recovery vs discovery is visible
     search_count = conn.execute("SELECT COUNT(*) as c FROM searches WHERE session_id = ?", (sid,)).fetchone()["c"]
+    search_type_rows = conn.execute(
+        "SELECT search_type, COUNT(*) as c FROM searches WHERE session_id = ? GROUP BY search_type", (sid,)
+    ).fetchall()
+    searches_by_type: dict[str, int] = {r["search_type"]: r["c"] for r in search_type_rows}
+    searches_discovery = search_count - searches_by_type.get("recovery", 0)
+    searches_recovery = searches_by_type.get("recovery", 0)
 
     # Sources
     source_count = conn.execute("SELECT COUNT(*) as c FROM sources WHERE session_id = ?", (sid,)).fetchone()["c"]
@@ -1135,6 +1141,9 @@ def cmd_summary(args):
     full_result = {
         "brief": brief_data,
         "search_count": search_count,
+        "searches_discovery": searches_discovery,
+        "searches_recovery": searches_recovery,
+        "searches_by_type": searches_by_type,
         "source_count": source_count,
         "sources_by_type": sources_by_type,
         "sources_by_provider": sources_by_provider,
@@ -2030,6 +2039,8 @@ def cmd_audit(args):
             "web_sources": web_sources,
             "searches": {
                 "total": len(all_searches),
+                "discovery": len(all_searches) - searches_by_type.get("recovery", 0),
+                "recovery": searches_by_type.get("recovery", 0),
                 **searches_by_type,
             },
         },

@@ -10,7 +10,7 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 
 - **Biomedical/clinical:** PubMed + bioRxiv + Semantic Scholar
 - **CS/ML/AI:** arXiv + Semantic Scholar + OpenAlex
-- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex + OSF/PsyArXiv (preprints)
+- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex + OSF/PsyArXiv (preprints). Note: PubMed's MeSH vocabulary skews biomedical — for cognitive science topics (judgment, decision-making, metacognition), OpenAlex and Semantic Scholar with targeted journal-name queries are often more productive
 - **Humanities/social science:** Crossref + OpenAlex + Semantic Scholar
 - **Financial:** yfinance + EDGAR + academic providers for context
 - **General technical:** tavily + GitHub; Reddit/HN for community perspective

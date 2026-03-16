@@ -145,7 +145,7 @@ After each search round, spot-check result titles against these domain terms. If
 ### Provider selection
 - **Biomedical/clinical:** PubMed + bioRxiv; add Semantic Scholar for citation context
 - **CS/ML/AI:** arXiv + Semantic Scholar; add OpenAlex for breadth
-- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex
+- **Psychology/cognitive science:** PubMed + Semantic Scholar + OpenAlex. For cognitive science specifically (human cognition, judgment, decision-making), lean on OpenAlex and Semantic Scholar over PubMed — PubMed's MeSH vocabulary is biomedically oriented and tends to surface clinical prediction papers over cognitive science when the query is ambiguous. Include journal names in Semantic Scholar queries (e.g., `"overconfidence" "Psychological Review"`) to steer toward core cognitive science venues (Psychological Review, Cognition, JDM, Psychological Bulletin)
 - **Humanities/social science:** Crossref + OpenAlex; add Semantic Scholar for citations
 - **Financial:** yfinance + EDGAR; add Semantic Scholar/OpenAlex for academic context
 - **General technical:** tavily (or perplexity/linkup/gensee/exa) + GitHub; Reddit/HN for community perspective
