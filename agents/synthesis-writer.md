@@ -84,8 +84,9 @@ Structure:
 
 For each cited source:
 1. Read the corresponding `sources/metadata/src-NNN.json`
-2. Extract `authors`, `title`, `year`, `venue`, and `doi`/`url` directly from the JSON fields
-3. Format the reference using exactly those values
+2. Check for a `title_from_content` field. When present, the download pipeline detected that the document's actual title (extracted from the content) diverges from the provider-supplied `title`. Prefer `title_from_content` for the References section — it reflects what was actually downloaded and read. Provider metadata titles can be stale or refer to a different version/edition of the paper.
+3. Extract `authors`, `title` (or `title_from_content`), `year`, `venue`, and `doi`/`url` directly from the JSON fields
+4. Format the reference using exactly those values
 
 **Before writing the References section, scan cited sources' metadata files for completeness.** For any source with missing title, authors, or year:
 1. Check the reader note in `notes/src-NNN.md` — readers often extract author names, title, and year from the paper's header section

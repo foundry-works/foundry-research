@@ -29,7 +29,12 @@ from _shared.mirrors import download_annas_archive, download_scihub  # noqa: E40
 from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.state_client import call_state  # noqa: E402
 from _shared.pdf_utils import download_pdf, extract_first_page_text, pdf_to_markdown  # noqa: E402
-from _shared.quality import assess_quality, check_content_mismatch  # noqa: E402
+from _shared.quality import (  # noqa: E402
+    assess_quality,
+    check_content_mismatch,
+    _extract_candidate_title,
+    _extract_keywords,
+)
 
 # arXiv download constraints
 _ARXIV_DELAY = 3.0  # seconds between arXiv downloads (ToS)
@@ -38,6 +43,38 @@ _CAPTCHA_MARKERS = (b"<html", b"captcha", b"<!doctype")
 
 # PDF cascade source names
 CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "osf", "annas_archive", "scihub"]
+
+
+def _check_title_divergence(content: str, meta: dict) -> str | None:
+    """Compare extracted document title against metadata title.
+
+    Returns the extracted title if it diverges significantly from the
+    provider-supplied title (Jaccard keyword similarity < 0.6), or None
+    if titles are consistent. Used to populate the informational
+    ``title_from_content`` metadata field so the synthesis-writer can
+    detect version/edition mismatches that pass mismatch detection.
+    """
+    provider_title = meta.get("title", "")
+    if not provider_title:
+        return None
+
+    candidate = _extract_candidate_title(content)
+    if not candidate or len(candidate) < 10:
+        return None
+
+    provider_kws = set(_extract_keywords(provider_title))
+    candidate_kws = set(_extract_keywords(candidate))
+    if not provider_kws or not candidate_kws:
+        return None
+
+    # Jaccard similarity
+    intersection = provider_kws & candidate_kws
+    union = provider_kws | candidate_kws
+    similarity = len(intersection) / len(union) if union else 1.0
+
+    if similarity < 0.6:
+        return candidate
+    return None
 
 
 def _get_brief_keywords(session_dir: str) -> list[str]:
@@ -273,6 +310,13 @@ def _handle_retry_sync(session_dir: str) -> None:
                             "author_hits": mismatch["author_hits"],
                         }
                         log(f"Retry-sync mismatch for {sid}: {mismatch['reason']}", level="warn")
+                # Title divergence check — populate title_from_content
+                # when the extracted document title differs from provider metadata.
+                if result["quality"] == "ok":
+                    alt_title = _check_title_divergence(content, meta)
+                    if alt_title:
+                        meta["title_from_content"] = alt_title
+                        log(f"Title divergence for {sid}: extracted '{alt_title}'", level="info")
                 # Persist updated quality back to metadata JSON
                 if meta.get("quality") and os.path.exists(meta_file):
                     Path(meta_file).write_text(
@@ -539,6 +583,8 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
         meta["quality"] = result["quality"]
     if result.get("quality_details"):
         meta["quality_details"] = result["quality_details"]
+    if result.get("title_from_content"):
+        meta["title_from_content"] = result["title_from_content"]
     write_source_metadata(metadata_dir, source_id, meta)
 
     # Auto-enrich from Crossref if DOI available and metadata is sparse
@@ -666,6 +712,13 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
                 details["author_hits"] = mismatch["author_hits"]
                 result["quality_details"] = details
                 log(f"Content mismatch detected for {source_id}: {mismatch['reason']}", level="warn")
+
+        # Title divergence check for accepted content
+        if result["quality"] == "ok":
+            alt_title = _check_title_divergence(content, meta)
+            if alt_title:
+                meta["title_from_content"] = alt_title
+                log(f"Title divergence for {source_id}: extracted '{alt_title}'", level="info")
 
         meta["url"] = url
         meta["type"] = "web"
@@ -1180,6 +1233,12 @@ def _convert_and_record(pdf_path: str, source_id: str, sources_dir: str, result:
                     details["author_hits"] = mismatch["author_hits"]
                     result["quality_details"] = details
                     log(f"Content mismatch detected for {source_id}: {mismatch['reason']}", level="warn")
+                # Title divergence check for accepted content
+                if result["quality"] == "ok":
+                    alt_title = _check_title_divergence(md_text, {"title": title})
+                    if alt_title:
+                        result["title_from_content"] = alt_title
+                        log(f"Title divergence for {source_id}: extracted '{alt_title}'", level="info")
             except Exception as e:
                 log(f"Mismatch check failed for {source_id}: {e}", level="debug")
     else:
