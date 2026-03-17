@@ -1798,7 +1798,7 @@ def cmd_audit(args):
     ).fetchall()
     searches_by_type = {}
     for s in all_searches:
-        st = s.get("search_type", "manual")
+        st = s["search_type"] if s["search_type"] else "manual"
         searches_by_type[st] = searches_by_type.get(st, 0) + 1
 
     # Load gaps
@@ -3279,6 +3279,514 @@ def cmd_enrich_metadata(args):
 
 
 # ---------------------------------------------------------------------------
+# validate-edits — post-revision validation
+# ---------------------------------------------------------------------------
+
+def cmd_validate_edits(args):
+    """Check whether reviser edits actually landed in the report.
+
+    For each resolved edit in the manifest, checks old_text_snippet and
+    new_text_snippet against the report text to determine confirmed/failed/inconclusive.
+    """
+    manifest_path = args.manifest
+    report_path = args.report
+
+    # Load manifest
+    if not os.path.exists(manifest_path):
+        error_response([f"Manifest not found: {manifest_path}"])
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except json.JSONDecodeError as e:
+        error_response([f"Invalid JSON in manifest: {e}"])
+
+    # Load report
+    if not os.path.exists(report_path):
+        error_response([f"Report not found: {report_path}"])
+    with open(report_path) as f:
+        report_text = f.read()
+
+    # Filter to the requested pass if specified
+    pass_type = getattr(args, "pass_type", None)
+
+    # Extract resolved edits from manifest
+    entries = manifest if isinstance(manifest, list) else manifest.get("edits", manifest.get("entries", []))
+    if not isinstance(entries, list):
+        error_response(["Manifest must be a JSON array or object with 'edits'/'entries' array"])
+
+    confirmed = []
+    failed = []
+    inconclusive = []
+    warnings = []
+
+    for entry in entries:
+        status = entry.get("status", "")
+        if status != "resolved":
+            continue
+
+        issue_id = entry.get("issue_id", "unknown")
+
+        # Filter by pass type if specified
+        if pass_type:
+            entry_pass = entry.get("pass", entry.get("pass_type", ""))
+            if entry_pass and entry_pass != pass_type:
+                continue
+
+        old_snip = entry.get("old_text_snippet", "")
+        new_snip = entry.get("new_text_snippet", "")
+
+        if not old_snip and not new_snip:
+            inconclusive.append({"issue_id": issue_id, "reason": "no snippets in manifest entry"})
+            continue
+
+        old_present = old_snip and old_snip in report_text
+        new_present = new_snip and new_snip in report_text
+
+        if not old_present and new_present:
+            confirmed.append(issue_id)
+        elif old_present and not new_present:
+            failed.append({"issue_id": issue_id, "reason": "old text still present, new text absent"})
+        elif not old_present and not new_present:
+            inconclusive.append({"issue_id": issue_id, "reason": "both snippets absent — context may have changed"})
+        else:
+            # Both present — likely edit landed but old text appears elsewhere too
+            confirmed.append(issue_id)
+            warnings.append({"issue_id": issue_id, "reason": "both old and new text present — edit likely landed but old text exists elsewhere"})
+
+    result = {
+        "confirmed": confirmed,
+        "failed": failed,
+        "inconclusive": inconclusive,
+        "summary": {
+            "total_checked": len(confirmed) + len(failed) + len(inconclusive),
+            "confirmed": len(confirmed),
+            "failed": len(failed),
+            "inconclusive": len(inconclusive),
+        },
+    }
+    if warnings:
+        result["warnings"] = warnings
+    if pass_type:
+        result["pass"] = pass_type
+
+    success_response(result)
+
+
+# ---------------------------------------------------------------------------
+# validate-content — post-download content validation
+# ---------------------------------------------------------------------------
+
+def cmd_validate_content(args):
+    """Check downloaded content files against source metadata.
+
+    Heuristics: title-word overlap, venue/domain match, domain-term presence,
+    stub detection. Auto-updates quality flags in state.db for flagged sources.
+    """
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+
+    top_n = args.top
+    domain_terms = [t.strip().lower() for t in args.domain_terms.split(",") if t.strip()] if args.domain_terms else []
+    expected_domains = [d.strip().lower() for d in args.expected_domains.split(",") if d.strip()] if args.expected_domains else []
+
+    # Get top sources by triage score (relevance_score), with content files
+    rows = conn.execute(
+        """SELECT id, title, venue, content_file, quality
+           FROM sources
+           WHERE session_id = ? AND content_file IS NOT NULL AND content_file != ''
+             AND (quality IS NULL OR quality NOT IN ('mismatched'))
+           ORDER BY COALESCE(relevance_score, 0) DESC, citation_count DESC
+           LIMIT ?""",
+        (sid, top_n),
+    ).fetchall()
+
+    checked = 0
+    valid = 0
+    mismatched = []
+    degraded = []
+    details = []
+    updated_ids = []
+
+    for row in rows:
+        src_id = row["id"]
+        title = row["title"] or ""
+        venue = row["venue"] or ""
+        content_file = row["content_file"]
+
+        # Resolve content file path
+        content_path = content_file
+        if not os.path.isabs(content_path):
+            content_path = os.path.join(args.session_dir, content_path)
+
+        if not os.path.exists(content_path):
+            continue
+
+        checked += 1
+
+        try:
+            with open(content_path) as f:
+                content_head = f.read(2000)  # first ~2000 chars
+        except Exception:
+            continue
+
+        content_lower = content_head.lower()
+        issues = []
+
+        # 1. Stub detection: content < 500 chars
+        if len(content_head.strip()) < 500:
+            issues.append("stub content (< 500 chars)")
+            degraded.append(src_id)
+            if row["quality"] != "degraded":
+                conn.execute("UPDATE sources SET quality = 'degraded' WHERE id = ? AND session_id = ?", (src_id, sid))
+                updated_ids.append(src_id)
+            details.append({"id": src_id, "reason": "stub content (< 500 chars)", "title_overlap": 0.0})
+            continue
+
+        # 2. Title-word overlap
+        title_words = set(re.findall(r'\w{4,}', title.lower()))  # words with 4+ chars
+        stop_words = {"this", "that", "with", "from", "their", "about", "which", "these", "those",
+                       "been", "have", "will", "would", "could", "should", "other", "some", "were"}
+        title_words -= stop_words
+        if title_words:
+            matches = sum(1 for w in title_words if w in content_lower)
+            title_overlap = matches / len(title_words) if title_words else 0.0
+        else:
+            title_overlap = 1.0  # can't check, assume ok
+
+        if title_overlap < 0.3:
+            issues.append(f"low title-word overlap ({title_overlap:.2f})")
+
+        # 3. Venue/domain check
+        if venue and expected_domains:
+            venue_lower = venue.lower()
+            venue_matches_domain = any(d in venue_lower for d in expected_domains)
+            if not venue_matches_domain:
+                # Check for obviously unrelated venues
+                issues.append(f"venue '{venue}' outside expected domains")
+
+        # 4. Domain-term presence
+        if domain_terms:
+            term_hits = sum(1 for t in domain_terms if t in content_lower)
+            if term_hits == 0:
+                issues.append("zero domain terms in first 2000 chars")
+
+        # Classify
+        if issues:
+            mismatched.append(src_id)
+            if row["quality"] not in ("mismatched", "degraded"):
+                conn.execute("UPDATE sources SET quality = 'mismatched' WHERE id = ? AND session_id = ?", (src_id, sid))
+                updated_ids.append(src_id)
+            details.append({"id": src_id, "reason": "; ".join(issues), "title_overlap": round(title_overlap, 2)})
+        else:
+            valid += 1
+
+    conn.commit()
+    if updated_ids:
+        _regenerate_snapshot(args.session_dir, conn, sid)
+    conn.close()
+
+    success_response({
+        "checked": checked,
+        "valid": valid,
+        "mismatched": len(mismatched),
+        "degraded": len(degraded),
+        "mismatched_ids": mismatched,
+        "degraded_ids": degraded,
+        "details": details,
+        "quality_updated": updated_ids,
+    })
+
+
+# ---------------------------------------------------------------------------
+# dedup-issues — mechanical dedup for revision orchestrator
+# ---------------------------------------------------------------------------
+
+def _normalize_location(loc: str) -> str:
+    """Extract normalized section+paragraph from free-text location string.
+
+    Examples:
+        "Section 3, paragraph 2" -> "s3p2"
+        "Section 5, paragraph 1" -> "s5p1"
+        "Introduction, paragraph 3" -> "s0p3"
+        "Results" -> "results"
+    """
+    loc_lower = loc.lower().strip()
+
+    # Extract section number
+    sec_match = re.search(r'section\s+(\d+)', loc_lower)
+    sec_num = sec_match.group(1) if sec_match else None
+
+    # Extract paragraph number
+    para_match = re.search(r'paragraph\s+(\d+)', loc_lower)
+    para_num = para_match.group(1) if para_match else None
+
+    if sec_num and para_num:
+        return f"s{sec_num}p{para_num}"
+    if sec_num:
+        return f"s{sec_num}"
+
+    # Named sections: intro, conclusion, etc.
+    for name in ("introduction", "conclusion", "abstract", "methods", "results", "discussion", "recommendations"):
+        if name in loc_lower:
+            if para_num:
+                return f"{name}p{para_num}"
+            return name
+
+    # Fallback: normalize whitespace
+    return re.sub(r'\s+', ' ', loc_lower)
+
+
+def _fix_specificity_score(fix_text: str) -> int:
+    """Score how specific/actionable a suggested_fix is.
+
+    Higher score = more specific. A fix saying "change X to Y" scores higher
+    than "verify and correct".
+    """
+    if not fix_text:
+        return 0
+    lower = fix_text.lower()
+    # Vague fixes
+    vague_patterns = ["verify", "check", "review", "consider", "ensure", "clarify"]
+    if any(lower.startswith(p) for p in vague_patterns):
+        return 1
+    # Specific fixes contain quotes, specific text, or "change/replace"
+    if '"' in fix_text or "'" in fix_text or "→" in fix_text:
+        return 3
+    if any(w in lower for w in ("change", "replace", "remove", "delete", "add", "insert", "rewrite")):
+        return 2
+    return 1
+
+
+_SEVERITY_ORDER = {"high": 3, "medium": 2, "low": 1}
+
+
+def cmd_dedup_issues(args):
+    """Group issues by location, identify candidate duplicates, flag co-located non-duplicates.
+
+    Takes issues as JSON (array of issue objects with issue_id, severity, location,
+    description, suggested_fix fields). Returns candidate duplicates with merge
+    suggestions and co-located groups for the orchestrator to confirm.
+    """
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        issues = _load_json_list(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
+
+    if not issues:
+        success_response({
+            "candidate_duplicates": [],
+            "co_located_groups": [],
+            "passthrough_issues": [],
+            "summary": {"input_count": 0, "candidate_duplicates": 0, "co_located_groups": 0},
+        })
+        return
+
+    # Step 1: Group by normalized location
+    groups: dict[str, list[dict]] = {}
+    for issue in issues:
+        loc = issue.get("location", "")
+        norm = _normalize_location(loc)
+        groups.setdefault(norm, []).append(issue)
+
+    candidate_duplicates = []
+    co_located_groups = []
+    passthrough_ids = []
+
+    for norm_loc, group in groups.items():
+        if len(group) == 1:
+            passthrough_ids.append(group[0].get("issue_id", "unknown"))
+            continue
+
+        # Step 2: Within each group, identify candidate duplicate pairs
+        # Two issues are candidates when they share location AND have high description overlap
+        matched = set()
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a = group[i]
+                b = group[j]
+                a_id = a.get("issue_id", "unknown")
+                b_id = b.get("issue_id", "unknown")
+
+                if a_id in matched or b_id in matched:
+                    continue
+
+                # Text similarity between descriptions
+                desc_sim = _title_similarity(
+                    a.get("description", ""),
+                    b.get("description", ""),
+                )
+
+                if desc_sim < 0.4:
+                    # Low overlap — likely different problems at same location
+                    continue
+
+                # Step 3: Build merge suggestion
+                a_fix = a.get("suggested_fix", "")
+                b_fix = b.get("suggested_fix", "")
+                a_spec = _fix_specificity_score(a_fix)
+                b_spec = _fix_specificity_score(b_fix)
+
+                if b_spec > a_spec:
+                    keep, drop = b, a
+                else:
+                    keep, drop = a, b
+
+                keep_id = keep.get("issue_id", "unknown")
+                drop_id = drop.get("issue_id", "unknown")
+
+                # Elevate severity
+                sev_a = _SEVERITY_ORDER.get(a.get("severity", "medium"), 2)
+                sev_b = _SEVERITY_ORDER.get(b.get("severity", "medium"), 2)
+                merged_severity = a.get("severity", "medium") if sev_a >= sev_b else b.get("severity", "medium")
+
+                candidate_duplicates.append({
+                    "group_location": a.get("location", norm_loc),
+                    "issues": [a_id, b_id],
+                    "overlap_signal": f"description similarity {desc_sim:.2f} at same location",
+                    "suggested_merge": {
+                        "keep_id": keep_id,
+                        "drop_id": drop_id,
+                        "reason": f"{keep_id} has more specific suggested_fix" if keep != drop else "equal specificity, keeping first",
+                        "merged_severity": merged_severity,
+                        "flagged_by": [a_id, b_id],
+                    },
+                })
+                matched.add(a_id)
+                matched.add(b_id)
+
+        # Remaining unmatched issues in this group
+        unmatched = [iss for iss in group if iss.get("issue_id", "unknown") not in matched]
+        for iss in unmatched:
+            passthrough_ids.append(iss.get("issue_id", "unknown"))
+
+        # Step 4: Flag co-located non-duplicates
+        if len(unmatched) >= 2:
+            co_located_groups.append({
+                "location": group[0].get("location", norm_loc),
+                "issue_ids": [iss.get("issue_id", "unknown") for iss in unmatched],
+                "reason": "different problems at same paragraph — recommend atomic edit",
+            })
+
+    success_response({
+        "candidate_duplicates": candidate_duplicates,
+        "co_located_groups": co_located_groups,
+        "passthrough_issues": passthrough_ids,
+        "summary": {
+            "input_count": len(issues),
+            "candidate_duplicates": len(candidate_duplicates),
+            "co_located_groups": len(co_located_groups),
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
+# dedup-references — reference deduplication for synthesis writer
+# ---------------------------------------------------------------------------
+
+def _first_author(authors_json: str) -> str:
+    """Extract and normalize the first author name from a JSON authors array."""
+    try:
+        authors = json.loads(authors_json) if isinstance(authors_json, str) else authors_json
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not authors or not isinstance(authors, list):
+        return ""
+    first = authors[0] if authors[0] else ""
+    return first.lower().strip()
+
+
+def cmd_dedup_references(args):
+    """Identify duplicate sources among a set of cited source IDs.
+
+    Groups by DOI (exact match), then by title + first author (fuzzy match).
+    Returns duplicate groups for the writer to merge before assigning reference numbers.
+    """
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    source_ids = [s.strip() for s in args.sources.split(",") if s.strip()]
+    if not source_ids:
+        conn.close()
+        error_response(["No source IDs provided"])
+
+    # Fetch metadata for all requested sources
+    placeholders = ",".join("?" for _ in source_ids)
+    rows = conn.execute(
+        f"SELECT id, title, authors, doi FROM sources WHERE session_id = ? AND id IN ({placeholders})",
+        [sid, *source_ids],
+    ).fetchall()
+    conn.close()
+
+    sources = [dict(r) for r in rows]
+
+    # Track which IDs have been grouped
+    grouped = set()
+
+    # Tier 1: Group by DOI (exact match)
+    doi_groups: dict[str, list[str]] = {}
+    for s in sources:
+        doi = s.get("doi")
+        if doi:
+            doi_groups.setdefault(doi, []).append(s["id"])
+
+    doi_duplicates = []
+    for doi, ids in doi_groups.items():
+        if len(ids) >= 2:
+            doi_duplicates.append({"doi": doi, "source_ids": ids})
+            grouped.update(ids)
+
+    # Tier 2: Fuzzy match on title + first author (for ungrouped sources)
+    ungrouped = [s for s in sources if s["id"] not in grouped]
+    fuzzy_matches = []
+
+    for i in range(len(ungrouped)):
+        if ungrouped[i]["id"] in grouped:
+            continue
+        for j in range(i + 1, len(ungrouped)):
+            if ungrouped[j]["id"] in grouped:
+                continue
+
+            a = ungrouped[i]
+            b = ungrouped[j]
+
+            title_sim = _title_similarity(a.get("title", ""), b.get("title", ""))
+            if title_sim < 0.8:
+                continue
+
+            # Check first author match
+            fa_a = _first_author(a.get("authors", "[]"))
+            fa_b = _first_author(b.get("authors", "[]"))
+
+            if fa_a and fa_b and fa_a == fa_b:
+                fuzzy_matches.append({
+                    "source_ids": [a["id"], b["id"]],
+                    "similarity": round(title_sim, 2),
+                    "reason": "same first author + near-identical title",
+                })
+                grouped.add(a["id"])
+                grouped.add(b["id"])
+            elif title_sim >= 0.95:
+                # Very high title similarity even without author match
+                fuzzy_matches.append({
+                    "source_ids": [a["id"], b["id"]],
+                    "similarity": round(title_sim, 2),
+                    "reason": "near-identical title (author check inconclusive)",
+                })
+                grouped.add(a["id"])
+                grouped.add(b["id"])
+
+    unique_count = len(source_ids) - sum(len(d["source_ids"]) - 1 for d in doi_duplicates) - sum(len(f["source_ids"]) - 1 for f in fuzzy_matches)
+
+    success_response({
+        "doi_duplicates": doi_duplicates,
+        "fuzzy_matches": fuzzy_matches,
+        "unique_sources": unique_count,
+        "total_input": len(source_ids),
+    })
+
+
+# ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
 
@@ -3534,13 +4042,40 @@ def main():
     p = sub.add_parser("cleanup-orphans")
     p.add_argument("--session-dir", **_sd)
 
+    # dedup-references
+    p = sub.add_parser("dedup-references", help="Identify duplicate sources among cited references")
+    p.add_argument("--sources", required=True, help="Comma-separated source IDs to check (e.g. src-001,src-003,src-007)")
+    p.add_argument("--session-dir", **_sd)
+
+    # dedup-issues
+    p = sub.add_parser("dedup-issues", help="Deduplicate revision issues by location and description overlap")
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path containing issues array")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read issues JSON from stdin")
+
+    # validate-edits
+    p = sub.add_parser("validate-edits", help="Check whether reviser edits landed in the report")
+    p.add_argument("--manifest", required=True, help="Path to revision-manifest.json")
+    p.add_argument("--report", required=True, help="Path to report.md")
+    p.add_argument("--pass", dest="pass_type", default=None, choices=["accuracy", "style"],
+                   help="Filter to edits from a specific pass (default: check all)")
+
+    # validate-content
+    p = sub.add_parser("validate-content", help="Validate downloaded content against source metadata")
+    p.add_argument("--top", type=int, default=30, help="Number of top sources to check (default 30)")
+    p.add_argument("--domain-terms", default=None,
+                   help="Comma-separated domain terms to check in content (e.g. 'uncanny,valley,perception')")
+    p.add_argument("--expected-domains", default=None,
+                   help="Comma-separated expected venue domains (e.g. 'psychology,cognitive science,neuroscience')")
+    p.add_argument("--session-dir", **_sd)
+
     args = parser.parse_args()
 
     if args.quiet:
         set_quiet(True)
 
-    # Resolve session-dir via auto-discovery for all commands except init
-    if args.command != "init":
+    # Resolve session-dir via auto-discovery for all commands except init and validate-edits
+    if args.command not in ("init", "validate-edits", "dedup-issues"):
         args.session_dir = get_session_dir(args)
 
     commands = {
@@ -3582,6 +4117,10 @@ def main():
         "reconcile": cmd_reconcile,
         "cleanup-orphans": cmd_cleanup_orphans,
         "manifest": cmd_manifest,
+        "dedup-references": cmd_dedup_references,
+        "dedup-issues": cmd_dedup_issues,
+        "validate-edits": cmd_validate_edits,
+        "validate-content": cmd_validate_content,
     }
 
     commands[args.command](args)

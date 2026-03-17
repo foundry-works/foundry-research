@@ -108,13 +108,17 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     **Why:** Logging known gaps preserves the audit trail in state.db. Without this, reflections and audits see an empty gaps table and can't programmatically distinguish "perfect coverage" from "gaps weren't tracked." The journal captures this reasoning, but journal entries aren't queryable — state.db is. The gap-mode skip decision (next step) then documents why these acknowledged gaps weren't pursued, rather than pretending they don't exist.
 
+13c. **Surface unread high-citation papers before the gap-mode decision.** Scan `${CLAUDE_SKILL_DIR}/state audit` output (or the source manifest) for sources with >100 citations that remain unread (`is_read=0`, no file in `notes/`). If any exist, log them in journal.md: "High-citation papers requiring recovery: [title, citation count, reason unread]." This creates explicit visibility at the moment the gap-mode skip criteria are evaluated.
+
+    **Why here:** The gap-mode skip decision (next step) now includes a hard gate on unread high-citation papers. But the agent needs the data at the decision point — not buried in earlier search results that may have been compressed out of context. This step makes the gate evaluable by surfacing the specific papers and counts right before the decision. Without it, the agent would need to recall from search-round context which papers were paywalled, making the gate unreliable.
+
 14. **Delegate gap resolution and applicability searches to the source-acquisition agent (gap mode).** Review all open gaps from the audit. If the audit shows zero gaps logged across 15+ sources, pause — zero gaps almost always means gaps weren't tracked, not that coverage is perfect. Review each research question and `log-gap` for any with < 2 supporting sources.
 
     **When to skip gap-mode:** If ALL of the following are true, gap-mode may be skipped:
     - Every research question has 5+ findings
     - Every question's findings are backed by at least 2 deeply-read sources (sources with reader notes in `notes/`). Findings count alone is insufficient — 5 findings extracted from abstract-only metadata are weaker evidence than 3 findings backed by deep reads with verified methodology. If any question's findings rely on fewer than 2 deeply-read sources, treat it as a coverage gap regardless of findings count.
     - No question relies on a single source for its core claims
-    - The audit shows no critical gaps (e.g., paywalled foundational papers that would change conclusions)
+    - No source with >100 citations identified during search remains unread (no note in `notes/`). High-citation papers behind paywalls represent known theoretical perspectives that secondary sources cannot fully substitute. When such papers exist, gap-mode should run with paywall recovery strategies (line 124) even if per-question thresholds are met. **Why a hard gate:** Per-question thresholds measure breadth, but a domain's most-cited papers carry outsized weight in synthesis — missing them means the report engages with the field's core arguments only through secondary lenses, which risks mischaracterizing nuance or missing key caveats.
     - Coverage assessment rates all questions as "moderate" or "strong"
 
     Log the skip decision and rationale in journal.md. This is a research judgment, not a shortcut — gap-mode exists for sessions with genuine coverage holes, not as a mandatory checkbox. **Why allow skipping:** Gap-mode involves spawning the source-acquisition agent again (Opus, foreground), running searches, downloading, then spawning more readers. For a session with strong coverage, this adds 10-15 minutes and ~100K tokens with no improvement to the final report.

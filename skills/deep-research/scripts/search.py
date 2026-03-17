@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from providers import available_providers, get_provider  # noqa: E402
 
 from _shared.config import _discover_session_dir_from_marker  # noqa: E402
-from _shared.output import error_response, log, set_quiet  # noqa: E402
+from _shared.output import error_response, log, set_quiet, success_response  # noqa: E402
 from _shared.state_client import call_state  # noqa: E402
 
 # Flags that substitute for --query (provider -> set of flag dest names)
@@ -74,6 +74,19 @@ def _has_identifier_flag(provider: str, extra_args: list[str]) -> bool:
 
 
 def main() -> None:
+    # Intercept --probe-web before normal argument parsing (--provider is not required)
+    if "--probe-web" in sys.argv:
+        # Minimal parse for --probe-web mode
+        probe_parser = argparse.ArgumentParser(add_help=False)
+        probe_parser.add_argument("--probe-web", action="store_true")
+        probe_parser.add_argument("--query", required=True, help="Topic-relevant query for probing")
+        probe_parser.add_argument("--quiet", action="store_true")
+        probe_args, _ = probe_parser.parse_known_args()
+        if getattr(probe_args, "quiet", False):
+            set_quiet(True)
+        _probe_web_providers(getattr(probe_args, "query", ""))
+        return
+
     parser = _build_parser()
     args, extra_args = parser.parse_known_args()
 
@@ -315,6 +328,61 @@ def _add_sources_to_state(args, result: dict) -> None:
             log(f"Sources auto-added to state: {n_added} new, {n_dup} duplicates")
         else:
             log("Sources sent to state")
+
+
+_WEB_PROVIDERS = ["tavily", "perplexity", "linkup", "gensee", "exa"]
+
+
+def _probe_web_providers(query: str) -> None:
+    """Test web provider connectivity and return availability map.
+
+    Tests each provider via subprocess with a 15s timeout per provider.
+    A provider is 'available' if it returns status=ok with at least one result.
+    """
+    import subprocess
+
+    availability: dict[str, bool] = {}
+    preferred = None
+    script_path = os.path.abspath(__file__)
+
+    for provider_name in _WEB_PROVIDERS:
+        cmd = [
+            sys.executable, script_path,
+            "--provider", provider_name,
+            "--query", query,
+            "--limit", "1",
+            "--compact",
+            "--quiet",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if proc.returncode != 0:
+                availability[provider_name] = False
+                log(f"probe: {provider_name} — process error", level="debug")
+                continue
+
+            result = json.loads(proc.stdout)
+            ok = (
+                result.get("status") == "ok"
+                and len(result.get("results", [])) > 0
+            )
+            availability[provider_name] = ok
+            if ok and preferred is None:
+                preferred = provider_name
+            log(f"probe: {provider_name} — {'available' if ok else 'unavailable'}", level="info")
+
+        except subprocess.TimeoutExpired:
+            availability[provider_name] = False
+            log(f"probe: {provider_name} — timeout", level="debug")
+        except (json.JSONDecodeError, Exception):
+            availability[provider_name] = False
+            log(f"probe: {provider_name} — parse error", level="debug")
+
+    success_response({
+        "preferred": preferred,
+        "availability": availability,
+        "tested_with_query": query,
+    })
 
 
 def _append_journal_entry(args, result: dict, search_mode: str) -> None:

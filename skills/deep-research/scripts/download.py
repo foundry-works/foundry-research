@@ -658,10 +658,55 @@ def _stream_web_content(client, url: str, *,
     return content, None
 
 
+def _is_publisher_landing_page(url: str) -> bool:
+    """Heuristic: does the URL strongly signal a publisher paywall landing page?
+
+    Conservative — only matches patterns where web extraction almost never
+    yields useful paper content.  False negatives (downloading a landing page
+    that gets flagged by quality.py later) are acceptable; false positives
+    (skipping a URL that actually serves full text) are not.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    path = parsed.path.lower()
+
+    # ScienceDirect abstract pages
+    if "sciencedirect.com" in host and "/abs/" in path:
+        return True
+    # Springer abstract pages (no /pdf/ or /fulltext/ in path)
+    if "link.springer.com" in host and "/article/" in path and "/pdf/" not in path and "/fulltext/" not in path:
+        return True
+    # Wiley abstract pages
+    if "onlinelibrary.wiley.com" in host and "/abs/" in path:
+        return True
+    # Taylor & Francis abstract pages
+    if "tandfonline.com" in host and "/abs/" in path:
+        return True
+    # SAGE abstract pages
+    if "journals.sagepub.com" in host and "/doi/abs/" in path:
+        return True
+    # IEEE abstract pages
+    if "ieeexplore.ieee.org" in host and "/abstract/" in path.rstrip("/"):
+        return True
+
+    return False
+
+
 def _download_web(url: str, source_id: str, client, sources_dir: str,
                   meta: dict, result: dict) -> None:
     """Download web page and extract readable content."""
     log(f"Downloading web content: {url}")
+
+    # Pre-download heuristic: skip known publisher landing pages for academic
+    # sources.  These serve paywall HTML that wastes bandwidth and gets flagged
+    # as degraded by quality.py anyway.
+    if _is_publisher_landing_page(url):
+        log(f"Skipping probable publisher landing page: {url}")
+        result["errors"].append(f"Skipped publisher landing page (heuristic): {url}")
+        result["quality"] = "paywall_page"
+        return
+
     try:
         content, error = _stream_web_content(client, url)
 

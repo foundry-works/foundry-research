@@ -97,11 +97,17 @@ For each cited source:
 
 ### Deduplication
 
-Before assigning reference numbers, deduplicate your cited sources:
+Before assigning reference numbers, run dedup on your cited sources:
 
-1. **Group by DOI** (exact match). When two source IDs (e.g., `src-042` and `src-189`) share the same DOI, they are the same paper — assign one reference number and cite all in-text occurrences under that number.
-2. **Group by title + first author** (fuzzy match, for sources without DOIs). If two sources have near-identical titles and the same first author, treat them as the same paper.
-3. **Never acknowledge a duplicate in a comment — resolve it.** If you notice two references point to the same paper, merge them. A comment like "Note: [6] and [10] are the same paper" is not a resolution — it's a deferral that erodes citation integrity.
+```bash
+{cli_dir}/state dedup-references --sources src-001,src-003,src-007,src-012,src-042,src-089
+```
+
+Pass all source IDs you plan to cite as a comma-separated list. The command returns:
+- **`doi_duplicates`** — groups sharing the same DOI (auto-confirmed, these are the same paper)
+- **`fuzzy_matches`** — groups with near-identical titles and same first author (review and confirm)
+
+For each confirmed duplicate group, choose one canonical source ID and cite all in-text occurrences under that single reference number. **Never acknowledge a duplicate in a comment — resolve it.** A comment like "Note: [6] and [10] are the same paper" is not a resolution — it's a deferral that erodes citation integrity.
 
 **Why this matters:** Different source IDs can resolve to the same underlying paper when multiple search providers return the same result. Without deduplication, the references list inflates and readers lose trust in citation accuracy.
 

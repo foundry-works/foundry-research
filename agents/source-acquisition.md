@@ -41,7 +41,17 @@ A directive from the supervisor containing:
 ### Initial mode
 Full source acquisition pipeline: connectivity test → broad searches → citation chasing → provider diversity → triage → downloads → recovery.
 
-**Before round 1 searches, test web search connectivity.** Test providers in order until one succeeds: Tavily → Perplexity → Linkup → Gensee → Exa. Run a single test search for each using a short topic-relevant query derived from the research brief (e.g., for a brief about "uncanny valley mechanisms", use `--query "uncanny valley"` — never use a generic word like "test"): `{cli_dir}/search --provider <name> --query "<brief-derived>" --limit 1 --compact`. This avoids wasting API credits on irrelevant queries and prevents junk sources (e.g., speed test sites, dictionary pages) from polluting the source inventory. Use the first provider that succeeds for all web searches this session. Set availability flags in your manifest (`tavily_available`, `perplexity_available`, `linkup_available`, `gensee_available`, `exa_available`). If all five fail, log a journal entry: "Web search APIs unavailable (Tavily, Perplexity, Linkup, Gensee, and Exa all down) — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Skip all web providers for subsequent searches.
+**Before round 1 searches, test web search connectivity:**
+
+```bash
+{cli_dir}/search --probe-web --query "<brief-derived topic query>"
+```
+
+Use a short topic-relevant query derived from the research brief (e.g., for "uncanny valley mechanisms", use `--query "uncanny valley"` — never a generic word like "test"). The command tests Tavily → Perplexity → Linkup → Gensee → Exa in sequence and returns:
+- `preferred` — first available provider (use this for all web searches this session)
+- `availability` — map of provider → true/false
+
+Copy the availability flags into your manifest (`tavily_available`, `perplexity_available`, etc.). If `preferred` is null (all five failed), log a journal entry: "Web search APIs unavailable — flagging in manifest so orchestrator can use WebSearch for web-dependent questions." Skip all web providers for subsequent searches.
 
 ### Gap mode
 Targeted follow-up after reading is complete. You receive additional context:
@@ -226,23 +236,21 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ### Post-download content validation (mandatory before manifest)
 
-After all downloads and recovery attempts complete, validate content for the **top 20-30 sources by triage score** that have content files on disk. This catches mismatches that slip past the title-word check — papers sharing common words with the target title but covering a completely different topic (e.g., "The 'Uncanny Valley' and the Verisimilitude of Sexual Offenders" passing a check for an uncanny valley perception paper because both contain "uncanny valley").
+After all downloads and recovery attempts complete, run content validation to catch mismatches that slip past the title-word check — papers sharing common words with the target title but covering a completely different topic (e.g., "The 'Uncanny Valley' and the Verisimilitude of Sexual Offenders" passing a check for a perception paper because both contain "uncanny valley").
 
-1. For each source with a content file, read the first 10 lines of the content file
-2. Check if the actual content plausibly matches the metadata title/abstract — look for author names, key domain terms, venue name, or methodology keywords from the abstract
-3. **Check venue/journal against the research domain.** A paper published in a geology, theology, or otherwise unrelated journal is almost certainly a content mismatch regardless of title keyword overlap — flag it immediately. For ambiguous query terms that appear across disciplines (e.g., "uncanny valley" spans psychology, geology, animation), venue is a more reliable mismatch signal than title keywords. A paper in *Geomorphology* is obviously wrong for psychology research even if the title contains every keyword. Also check: if domain terms from the brief scope are absent from the first 10 lines of content, treat this as strong mismatch evidence.
-4. If obviously mismatched (different topic, different authors, wrong domain/venue, garbled/stub content), call `{cli_dir}/state set-quality --id src-NNN --quality mismatched`
-4. Report validation results in the manifest under `content_validation`:
-
-```json
-"content_validation": {
-  "checked": 25,
-  "valid": 18,
-  "mismatched": 6,
-  "degraded": 1,
-  "mismatched_ids": ["src-005", "src-181"]
-}
+```bash
+{cli_dir}/state validate-content --top 30 --domain-terms "term1,term2,term3" --expected-domains "domain1,domain2"
 ```
+
+- **`--domain-terms`**: 5-8 key domain terms from the research brief (the same terms you used for `--brief-keywords`)
+- **`--expected-domains`**: Expected research domains/venues (e.g., "psychology,cognitive science,neuroscience")
+- **`--top`**: Number of sources to check (default 30)
+
+The command checks each source's content file against its metadata using four heuristics: title-word overlap, venue/domain match, domain-term presence, and stub detection. Sources that fail are auto-flagged `quality: "mismatched"` or `quality: "degraded"` in state.db.
+
+**After the command returns**, review the `details` array for edge cases — the heuristics are conservative, so check whether any flagged sources are actually valid (e.g., interdisciplinary papers with low keyword overlap but correct content). Use `state set-quality --id src-NNN --quality ok` to restore any false positives.
+
+Report the validation results in your manifest under `content_validation` (use the command's output directly — it matches the manifest schema).
 
 **Why at this stage:** The orchestrator's batch pre-read step (SKILL.md step 6) catches mismatches too, but it happens after you've returned. Catching gross mismatches here lets the orchestrator trust your manifest's download counts when allocating readers.
 ### Web search recovery for paywalled papers

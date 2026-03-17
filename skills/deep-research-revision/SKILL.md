@@ -159,21 +159,29 @@ Before passing issues to the reviser, deduplicate across reviewer and verifier r
 
 **Why dedup here, not in the reviser:** The reviser's "group nearby issues" heuristic (planning step) partially addresses this, but it still costs tokens to read, plan around, and attempt edits on duplicate issues. Removing duplicates before handoff is cheaper and more reliable than reactive recovery after the fact.
 
-**Dedup procedure:**
+**Run dedup:**
 
-1. **Group by location.** For each issue, normalize the location to section + paragraph (e.g., "Section 3, paragraph 2"). Group issues that target the same section and paragraph.
+Write the combined issues list to a temp JSON file, then:
 
-2. **Evaluate semantic overlap within each group.** Two issues at the same location are duplicates when they describe the same underlying problem — different phrasings of the same factual concern, or overlapping corrections to the same claim. Two issues at the same location that describe different problems (e.g., one about a missing citation, another about passive voice) are not duplicates — keep both.
+```bash
+{cli_dir}/state dedup-issues --from-json /tmp/issues.json
+```
 
-3. **Merge duplicates** using these rules:
-   - **Prefer the more specific `suggested_fix`.** A fix that says "change X to Y" is immediately actionable; "verify and correct" requires additional reading, costing the reviser tokens and risking a less precise edit.
-   - **Elevate severity to the higher of the two.** Dual-flagged issues have higher confidence — two independent reviewers agreeing on a problem is stronger signal than one.
-   - **Add a `flagged_by` field** listing both source IDs (e.g., `["review-3", "verify-2"]`). This preserves the audit trail so the delivery summary can report which agents found which issues.
-   - **Keep the issue ID of the more specific entry** (the one whose `suggested_fix` was preferred). Drop the other ID from the active issues list.
+The command groups issues by normalized location, identifies candidate duplicate pairs based on description similarity, and returns:
+- **`candidate_duplicates`** — pairs with merge suggestions (which ID to keep, merged severity, `flagged_by` list). Each includes an `overlap_signal` showing the similarity score.
+- **`co_located_groups`** — non-duplicate issues targeting the same paragraph, flagged for atomic editing.
+- **`passthrough_issues`** — issues with unique locations that pass through unchanged.
 
-4. **Flag co-located non-duplicates within the accuracy set.** After dedup, scan the remaining accuracy issues for non-duplicates that target the same paragraph (same section + paragraph in their `location` field). For each co-located group, add a `co_located_with` field listing the other issue IDs. **Why:** Two different issues targeting the same sentence create fragile edit sequences — the first edit changes surrounding text, causing the second edit's `old_string` to no longer match. The `co_located_with` signal tells the reviser to plan a single atomic edit for the group rather than sequential independent edits. Cross-type co-location (accuracy + style at the same paragraph) is no longer a concern because accuracy revision completes before style review begins — the style reviewer sees corrected text and flags issues against the final wording.
+**Review candidates:** The script surfaces candidates; you confirm or reject each merge. Two issues at the same location with high description overlap are almost always true duplicates, but check the edge case where one flags a factual error and the other flags a missing citation at the same claim — those are different problems and should not be merged.
 
-5. **Log the merge count.** Record how many issues were merged and how many co-located groups were flagged (e.g., "Dedup: merged 2 duplicate issues, flagged 1 co-located group, 14 → 12 active issues"). This is reported in the delivery summary.
+**After confirming merges:** Apply each confirmed merge to the issues list:
+- Keep the `keep_id` issue, drop the `drop_id` issue
+- Set the kept issue's severity to `merged_severity`
+- Add the `flagged_by` field from the merge suggestion
+
+**For co-located groups:** Add a `co_located_with` field to each issue listing the other issue IDs. **Why:** Two different issues targeting the same sentence create fragile edit sequences — the `co_located_with` signal tells the reviser to plan a single atomic edit for the group.
+
+**Log the merge count.** Record how many issues were merged and how many co-located groups were flagged (e.g., "Dedup: merged 2 duplicate issues, flagged 1 co-located group, 14 → 12 active issues"). This is reported in the delivery summary.
 
 ### Step 3: Round 1 — Accuracy revision
 
@@ -207,22 +215,21 @@ The reviser's manifest claims edits were made, but claims aren't proof. Validate
 
 **Why validate rather than trusting the manifest:** The reviser's "re-read after editing" instruction is aspirational guidance, not an enforced check. The most common failure mode is a prior edit changing surrounding context so a later edit's `old_string` no longer matches — the Edit tool fails silently from the orchestrator's perspective, and the reviser may record "resolved" in the manifest despite the edit not landing.
 
-**Validation procedure:**
+**Run validation:**
 
-For each resolved edit in the manifest:
-1. Check whether `old_text_snippet` still appears in `report.md`. If it does, the edit didn't land — the old text is still present.
-2. Check whether `new_text_snippet` appears in `report.md`. If it does, the edit landed successfully.
-3. If `old_text_snippet` is absent AND `new_text_snippet` is present → **confirmed**.
-4. If `old_text_snippet` is present AND `new_text_snippet` is absent → **failed** (edit didn't apply).
-5. If both are absent → **inconclusive** (surrounding context changed; treat as needing retry).
-6. If both are present → **inconclusive** (snippet may appear in multiple locations; treat as confirmed but log a warning).
+```bash
+{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --pass accuracy
+```
 
-Collect all failed edits into a `failed_validations` list.
+The command checks each resolved edit's `old_text_snippet` and `new_text_snippet` against the report and returns:
+- **confirmed** — old text absent, new text present (edit landed)
+- **failed** — old text still present, new text absent (edit didn't apply)
+- **inconclusive** — both absent (context changed) or both present (logged with warning)
 
-**Retry logic:** If any edits failed validation, re-launch the reviser with only the failed issues. Cap at **one retry**. **Why one retry:** The most common failure is context drift — a prior edit changed surrounding text so `old_string` no longer matches. One retry with the current file state fixes this because the reviser re-reads the file and targets the updated text. If an edit fails twice, the issue is likely deeper (ambiguous old_string, conflicting edits, or text that was removed entirely) and needs human judgment, not more retries. Unbounded retries risk a loop that wastes tokens without converging.
+**Interpreting results and retry logic:** If `results.failed` is non-empty, re-launch the reviser with only the failed issues (extract issue IDs from the failed array). Cap at **one retry**. **Why one retry:** The most common failure is context drift — a prior edit changed surrounding text so `old_string` no longer matches. One retry with the current file state fixes this because the reviser re-reads the file and targets the updated text. If an edit fails twice, the issue is likely deeper and needs human judgment, not more retries.
 
 After the retry (or if no retry was needed), record:
-- Count of edits that passed validation on first try
+- Count of edits that passed validation on first try (`results.summary.confirmed`)
 - Count of edits that required retry
 - Count of edits that failed after retry (escalate to unresolved)
 
@@ -266,10 +273,14 @@ Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 
 ### Step 5b: Post-style-revision validation
 
-Same validation procedure as Step 3b, applied to the style reviser's manifest entries. Same retry logic (one retry cap).
+Same as Step 3b but for style edits:
 
-After validation, record:
-- Count of style edits that passed validation on first try
+```bash
+{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --pass style
+```
+
+Same retry logic (one retry cap). After validation, record:
+- Count of style edits confirmed on first try (`results.summary.confirmed`)
 - Count that required retry
 - Count that failed after retry (escalate to unresolved)
 
