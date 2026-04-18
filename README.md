@@ -4,14 +4,32 @@ A Claude Code plugin for deep research with academic database search, structured
 
 ## Install
 
+### From this repo (recommended)
+
 ```bash
-# Clone and test locally
+# Add the repo as a marketplace source
+claude /plugin marketplace add foundry-works/foundry-research
+
+# Install the plugin
+claude plugin install foundry-research
+```
+
+Or from inside a Claude Code session:
+
+```
+/plugin marketplace add foundry-works/foundry-research
+/plugin install foundry-research
+```
+
+### Local / development
+
+```bash
 git clone https://github.com/foundry-works/foundry-research.git
 cd foundry-research
 claude --plugin-dir .
 ```
 
-Plugin registry install (`claude plugin install foundry-research`) will be available once published.
+Use `/reload-plugins` in the session to pick up changes.
 
 ## Configure
 
