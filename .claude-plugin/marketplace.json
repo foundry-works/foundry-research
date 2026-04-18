@@ -1,0 +1,16 @@
+{
+  "name": "foundry-works",
+  "owner": {
+    "name": "Tyler Burleigh"
+  },
+  "plugins": [
+    {
+      "name": "foundry-research",
+      "source": "./",
+      "description": "Deep research agent with academic database search, structured source management, and multi-agent synthesis.",
+      "version": "1.0.0",
+      "license": "MIT",
+      "keywords": ["research", "academic", "literature-review", "deep-research", "synthesis"]
+    }
+  ]
+}
