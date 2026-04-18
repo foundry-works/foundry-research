@@ -40,5 +40,4 @@ Thumbs.db
 .cache/
 .pytest_cache
 settings.json
-update-tavily-key.sh
 deep-research-uncanny-valley/

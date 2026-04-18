@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-DIR="$(cd "$(dirname "$0")" && pwd)"
-# Auto-bootstrap venv on first use
-[ -d "$DIR/.venv" ] || "$DIR/setup.sh" > /dev/null
-exec "$DIR/.venv/bin/python" "$DIR/scripts/$(basename "$0").py" "$@"
+set -euo pipefail
+
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=bootstrap-venv.sh
+source "$SKILL_DIR/bootstrap-venv.sh"
+
+exec "$VENV_DIR/bin/python" "$SKILL_DIR/scripts/state.py" "$@"

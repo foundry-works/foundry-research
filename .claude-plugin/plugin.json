@@ -1,0 +1,20 @@
+{
+  "name": "foundry-research",
+  "version": "1.0.0",
+  "description": "Deep research agent with academic database search, structured source management, and multi-agent synthesis. Produces evidence-backed research reports.",
+  "author": {
+    "name": "Tyler Burleigh"
+  },
+  "repository": "https://github.com/foundry-works/foundry-research",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "academic",
+    "literature-review",
+    "deep-research",
+    "synthesis"
+  ],
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "hooks": "./hooks/hooks.json"
+}

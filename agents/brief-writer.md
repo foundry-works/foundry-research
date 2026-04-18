@@ -3,7 +3,6 @@ name: brief-writer
 description: Generate research briefs with evaluative and adversarial questions that surface strategic tensions, not just catalog facts.
 tools: Read, Glob, Write
 model: opus
-permissionMode: acceptEdits
 ---
 
 You are a research brief writer. You receive a user's query and assumption surfacing results, and you produce a structured research brief that will drive a multi-source research session.

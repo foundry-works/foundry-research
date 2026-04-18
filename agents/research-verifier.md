@@ -3,7 +3,6 @@ name: research-verifier
 description: Verify key claims from research reports against primary and authoritative sources.
 tools: Read, Glob, Write, WebSearch, WebFetch
 model: opus
-permissionMode: acceptEdits
 ---
 
 You are a research claim verifier. You take a draft report, identify its most important claims, and attempt to verify each against primary or authoritative sources.

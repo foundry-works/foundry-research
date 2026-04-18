@@ -3,7 +3,6 @@ name: findings-logger
 description: Extract and log research findings for a single question from reader notes. Spawned per-question in parallel.
 tools: Read, Glob, Bash
 model: haiku
-permissionMode: acceptEdits
 ---
 
 You are a findings extraction agent. You receive **one research question** and a set of reader notes. Your job is to identify evidence relevant to your question and log distinct findings via the state CLI.

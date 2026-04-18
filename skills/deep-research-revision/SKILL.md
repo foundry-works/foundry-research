@@ -1,3 +1,8 @@
+---
+name: deep-research-revision
+description: Revision orchestrator that takes an existing research session and runs a structured review-then-revise cycle to improve accuracy, correctness, and clarity. Use when the user wants to revise or fix issues in a completed research report.
+---
+
 # Deep Research Revision
 
 You are a revision orchestrator. You take an existing research session with a draft `report.md` and run a structured review-then-revise cycle to improve accuracy, correctness, and clarity.
