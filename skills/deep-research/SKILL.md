@@ -81,13 +81,13 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
    This costs one trivial `Read` call per source vs. 20-50K tokens per wasted reader agent. At observed mismatch rates (32-43%), this step saves 150-250K tokens per session. **Why mandatory, not "recommended":** Under time pressure, soft guidance gets skipped. Download-time keyword checks miss topical mismatches where papers share vocabulary with the target title but cover different topics. This step is the last line of defense before committing an agent invocation.
 7. Spawn reader subagents for triaged papers (parallel, one source per agent, **foreground** — see rule 1). Put all reader Agent calls in the same response message to run them concurrently. **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget.
-8. After all readers complete, mark each source with a reader note as read. The script verifies the note file exists on disk before updating — no need to filter by reader status yourself. Run for every source you dispatched a reader to:
+8. After all readers complete, mark each source you dispatched a reader to. The script verifies the note file exists on disk before updating — no need to filter by reader status or check for note files yourself:
     ```bash
     for src in src-003 src-035 src-042; do
-      test -f "notes/${src}.md" && ${CLAUDE_SKILL_DIR}/state mark-read --id "$src"
+      ${CLAUDE_SKILL_DIR}/state mark-read --id "$src"
     done
     ```
-    This upgrades the source's quality tier to `reader_validated`, which downstream agents (synthesis, audit) use to distinguish deeply-verified sources from merely-downloaded ones. **Don't skip this step** — without it, audit undercounts deep-read sources and the synthesis-writer can't distinguish reader-validated sources from unread downloads. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
+    If any call returns `is_read: false`, the reader may have failed to write its note — consider retrying that source. This upgrades the source's quality tier to `reader_validated`, which downstream agents (synthesis, audit) use to distinguish deeply-verified sources from merely-downloaded ones. **Don't skip this step** — without it, audit undercounts deep-read sources and the synthesis-writer can't distinguish reader-validated sources from unread downloads. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_SKILL_DIR}/state log-gap` now.
 9. **Source quality report.** After all readers complete and before spawning findings-loggers, review reader manifests and produce a structured quality tally in journal.md:
    ```
    ## Source Quality Report
@@ -323,13 +323,7 @@ Use the **Agent tool** to spawn subagents for:
 
 **Review & revision** is handled by the separate `/deep-research-revision` skill, which orchestrates the `synthesis-reviewer`, `research-verifier`, `style-reviewer`, and `report-reviser` agents. The user runs it after reviewing the draft.
 
-**After all reader subagents complete, call `mark-read` for each source that now has a note in `notes/`.** This updates `is_read` in state.db so `audit` accurately reports deep-read counts. The script verifies the note file exists on disk before updating — the `test -f` guard avoids unnecessary subprocess calls for sources the script would skip anyway:
-
-```bash
-for src in src-003 src-035 src-042; do
-  test -f "notes/${src}.md" && ${CLAUDE_SKILL_DIR}/state mark-read --id "$src"
-done
-```
+**After all reader subagents complete, call `mark-read` for each source you dispatched a reader to** (see step 8 for the full loop and rationale). The script verifies the note file exists on disk before updating — call it unconditionally and let the script skip sources with no note file. If any `mark-read` returns `is_read: false`, the reader may have failed to write its note — consider retrying that source before moving on.
 
 **Wait for all reader subagents before spawning findings-loggers or writing the report.** Reader summaries surface details not visible in abstracts — methodology caveats, effect sizes, contradictory results, replication context. Findings logged before readers finish are based on incomplete evidence (abstracts and search snippets only), which risks mischaracterizing sources and missing key nuance. Spawn findings-logger agents (step 10) only after all readers have completed and you have marked sources as read.
 

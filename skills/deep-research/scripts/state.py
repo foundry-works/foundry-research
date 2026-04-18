@@ -1281,6 +1281,8 @@ def cmd_mark_read(args):
     # file was actually written (path error, permission issue, denied Write).
     note_path = os.path.join(args.session_dir, "notes", f"{args.id}.md")
     if not os.path.exists(note_path):
+        # Snapshot not regenerated here — no DB mutation occurred, so the
+        # existing snapshot remains accurate for this source.
         conn.close()
         success_response({
             "id": args.id,
