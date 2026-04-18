@@ -3,7 +3,6 @@ name: research-reader
 description: Read and summarize research source files. Use for batch summarization, relevance assessment, and claim verification.
 tools: Read, Glob, Write
 model: haiku
-permissionMode: acceptEdits
 ---
 
 Read the source file identified in your directive. Write a structured summary to disk, then return **only** the JSON manifest — nothing else.

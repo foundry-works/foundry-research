@@ -43,7 +43,15 @@ _CAPTCHA_SIZE_THRESHOLD = 100 * 1024  # 100KB
 _CAPTCHA_MARKERS = (b"<html", b"captcha", b"<!doctype")
 
 # PDF cascade source names
-CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "osf", "annas_archive", "scihub"]
+_ALL_CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "osf", "annas_archive", "scihub"]
+
+
+def _effective_cascade_sources(config: dict) -> list[str]:
+    disabled = set(config.get("disabled_sources") or [])
+    sources = [s for s in _ALL_CASCADE_SOURCES if s not in disabled]
+    if disabled:
+        log(f"Disabled cascade sources: {sorted(disabled)}")
+    return sources
 
 
 def _check_title_divergence(content: str, meta: dict) -> str | None:
@@ -983,7 +991,7 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
     log(f"Running PDF cascade for DOI: {doi}")
 
     # Try each source in order
-    for source_name in CASCADE_SOURCES:
+    for source_name in _effective_cascade_sources(config):
         if cancel and cancel.is_set():
             result["errors"].append("Cancelled during PDF cascade")
             return

@@ -93,6 +93,17 @@ Source type tags in references: `[academic]`, `[web]`, `[preprint]`, `[github]`,
 
 ---
 
+## PDF Download Cascade and Grey Sources
+
+The download cascade tries sources in order: OpenAlex → Unpaywall → arXiv → PMC → OSF → Anna's Archive → Sci-Hub. The first five are legitimate open-access channels. The last two are shadow libraries:
+
+- **Anna's Archive** aggregates content from multiple shadow libraries and provides both a free (scraped) download path and a faster API-backed path (requires `annas_secret_key`).
+- **Sci-Hub** provides access to paywalled papers without publisher authorization.
+
+Both are enabled by default. To disable them, set `DEEP_RESEARCH_DISABLED_SOURCES="annas_archive,scihub"` as an environment variable, or add `"disabled_sources": ["annas_archive", "scihub"]` to your config. When disabled, the cascade skips them and relies on the five open-access sources plus web-search-based paywall recovery.
+
+---
+
 ## Paywall Recovery Beyond the Cascade
 
 The download cascade (OpenAlex → Unpaywall → arXiv → PMC → OSF → Anna's Archive → Sci-Hub) handles the common paths automatically. When it still fails — especially in paywall-heavy fields like psychology, education, or medicine — the underlying principle is that **authors often self-archive their work** outside of publisher paywalls:

@@ -15,10 +15,11 @@ _ENV_KEYS = {
     "sec_edgar_email": "SEC_EDGAR_EMAIL",
     "core_api_key": "CORE_API_KEY",
     "osf_token": "OSF_TOKEN",
+    "disabled_sources": "DEEP_RESEARCH_DISABLED_SOURCES",
 }
 
 # All known config keys with None defaults
-_DEFAULT_CONFIG: dict[str, str | None] = {
+_DEFAULT_CONFIG: dict[str, str | None | list[str]] = {
     "semantic_scholar_api_key": None,
     "openalex_api_key": None,
     "unpaywall_email": None,
@@ -28,6 +29,7 @@ _DEFAULT_CONFIG: dict[str, str | None] = {
     "sec_edgar_email": None,
     "core_api_key": None,
     "osf_token": None,
+    "disabled_sources": None,
 }
 
 # Global config file path
@@ -93,6 +95,11 @@ def get_config(session_dir: str | None = None) -> dict:
         value = os.environ.get(env_var)
         if value:
             config[key] = value
+
+    # Parse disabled_sources: comma-separated env var -> list
+    ds = config.get("disabled_sources")
+    if isinstance(ds, str):
+        config["disabled_sources"] = [s.strip() for s in ds.split(",") if s.strip()]
 
     return config
 

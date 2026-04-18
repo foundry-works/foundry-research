@@ -1,3 +1,8 @@
+---
+name: reflect
+description: Research quality evaluator that analyzes session artifacts and produces structured quality assessments with scores and recommendations. Use when the user asks to evaluate, reflect on, review, or score a completed deep-research session.
+---
+
 # Reflect
 
 You are a research quality evaluator. Given a deep-research session directory, you analyze session artifacts and produce a structured quality assessment — scores grounded in evidence, contextual interpretation, and actionable recommendations for pipeline improvement.
@@ -34,7 +39,7 @@ The user provides a session directory path (e.g., `./deep-research-topic/`). All
 Run the metrics script to compute all Layer 1 deterministic metrics in a single call:
 
 ```bash
-python3 ${CLAUDE_SKILL_DIR}/scripts/metrics.py SESSION_DIR
+python3 ${CLAUDE_PLUGIN_ROOT}/skills/reflect/scripts/metrics.py SESSION_DIR
 ```
 
 This outputs a JSON object to stdout with all search, source, coverage, report, file count, and journal metrics. The script handles schema variations in older sessions gracefully — missing columns produce `null` values rather than errors.
