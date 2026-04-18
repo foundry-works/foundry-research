@@ -42,3 +42,15 @@ Thumbs.db
 settings.json
 update-tavily-key.sh
 deep-research-uncanny-valley/
+.claude/settings.local.json
+
+# sbx sandbox artifacts
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.mcp.json
+.profile
+.ripgreprc
+.zprofile
+.zshrc

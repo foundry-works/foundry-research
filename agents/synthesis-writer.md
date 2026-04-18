@@ -113,6 +113,8 @@ For each confirmed duplicate group, choose one canonical source ID and cite all 
 
 If a metadata file is missing or has incomplete fields after these checks, write `[metadata incomplete]` in place of the missing fields rather than guessing. A visible gap is vastly preferable to a plausible-sounding fabrication — reviewers and verifiers treat fabricated bibliographic data as a critical error, while incomplete metadata is merely a cosmetic issue that can be fixed later.
 
+**Apply the same completeness standard to Further Reading** — omit entries lacking author, title, or year after checking metadata, reader notes, and content file headers. An incomplete citation erodes trust more than its absence.
+
 ### Sequential renumbering
 
 After finalizing the references list (post-dedup, post-drop), verify that reference numbers run `[1]` through `[N]` with no gaps. If a source was dropped or merged during synthesis, renumber the remaining references sequentially and update every in-text `[N]` citation to match.

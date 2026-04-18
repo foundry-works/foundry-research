@@ -1268,31 +1268,42 @@ def cmd_mark_read(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
-    cur = conn.execute(
+    row = conn.execute(
+        "SELECT quality FROM sources WHERE id = ? AND session_id = ?",
+        (args.id, sid)
+    ).fetchone()
+    if not row:
+        conn.close()
+        error_response([f"Source {args.id} not found"])
+
+    # Verify the note file exists on disk before updating is_read.
+    # Prevents the state DB from claiming a source was read when no note
+    # file was actually written (path error, permission issue, denied Write).
+    note_path = os.path.join(args.session_dir, "notes", f"{args.id}.md")
+    if not os.path.exists(note_path):
+        conn.close()
+        success_response({
+            "id": args.id,
+            "is_read": False,
+            "warning": f"note file not found on disk ({note_path}), is_read not updated",
+        })
+
+    conn.execute(
         "UPDATE sources SET is_read = 1 WHERE id = ? AND session_id = ?",
         (args.id, sid)
     )
-    if cur.rowcount == 0:
-        conn.close()
-        error_response([f"Source {args.id} not found"])
 
     # Auto-upgrade degraded → reader_validated if a note file exists.
     # A reader that successfully extracted content and wrote a note is strong
     # evidence that the source is usable despite initial quality concerns
     # (e.g., PDF raw-text fallback that's actually readable).
     quality_upgraded = False
-    row = conn.execute(
-        "SELECT quality FROM sources WHERE id = ? AND session_id = ?",
-        (args.id, sid)
-    ).fetchone()
-    if row and row["quality"] == "degraded":
-        note_path = os.path.join(args.session_dir, "notes", f"{args.id}.md")
-        if os.path.exists(note_path):
-            conn.execute(
-                "UPDATE sources SET quality = 'reader_validated' WHERE id = ? AND session_id = ?",
-                (args.id, sid)
-            )
-            quality_upgraded = True
+    if row["quality"] == "degraded":
+        conn.execute(
+            "UPDATE sources SET quality = 'reader_validated' WHERE id = ? AND session_id = ?",
+            (args.id, sid)
+        )
+        quality_upgraded = True
 
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
