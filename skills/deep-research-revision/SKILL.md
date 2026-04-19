@@ -105,7 +105,24 @@ cp <session-dir>/report.md <session-dir>/report_draft.md
 
 ### Step 2: Pass 1 — Accuracy review
 
-**Launch synthesis-reviewer + research-verifier in parallel** (two Agent calls in the same response message):
+This step uses a two-phase verification architecture: a lightweight claim extractor reads the report first, then small focused verifiers check pre-extracted claims against primary sources.
+
+#### Phase A: Claim extraction
+
+Launch **`claim-extractor`** subagent (Sonnet, foreground) with:
+- Session directory path (absolute)
+- Path to `report.md` (relative from project root)
+- **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
+
+The extractor reads the report, identifies 5-10 load-bearing claims, classifies their source types, and returns a structured claims manifest.
+
+**After it returns**, parse the claims manifest JSON. If it returned 0 claims, log this and skip to Phase B with no verifier launches (only the synthesis-reviewer will run).
+
+#### Phase B: Parallel review and verification
+
+Shard the extracted claims into groups of 3. For example, 8 claims produces shards: [1,2,3], [4,5,6], [7,8].
+
+**Launch synthesis-reviewer + claim-verifier shards in parallel** (all Agent calls in the same response message):
 
 - **`synthesis-reviewer`** subagent (Sonnet) with:
   - Session directory path (absolute)
@@ -113,15 +130,15 @@ cp <session-dir>/report.md <session-dir>/report_draft.md
   - Research brief
   - The reviewer audits for: internal contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity
 
-- **`research-verifier`** subagent (Opus) with:
+- **`claim-verifier`** subagent(s) (Opus, one per shard) with:
   - Session directory path (absolute)
-  - Path to `report.md` (relative from project root)
-  - **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
-  - The verifier identifies 5-10 load-bearing claims and checks them against primary sources
+  - Shard index (1, 2, 3, ...)
+  - The 2-3 claims for this shard, passed as inline JSON (the full claim objects from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
+  - Each verifier checks its claims against primary sources via web search
 
-**Why parallel launch with post-hoc gating:** The synthesis-reviewer takes ~2 min, the verifier ~5 min. Making them sequential (reviewer first, then conditionally launching the verifier) would always add ~2 min of reviewer latency before the verifier could start. Since the most common use case — first revision of a new report — always needs full verification, parallel launch saves wall-clock time in the majority of runs. The tradeoff: in skip/targeted cases, the verifier runs unnecessarily. But verifier tokens are a fixed cost regardless of launch order, and the downstream savings (fewer issues reaching the reviser) are where gating actually saves tokens.
+**Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits at launch time. The extractor reads the report once (Sonnet, cheap), and each verifier shard receives only 3 claims as inline text — no report reading needed. This also allows parallel verification across shards, reducing wall-clock time.
 
-**After both return**, apply verifier gating to decide how much of the verifier's output to use:
+**After all agents return**, merge the verifier shard outputs: concatenate all shards' `issues` arrays. Re-number `verify-N` IDs sequentially across shards (e.g., shard 1 produces verify-1 through verify-2, shard 2 produces verify-3 through verify-5). Then apply verifier gating to decide how much of the merged verifier output to use:
 
 #### Verifier gating
 
@@ -150,9 +167,9 @@ Evaluate the synthesis-reviewer's results to determine how to use the verifier's
 
 **After gating**, collect issues from the reviewers' `issues` arrays — each reviewer now returns pre-formatted issues with IDs already assigned:
 - From the synthesis-reviewer's `issues` array: take all high and medium severity issues (already prefixed `review-N`)
-- From the research-verifier's `issues` array per gating mode: all issues (full), only issues whose location matches a reviewer-flagged section (targeted), or none (skip). Issues are already prefixed `verify-N`
+- From the merged claim-verifier shards' `issues` array per gating mode: all issues (full), only issues whose location matches a reviewer-flagged section (targeted), or none (skip). Issues are already prefixed `verify-N` (re-numbered across shards)
 
-**Why the orchestrator no longer assigns IDs or translates formats:** Each reviewer assigns its own `issue_id` prefix (`review-N`, `verify-N`) and outputs the canonical schema directly. This eliminates the error-prone translation step where the orchestrator had to interpret different output structures and manually assign IDs — a process that risked misassigned IDs, missed issues, and incorrect severity mappings.
+**Why the orchestrator re-numbers verify IDs across shards:** Each shard produces its own `verify-1`, `verify-2`, etc. Without re-numbering, parallel shards would produce colliding IDs. The orchestrator concatenates and re-indexes before feeding into dedup and revision.
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
 
@@ -311,11 +328,12 @@ You are the supervisor. You orchestrate reviewers and the reviser — you do not
 Use the **Agent tool** to spawn subagents:
 
 - **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Returns structured issues list. Use `subagent_type: "synthesis-reviewer"`.
-- **`research-verifier`** (Opus) — verifies load-bearing claims against primary sources via web search. Returns verification report with per-claim verdicts. Use `subagent_type: "research-verifier"`.
+- **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Returns structured claim list for verification. Use `subagent_type: "claim-extractor"`.
+- **`claim-verifier`** (Opus) — verifies pre-extracted claims against primary sources via web search. Receives 2-3 claims as inline text, no report reading. Returns verification report with per-claim verdicts. Launch one per shard. Use `subagent_type: "claim-verifier"`.
 - **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Returns structured issues list. Use `subagent_type: "style-reviewer"`.
 - **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Uses Edit tool only. Returns edit manifest. Launch via Agent tool with the `agents/report-reviser.md` prompt.
 
-**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and research-verifier in Pass 1, put both Agent calls in one response message.
+**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, put all Agent calls in one response message.
 
 ---
 
@@ -328,7 +346,8 @@ All revision artifacts go in `{session}/revision/`, not `notes/` or the session 
 | Agent | Output path |
 |-------|-------------|
 | synthesis-reviewer | `{session}/revision/review-report.md` |
-| research-verifier | `{session}/revision/verification-report.md` |
+| claim-extractor | `{session}/revision/claims-manifest.json` |
+| claim-verifier | `{session}/revision/verification-report-{shard_index}.md` |
 | style-reviewer | `{session}/revision/style-review.md` |
 
 **Do not override these paths** when launching agents. Let each agent write to its default location — the paths above match what the agent prompts specify. **Why no overrides:** Ad-hoc path overrides in agent launch prompts diverge from the agent's own conventions, causing outputs to land in unexpected locations. When the orchestrator and agent disagree on where files go, downstream steps that read those files break silently.
