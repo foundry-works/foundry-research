@@ -120,7 +120,7 @@ The extractor reads the report, identifies 5-10 load-bearing claims, classifies 
 
 #### Phase B: Parallel review and verification
 
-Shard the extracted claims into groups of 3. For example, 8 claims produces shards: [1,2,3], [4,5,6], [7,8].
+Shard the extracted claims into groups of 1-2. For example, 8 claims produces shards: [1,2], [3,4], [5,6], [7,8]. Smaller shards keep each verifier prompt tight and maximize parallel success rate.
 
 **Launch synthesis-reviewer + claim-verifier shards in parallel** (all Agent calls in the same response message):
 
@@ -133,10 +133,10 @@ Shard the extracted claims into groups of 3. For example, 8 claims produces shar
 - **`claim-verifier`** subagent(s) (Opus, one per shard) with:
   - Session directory path (absolute)
   - Shard index (1, 2, 3, ...)
-  - The 2-3 claims for this shard, passed as inline JSON (the full claim objects from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
+  - The 1-2 claims for this shard, passed as inline JSON (the full claim objects from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
   - Each verifier checks its claims against primary sources via web search
 
-**Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits at launch time. The extractor reads the report once (Sonnet, cheap), and each verifier shard receives only 3 claims as inline text — no report reading needed. This also allows parallel verification across shards, reducing wall-clock time.
+**Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits at launch time. The extractor reads the report once (Sonnet, cheap), and each verifier shard receives only 1-2 claims as inline text — no report reading needed. Smaller shards also maximize parallel success rate: if one shard fails, the others still return results.
 
 **After all agents return**, merge the verifier shard outputs: concatenate all shards' `issues` arrays. Re-number `verify-N` IDs sequentially across shards (e.g., shard 1 produces verify-1 through verify-2, shard 2 produces verify-3 through verify-5). Then apply verifier gating to decide how much of the merged verifier output to use:
 
