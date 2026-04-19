@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 
-from helpers import init_session as _init_session, write_json_file as _write_json_file, STATE_PY
+from helpers import init_session as _init_session, run_state as _run_state, write_json_file as _write_json_file, STATE_PY
 from state import _connect, _insert_source, _next_id, _now
 
 
@@ -279,3 +279,428 @@ class TestSummaryCompact:
         assert "provider" in entry
         # Abstract should NOT be in summary source list
         assert "abstract" not in entry
+
+
+# ---------------------------------------------------------------------------
+# Evidence layer tests
+# ---------------------------------------------------------------------------
+
+class TestEvidenceSchema:
+    def test_init_creates_evidence_tables(self, tmp_path):
+        """init creates evidence_units and finding_evidence tables."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        conn = sqlite3.connect(str(tmp_path / "session" / "state.db"))
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        conn.close()
+
+        assert "evidence_units" in tables
+        assert "finding_evidence" in tables
+
+    def test_init_creates_evidence_indexes(self, tmp_path):
+        """init creates evidence indexes."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        conn = sqlite3.connect(str(tmp_path / "session" / "state.db"))
+        indexes = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()}
+        conn.close()
+
+        assert "idx_evidence_source" in indexes
+        assert "idx_evidence_question" in indexes
+
+    def test_init_creates_evidence_directory(self, tmp_path):
+        """init creates evidence/ subdirectory."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        assert os.path.isdir(os.path.join(session_dir, "evidence"))
+
+
+class TestAddEvidence:
+    def _setup_session_with_source(self, tmp_path):
+        """Helper: init session + add a source, return session_dir."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Evidence Test Paper",
+            "doi": "10.1234/evidence-test",
+            "provider": "test",
+        }, "source.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        return session_dir
+
+    def test_add_single_manifest(self, tmp_path):
+        """add-evidence inserts units from a single source manifest."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        manifest = {
+            "source_id": "src-001",
+            "generated_by": "research-reader",
+            "units": [
+                {
+                    "primary_question_id": "Q1",
+                    "question_ids": ["Q1"],
+                    "claim_text": "Only 1 of 8 studies supported the hypothesis.",
+                    "claim_type": "result",
+                    "relation": "supports",
+                    "evidence_strength": "strong",
+                    "provenance_type": "content_span",
+                    "provenance_path": "sources/src-001.md",
+                    "line_start": 103,
+                    "line_end": 116,
+                    "quote": "Only 1 of 8 studies found the predicted effect.",
+                    "structured_data": {"supporting": 1, "total": 8},
+                    "tags": ["systematic_review"],
+                },
+                {
+                    "primary_question_id": "Q2",
+                    "question_ids": ["Q1", "Q2"],
+                    "claim_text": "Movement effects were linear.",
+                    "claim_type": "result",
+                    "provenance_type": "note_span",
+                },
+            ],
+        }
+        json_file = _write_json_file(tmp_path, manifest, "evidence.json")
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"add-evidence failed: {result.stderr}"
+        data = json.loads(result.stdout)
+        assert data["results"]["count"] == 2
+        assert len(data["results"]["evidence_ids"]) == 2
+        assert data["results"]["evidence_ids"][0] == "ev-001"
+
+    def test_rejects_unknown_source(self, tmp_path):
+        """add-evidence returns error if source_id doesn't exist."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        manifest = {
+            "source_id": "src-999",
+            "units": [{"claim_text": "test", "claim_type": "result", "provenance_type": "note_span"}],
+        }
+        json_file = _write_json_file(tmp_path, manifest, "bad.json")
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        data = json.loads(result.stdout)
+        assert data["status"] == "error"
+
+    def test_empty_units_list(self, tmp_path):
+        """add-evidence with empty units returns empty list."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        manifest = {"source_id": "src-001", "units": []}
+        json_file = _write_json_file(tmp_path, manifest, "empty.json")
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert data["results"]["count"] == 0
+
+
+class TestAddEvidenceBatch:
+    def _setup_session_with_sources(self, tmp_path):
+        """Helper: init session + 2 sources, return session_dir."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        for i, doi in enumerate(["10.1234/batch-a", "10.1234/batch-b"]):
+            json_file = _write_json_file(tmp_path, {
+                "title": f"Batch Source {i+1}",
+                "doi": doi,
+                "provider": "test",
+            }, f"src{i}.json")
+            subprocess.run(
+                [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+                 "--from-json", json_file],
+                capture_output=True, text=True,
+            )
+        return session_dir
+
+    def test_batch_insert(self, tmp_path):
+        """add-evidence-batch inserts units from multiple manifests."""
+        session_dir = self._setup_session_with_sources(tmp_path)
+
+        manifests = [
+            {"source_id": "src-001", "units": [
+                {"claim_text": "Claim A", "claim_type": "result", "provenance_type": "content_span",
+                 "primary_question_id": "Q1"},
+            ]},
+            {"source_id": "src-002", "units": [
+                {"claim_text": "Claim B", "claim_type": "method", "provenance_type": "note_span",
+                 "primary_question_id": "Q2"},
+                {"claim_text": "Claim C", "claim_type": "limitation", "provenance_type": "abstract",
+                 "primary_question_id": "Q2"},
+            ]},
+        ]
+        json_file = _write_json_file(tmp_path, manifests, "batch.json")
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence-batch", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"batch failed: {result.stderr}"
+        data = json.loads(result.stdout)
+        assert data["results"]["count"] == 3
+
+
+class TestEvidenceQuery:
+    def _setup_with_evidence(self, tmp_path):
+        """Helper: session + source + 3 evidence units."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Query Test Paper", "doi": "10.1234/query-test", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Result claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1", "line_start": 10, "line_end": 20},
+            {"claim_text": "Method claim", "claim_type": "method", "provenance_type": "note_span",
+             "primary_question_id": "Q1"},
+            {"claim_text": "Limitation claim", "claim_type": "limitation", "provenance_type": "abstract",
+             "primary_question_id": "Q2"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+        return session_dir
+
+    def test_query_all(self, tmp_path):
+        """evidence with no filters returns all units."""
+        session_dir = self._setup_with_evidence(tmp_path)
+        result, data = _run_state("evidence", "--session-dir", session_dir)
+        assert result.returncode == 0
+        assert data["results"]["count"] == 3
+
+    def test_filter_by_source(self, tmp_path):
+        """evidence --source-id filters by source."""
+        session_dir = self._setup_with_evidence(tmp_path)
+        result, data = _run_state("evidence", "--session-dir", session_dir, "--source-id", "src-001")
+        assert result.returncode == 0
+        assert data["results"]["count"] == 3
+
+    def test_filter_by_question(self, tmp_path):
+        """evidence --question-id filters by question."""
+        session_dir = self._setup_with_evidence(tmp_path)
+        result, data = _run_state("evidence", "--session-dir", session_dir, "--question-id", "Q1")
+        assert result.returncode == 0
+        assert data["results"]["count"] == 2
+
+    def test_filter_by_claim_type(self, tmp_path):
+        """evidence --claim-type filters by type."""
+        session_dir = self._setup_with_evidence(tmp_path)
+        result, data = _run_state("evidence", "--session-dir", session_dir, "--claim-type", "method")
+        assert result.returncode == 0
+        assert data["results"]["count"] == 1
+        assert data["results"]["units"][0]["claim_text"] == "Method claim"
+
+
+class TestLinkFindingEvidence:
+    def test_link_and_query(self, tmp_path):
+        """link-finding-evidence creates links between findings and evidence."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        # Add source
+        json_file = _write_json_file(tmp_path, {
+            "title": "Link Test Paper", "doi": "10.1234/link-test", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        # Add evidence
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Linked claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+        # Add finding
+        subprocess.run(
+            [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
+             "--text", "Test finding", "--sources", "src-001", "--question-id", "Q1"],
+            capture_output=True, text=True,
+        )
+        # Link
+        result, data = _run_state(
+            "link-finding-evidence", "--session-dir", session_dir,
+            "--finding-id", "finding-1", "--evidence-ids", "ev-001",
+        )
+        assert result.returncode == 0
+        assert data["results"]["count"] == 1
+        assert "ev-001" in data["results"]["linked_evidence"]
+
+
+class TestEvidenceSummary:
+    def test_summary_aggregation(self, tmp_path):
+        """evidence-summary returns aggregate counts."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Summary Paper", "doi": "10.1234/ev-summary", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "R1", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1", "line_start": 1, "line_end": 5},
+            {"claim_text": "M1", "claim_type": "method", "provenance_type": "note_span",
+             "primary_question_id": "Q1"},
+            {"claim_text": "L1", "claim_type": "limitation", "provenance_type": "abstract",
+             "primary_question_id": "Q2"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        result, data = _run_state("evidence-summary", "--session-dir", session_dir)
+        assert result.returncode == 0
+        assert data["results"]["total"] == 3
+        assert data["results"]["by_claim_type"]["result"] == 1
+        assert data["results"]["by_claim_type"]["method"] == 1
+        assert data["results"]["by_question"]["Q1"] == 2
+        assert data["results"]["by_question"]["Q2"] == 1
+        assert data["results"]["with_provenance_spans"] == 1
+
+
+class TestEvidenceInSummary:
+    def test_summary_compact_includes_evidence(self, tmp_path):
+        """summary --compact includes evidence counts."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Summary Paper", "doi": "10.1234/sum-ev", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "C1", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "summary", "--compact", "--session-dir", session_dir],
+            capture_output=True, text=True,
+        )
+        data = json.loads(result.stdout)
+        assert data["results"]["evidence_units_count"] == 1
+        assert "Q1" in data["results"]["evidence_units_by_question"]
+
+    def test_write_handoff_includes_evidence(self, tmp_path):
+        """summary --write-handoff includes compact evidence array."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Handoff Paper", "doi": "10.1234/handoff-ev", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Handoff claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1", "relation": "supports", "evidence_strength": "strong"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "summary", "--write-handoff", "--session-dir", session_dir],
+            capture_output=True, text=True,
+        )
+        data = json.loads(result.stdout)
+        # Read the handoff file
+        handoff_path = os.path.join(session_dir, "synthesis-handoff.json")
+        with open(handoff_path) as f:
+            handoff = json.load(f)
+        assert "evidence_units" in handoff
+        assert len(handoff["evidence_units"]) == 1
+        assert handoff["evidence_units"][0]["claim_text"] == "Handoff claim"
+
+
+class TestEvidenceInAudit:
+    def test_audit_includes_evidence(self, tmp_path):
+        """audit includes evidence counts and warnings."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Audit Paper", "doi": "10.1234/audit-ev", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Audit claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q1"},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+        # Add a finding without linking it to evidence
+        subprocess.run(
+            [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
+             "--text", "Unlinked finding", "--sources", "src-001", "--question-id", "Q1"],
+            capture_output=True, text=True,
+        )
+
+        result = subprocess.run(
+            [sys.executable, STATE_PY, "audit", "--brief", "--session-dir", session_dir],
+            capture_output=True, text=True,
+        )
+        data = json.loads(result.stdout)
+        assert data["results"]["evidence_units_total"] == 1
+        assert "finding-1" in data["results"].get("findings_without_evidence", [])

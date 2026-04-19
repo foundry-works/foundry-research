@@ -113,6 +113,7 @@ Launch **`claim-extractor`** subagent (Sonnet, foreground) with:
 - Session directory path (absolute)
 - Path to `report.md` (relative from project root)
 - **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
+- **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence units for claim cross-referencing
 
 The extractor reads the report, identifies 5-10 load-bearing claims, classifies their source types, and returns a structured claims manifest.
 
@@ -133,8 +134,9 @@ Shard the extracted claims into 1 claim per shard. For example, 8 claims produce
 - **`claim-verifier`** subagent(s) (Sonnet, one per shard) with:
   - Session directory path (absolute)
   - Shard index (1, 2, 3, ...)
-  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
-  - Each verifier checks its claim against local reader notes only (no web search)
+  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
+  - **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence provenance for targeted verification
+  - Each verifier checks its claim against evidence units (preferred) or local reader notes (fallback), no web search
 
 **Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits during execution. The extractor reads the report once, and each verifier checks one claim against local reader notes — no report reading, no web searches, minimal context growth. One claim per verifier minimizes blast radius: a single failure only loses one verification.
 

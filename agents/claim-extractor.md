@@ -1,7 +1,7 @@
 ---
 name: claim-extractor
 description: Identify load-bearing claims in a draft report for verification against primary sources.
-tools: Read, Glob, Write
+tools: Read, Glob, Bash, Write
 model: sonnet
 ---
 
@@ -38,7 +38,19 @@ For each claim, check the cited source(s) via `notes/` and `sources/metadata/`:
 
 A quick metadata check is sufficient — you do not need to read full source documents. The goal is to flag which claims rely on secondary sources, since those are higher verification priority.
 
-### Step 3: Write claims manifest
+### Step 3: Cross-reference evidence units
+
+For each extracted claim, check whether structured evidence exists that matches:
+
+```bash
+{state_cli_path} evidence --source-id src-NNN
+```
+
+Query evidence units for each cited source. When a claim's content matches an evidence unit's `claim_text`, add `matched_evidence_ids` to the claim object. Include the evidence unit's `id`, `evidence_strength`, and `claim_type` for downstream verifier use.
+
+Claims with matching evidence units are easier for the verifier to check (provenance spans point to exact source passages). Claims without matches need broader note-reading by the verifier — flag these as higher verification priority.
+
+### Step 4: Write claims manifest
 
 Write the claims manifest to `revision/claims-manifest.json` in the session directory using a relative path. Then return the same JSON inline.
 
@@ -55,7 +67,9 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
       "cited_source_id": "[4]",
       "source_type": "secondary",
       "claim_category": "quantitative",
-      "verification_priority": "High — specific OR value from secondary source, load-bearing for observational convergence"
+      "verification_priority": "High — specific OR value from secondary source, load-bearing for observational convergence",
+      "matched_evidence_ids": ["ev-003", "ev-007"],
+      "evidence_strength": "strong"
     }
   ]
 }
@@ -69,6 +83,8 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
 - `source_type`: `primary`, `secondary`, or `none`
 - `claim_category`: `quantitative` (specific numbers), `conclusion` (study finding characterization), or `absence_of_evidence` (no study has shown...)
 - `verification_priority`: one-sentence justification for why this claim matters
+- `matched_evidence_ids`: array of evidence unit IDs that match this claim (empty array if none found)
+- `evidence_strength`: strongest evidence unit's strength (`strong`, `moderate`, `weak`) or `null` if no match
 
 **Order claims by verification priority** — the most consequential claims first. This lets the supervisor prioritize if sharding produces uneven groups.
 

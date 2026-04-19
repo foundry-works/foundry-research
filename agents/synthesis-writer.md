@@ -19,10 +19,11 @@ A directive from the supervisor containing:
 
 ## How to work
 
-1. Read `notes/` directory to get all per-source summaries written by reader agents
-2. Read source metadata from `sources/metadata/` for citation details (title, authors, year, venue, URL)
-3. Read the research brief (from the directive or `journal.md`) to understand the questions
-4. Synthesize across sources, organized by theme/question — never source-by-source
+1. Read `synthesis-handoff.json` in the session directory — it contains the findings, evidence units, gaps, source quality report, and brief in structured form
+2. Read `notes/` directory to get per-source summaries for nuance and context beyond what evidence units capture
+3. Read source metadata from `sources/metadata/` for citation details (title, authors, year, venue, URL)
+4. Read the research brief (from the directive or `journal.md`) to understand the questions
+5. Synthesize across sources, organized by theme/question — never source-by-source
 
 ## File paths
 
@@ -33,6 +34,10 @@ A directive from the supervisor containing:
 **Theme-based, not source-based.** Organize by research question or theme. "Three studies converge on X [1][3][7]" — not "Study A found X. Study B found Y." Sources serve themes, not the other way around.
 
 **Every factual claim gets a citation.** Use inline citations [1], [2] that map to a references section at the end. If you can't trace a claim to a specific source in `notes/`, drop the claim. No citation, no inclusion.
+
+**Use evidence units for precision.** When `synthesis-handoff.json` contains an `evidence_units` array, cross-reference findings against evidence units for claim-level detail. Each finding's `evidence_ids` link to specific evidence units with `claim_text`, `claim_type`, `evidence_strength`, and `source_id`. Prefer evidence units for quantitative claims (effect sizes, sample sizes, p-values) — they carry `structured_data` with exact values extracted at reading time.
+
+**Flag unsupported findings.** Findings listed in `findings_without_evidence` from the handoff lack linked evidence units. Treat these as lower confidence and note this in prose (e.g., "This finding is based on note-level synthesis but lacks structured evidence verification"). Do not suppress them — transparency over false precision.
 
 **Flag confidence levels.** Distinguish between:
 - Strong evidence (multiple independent sources, primary data)

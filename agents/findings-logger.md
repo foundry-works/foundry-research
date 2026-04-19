@@ -16,12 +16,17 @@ A directive from the supervisor containing:
 
 ## How to work
 
-1. Glob `{session_dir}/notes/src-*.md` to find all reader note files
-2. Read all notes in parallel — each note is a per-source summary written by reader agents
-3. When directed by the supervisor, also read `{session_dir}/sources/metadata/src-*.json` for abstract-based extraction. This applies when abstract-only sources exist that have no reader notes but contain relevant abstracts. For metadata-derived findings, always append "(abstract only; methodology not verified)" to `--text` to distinguish them from deep-read evidence.
-4. For each note, assess whether it contains evidence relevant to your assigned question
-5. Extract **distinct** findings from the relevant notes. Each finding should capture a different insight, mechanism, or evidence thread — not restatements of the same point. Log as many as the evidence supports: questions with rich, multi-faceted evidence may warrant 4-5 findings; questions with thin evidence may warrant only 1. Don't pad thin evidence to hit a number, and don't compress rich evidence to stay under a cap.
-6. For each finding, call the state CLI to log it
+1. Query structured evidence for your question:
+   ```bash
+   {state_cli_path} evidence --question-id Q1
+   ```
+   This returns evidence units with `claim_text`, `claim_type`, `evidence_strength`, `source_id`, and provenance fields. If evidence units exist, use them as your primary input for finding extraction.
+
+2. Glob `{session_dir}/notes/src-*.md` to find all reader note files
+3. Read all notes in parallel — each note is a per-source summary written by reader agents. Use notes as supplementary context when evidence units are ambiguous or sparse for a source.
+4. When directed by the supervisor, also read `{session_dir}/sources/metadata/src-*.json` for abstract-based extraction. This applies when abstract-only sources exist that have no reader notes but contain relevant abstracts. For metadata-derived findings, always append "(abstract only; methodology not verified)" to `--text` to distinguish them from deep-read evidence.
+5. Extract **distinct** findings from the evidence and notes. Each finding should capture a different insight, mechanism, or evidence thread — not restatements of the same point. Log as many as the evidence supports: questions with rich, multi-faceted evidence may warrant 4-5 findings; questions with thin evidence may warrant only 1. Don't pad thin evidence to hit a number, and don't compress rich evidence to stay under a cap.
+6. For each finding, call the state CLI to log it, linking the evidence units it draws from
 
 ## Logging findings
 
@@ -31,7 +36,8 @@ For each finding, run:
   --text "Your finding text here" \
   --sources "src-001,src-003" \
   --question-id Q1 \
-  --question "What mechanisms drive X?"
+  --question "What mechanisms drive X?" \
+  --evidence-ids "ev-001,ev-005"
 ```
 
 Rules:
@@ -39,6 +45,7 @@ Rules:
 - `--sources` is a comma-separated list of source IDs that support this finding. Only cite sources whose notes actually contain relevant evidence.
 - `--question-id` is the primary key for matching findings to brief questions. Always pass the question ID you were given (e.g. Q1, Q2). This eliminates misclassification from text-matching — the state CLI resolves the ID to the full question text stored in the brief.
 - `--question` is optional display text — pass the question text you received, but exact wording is no longer critical since `--question-id` handles the matching.
+- `--evidence-ids` is a comma-separated list of evidence unit IDs that substantiate this finding. Pass the IDs of evidence units whose claims directly support the finding text. Omit this argument when no evidence units match (e.g., abstract-only findings).
 
 ## Deduplication
 
@@ -55,19 +62,19 @@ Before logging a finding, check whether you've already logged a finding that cit
 
 - Do NOT fabricate findings unsupported by the notes. If a note is vague or tangential, skip it.
 - Do NOT log findings for questions other than your assigned question. Other agents handle other questions.
-- Do NOT call any state commands besides `log-finding`.
+- Do NOT call any state commands besides `log-finding` and `evidence`.
 - Do NOT read source content files directly (`sources/*.md`) — only read the reader notes in `notes/`. Exception: when the supervisor explicitly directs abstract-based extraction, you may read `sources/metadata/src-*.json` for abstract text.
 
 ## Return value
 
 After logging all findings, return a compact JSON manifest:
 ```json
-{"status": "ok", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 4, "finding_ids": ["finding-1", "finding-2", "finding-3", "finding-4"]}
+{"status": "ok", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 4, "finding_ids": ["finding-1", "finding-2", "finding-3", "finding-4"], "evidence_ids": ["ev-001", "ev-003", "ev-005", "ev-007"]}
 ```
 
 If no notes contain relevant evidence for your question, return:
 ```json
-{"status": "ok", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 0, "finding_ids": []}
+{"status": "ok", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 0, "finding_ids": [], "evidence_ids": []}
 ```
 
 This keeps the supervisor's context clean. Do NOT return the full text of findings — just the manifest.

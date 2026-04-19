@@ -118,6 +118,41 @@ CREATE TABLE IF NOT EXISTS metrics (
     FOREIGN KEY (session_id) REFERENCES sessions(id),
     UNIQUE(session_id, ticker, metric, period, source)
 );
+
+CREATE TABLE IF NOT EXISTS evidence_units (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    primary_question_id TEXT,
+    question_ids TEXT NOT NULL DEFAULT '[]',
+    claim_text TEXT NOT NULL,
+    claim_type TEXT NOT NULL,
+    relation TEXT NOT NULL DEFAULT 'supports',
+    evidence_strength TEXT,
+    provenance_type TEXT NOT NULL,
+    provenance_path TEXT,
+    line_start INTEGER,
+    line_end INTEGER,
+    quote TEXT,
+    structured_data TEXT NOT NULL DEFAULT '{}',
+    tags TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (source_id) REFERENCES sources(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_source ON evidence_units(session_id, source_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_question ON evidence_units(session_id, primary_question_id);
+
+CREATE TABLE IF NOT EXISTS finding_evidence (
+    session_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'primary',
+    PRIMARY KEY (finding_id, evidence_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
 """
 
 
@@ -315,7 +350,7 @@ def _extract_question_terms(questions: list) -> list[str]:
 def cmd_init(args):
     session_dir = args.session_dir
     os.makedirs(session_dir, exist_ok=True)
-    for subdir in ("sources", "sources/metadata", "notes"):
+    for subdir in ("sources", "sources/metadata", "notes", "evidence"):
         os.makedirs(os.path.join(session_dir, subdir), exist_ok=True)
 
     journal_path = os.path.join(session_dir, "journal.md")
@@ -370,6 +405,16 @@ def _regenerate_snapshot(session_dir: str, conn: sqlite3.Connection, sid: str) -
     metrics_rows = conn.execute("SELECT * FROM metrics WHERE session_id = ? ORDER BY ticker, metric", (sid,)).fetchall()
     metrics_list = [dict(r) for r in metrics_rows]
 
+    # Evidence unit counts
+    evidence_count = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchone()["c"]
+    evidence_by_question: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
+    ).fetchall():
+        evidence_by_question[r["primary_question_id"]] = r["c"]
+
     sources_by_type: dict[str, int] = {}
     sources_by_provider: dict[str, int] = {}
     for s in sources:
@@ -393,6 +438,8 @@ def _regenerate_snapshot(session_dir: str, conn: sqlite3.Connection, sid: str) -
             "total_sources": len(sources),
             "sources_by_type": sources_by_type,
             "sources_by_provider": sources_by_provider,
+            "evidence_units_count": evidence_count,
+            "evidence_units_by_question": evidence_by_question,
         },
     }
 
@@ -737,10 +784,33 @@ def cmd_log_finding(args):
         "INSERT INTO findings (id, session_id, text, sources, question, question_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (finding_id, sid, args.text, json.dumps(source_ids), question, question_id, _now())
     )
+
+    # Link evidence units if provided
+    evidence_ids = getattr(args, "evidence_ids", None)
+    linked_evidence = []
+    if evidence_ids:
+        for ev_id in [e.strip() for e in evidence_ids.split(",") if e.strip()]:
+            row = conn.execute(
+                "SELECT id FROM evidence_units WHERE id = ? AND session_id = ?",
+                (ev_id, sid)
+            ).fetchone()
+            if row:
+                try:
+                    conn.execute(
+                        "INSERT INTO finding_evidence (session_id, finding_id, evidence_id, role) VALUES (?, ?, ?, 'primary')",
+                        (sid, finding_id, ev_id)
+                    )
+                    linked_evidence.append(ev_id)
+                except sqlite3.IntegrityError:
+                    pass
+
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": finding_id, "text": args.text})
+    result = {"id": finding_id, "text": args.text}
+    if linked_evidence:
+        result["evidence_ids"] = linked_evidence
+    success_response(result)
 
 
 def _token_overlap(a: str, b: str) -> float:
@@ -778,6 +848,7 @@ def cmd_deduplicate_findings(args):
     # Build candidate pairs: findings that share at least one source citation
     merged_ids: set[str] = set()  # IDs absorbed into another finding
     merge_map: dict[str, list[str]] = {}  # kept_id -> list of also_relevant_to questions
+    keeper_for: dict[str, str] = {}  # absorbed_id -> keeper_id
 
     for i in range(len(findings)):
         if findings[i]["id"] in merged_ids:
@@ -799,12 +870,32 @@ def cmd_deduplicate_findings(args):
             else:
                 keeper, absorbed = fi, fj
             merged_ids.add(absorbed["id"])
+            keeper_for[absorbed["id"]] = keeper["id"]
             # Track cross-question relevance
             if absorbed["question"] and absorbed["question"] != keeper["question"]:
                 merge_map.setdefault(keeper["id"], []).append(absorbed["question"])
 
     # Delete merged findings and update keeper texts with also_relevant_to
     if merged_ids:
+        # Propagate evidence links from absorbed findings to their keepers
+        for absorbed_id, keeper_id in keeper_for.items():
+            rows = conn.execute(
+                "SELECT evidence_id FROM finding_evidence WHERE finding_id = ? AND session_id = ?",
+                (absorbed_id, sid)
+            ).fetchall()
+            for row in rows:
+                try:
+                    conn.execute(
+                        "INSERT INTO finding_evidence (session_id, finding_id, evidence_id, role) VALUES (?, ?, ?, 'primary')",
+                        (sid, keeper_id, row["evidence_id"])
+                    )
+                except sqlite3.IntegrityError:
+                    pass  # already linked to keeper
+            conn.execute(
+                "DELETE FROM finding_evidence WHERE finding_id = ? AND session_id = ?",
+                (absorbed_id, sid)
+            )
+
         placeholders = ",".join("?" for _ in merged_ids)
         conn.execute(
             f"DELETE FROM findings WHERE id IN ({placeholders}) AND session_id = ?",
@@ -1147,6 +1238,13 @@ def cmd_summary(args):
                 f_entry["question_id"] = qid
         except (IndexError, KeyError):
             pass
+        # Attach linked evidence IDs
+        ev_rows = conn.execute(
+            "SELECT evidence_id FROM finding_evidence WHERE finding_id = ? AND session_id = ?",
+            (r["id"], sid)
+        ).fetchall()
+        if ev_rows:
+            f_entry["evidence_ids"] = [er["evidence_id"] for er in ev_rows]
         findings_list.append(f_entry)
 
     # Gaps
@@ -1160,6 +1258,43 @@ def cmd_summary(args):
         "SELECT ticker, metric, value, period, source FROM metrics WHERE session_id = ? ORDER BY ticker, metric", (sid,)
     ).fetchall()
     metrics_list = [dict(r) for r in metric_rows]
+
+    # Evidence units
+    evidence_count = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchone()["c"]
+    evidence_by_type: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT claim_type, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' GROUP BY claim_type", (sid,)
+    ).fetchall():
+        evidence_by_type[r["claim_type"]] = r["c"]
+    evidence_by_question: dict[str, int] = {}
+    for r in conn.execute(
+        "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
+    ).fetchall():
+        evidence_by_question[r["primary_question_id"]] = r["c"]
+    # Findings without linked evidence
+    findings_without_evidence = []
+    if evidence_count > 0:
+        for f in findings_list:
+            fid = f["id"]
+            link = conn.execute(
+                "SELECT 1 FROM finding_evidence WHERE finding_id = ? AND session_id = ? LIMIT 1",
+                (fid, sid)
+            ).fetchone()
+            if not link:
+                findings_without_evidence.append(fid)
+
+    # Fetch compact evidence rows for handoff (while conn is still open)
+    evidence_rows_compact = []
+    if evidence_count > 0:
+        for r in conn.execute(
+            """SELECT id, source_id, claim_text, claim_type, relation,
+                      evidence_strength, primary_question_id
+               FROM evidence_units
+               WHERE session_id = ? AND status = 'active' ORDER BY id""", (sid,)
+        ).fetchall():
+            evidence_rows_compact.append(dict(r))
 
     conn.close()
 
@@ -1176,6 +1311,10 @@ def cmd_summary(args):
         "findings": findings_list,
         "gaps": gaps_list,
         "metrics": metrics_list,
+        "evidence_units_count": evidence_count,
+        "evidence_units_by_type": evidence_by_type,
+        "evidence_units_by_question": evidence_by_question,
+        "findings_without_evidence": findings_without_evidence,
     }
 
     # --write-handoff: write full summary to file, return only path + counts
@@ -1223,6 +1362,10 @@ def cmd_summary(args):
 
         full_result["source_quality_report"] = quality_counts
 
+        # 4. Include compact evidence units when available
+        if evidence_rows_compact:
+            full_result["evidence_units"] = evidence_rows_compact
+
         handoff_path = os.path.join(args.session_dir, "synthesis-handoff.json")
         with open(handoff_path, "w") as f:
             json.dump(full_result, f, indent=2)
@@ -1254,10 +1397,238 @@ def cmd_summary(args):
             "findings_count": len(findings_list),
             "findings_by_question": findings_by_question,
             "gaps": gaps_list,
+            "evidence_units_count": evidence_count,
+            "evidence_units_by_type": evidence_by_type,
+            "evidence_units_by_question": evidence_by_question,
         })
         return
 
     success_response(full_result)
+
+
+# ---------------------------------------------------------------------------
+# Evidence commands
+# ---------------------------------------------------------------------------
+
+def _ingest_evidence_manifest(conn: sqlite3.Connection, sid: str, manifest: dict) -> list[str]:
+    """Insert evidence units from a single source manifest. Returns list of IDs."""
+    source_id = manifest.get("source_id", "")
+    if not source_id:
+        error_response(["Manifest missing source_id"])
+
+    # Validate source exists
+    row = conn.execute(
+        "SELECT id FROM sources WHERE id = ? AND session_id = ?",
+        (source_id, sid)
+    ).fetchone()
+    if not row:
+        error_response([f"Source {source_id} not found in session"])
+
+    units = manifest.get("units", [])
+    if not units:
+        return []
+
+    # Get current evidence count for ID generation
+    count = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+
+    ids = []
+    now = _now()
+    for i, unit in enumerate(units):
+        ev_id = f"ev-{count + i + 1:03d}"
+        conn.execute(
+            """INSERT INTO evidence_units
+               (id, session_id, source_id, primary_question_id, question_ids,
+                claim_text, claim_type, relation, evidence_strength,
+                provenance_type, provenance_path, line_start, line_end, quote,
+                structured_data, tags, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ev_id, sid, source_id,
+             unit.get("primary_question_id"),
+             json.dumps(unit.get("question_ids", [])),
+             unit["claim_text"],
+             unit["claim_type"],
+             unit.get("relation", "supports"),
+             unit.get("evidence_strength"),
+             unit["provenance_type"],
+             unit.get("provenance_path"),
+             unit.get("line_start"),
+             unit.get("line_end"),
+             unit.get("quote"),
+             json.dumps(unit.get("structured_data", {})),
+             json.dumps(unit.get("tags", [])),
+             "active", now)
+        )
+        ids.append(ev_id)
+    return ids
+
+
+def cmd_add_evidence(args):
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_dict(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
+
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    ids = _ingest_evidence_manifest(conn, sid, data)
+    conn.commit()
+    _regenerate_snapshot(args.session_dir, conn, sid)
+    conn.close()
+    success_response({"evidence_ids": ids, "count": len(ids)})
+
+
+def cmd_add_evidence_batch(args):
+    json_path, is_temp = _resolve_json_input(args)
+    try:
+        data = _load_json_list(json_path)
+    finally:
+        _cleanup_json_input(json_path, is_temp)
+
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+
+    all_ids = []
+    for manifest in data:
+        ids = _ingest_evidence_manifest(conn, sid, manifest)
+        all_ids.extend(ids)
+    conn.commit()
+    _regenerate_snapshot(args.session_dir, conn, sid)
+    conn.close()
+    success_response({"evidence_ids": all_ids, "count": len(all_ids)})
+
+
+def cmd_evidence(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    query = "SELECT * FROM evidence_units WHERE session_id = ?"
+    params: list = [sid]
+
+    if getattr(args, "source_id", None):
+        query += " AND source_id = ?"
+        params.append(args.source_id)
+    if getattr(args, "question_id", None):
+        query += " AND primary_question_id = ?"
+        params.append(args.question_id)
+    if getattr(args, "claim_type", None):
+        query += " AND claim_type = ?"
+        params.append(args.claim_type)
+    status = getattr(args, "status", "active")
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+
+    query += " ORDER BY id"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    units = []
+    for r in rows:
+        units.append({
+            "id": r["id"],
+            "source_id": r["source_id"],
+            "primary_question_id": r["primary_question_id"],
+            "question_ids": json.loads(r["question_ids"]),
+            "claim_text": r["claim_text"],
+            "claim_type": r["claim_type"],
+            "relation": r["relation"],
+            "evidence_strength": r["evidence_strength"],
+            "provenance_type": r["provenance_type"],
+            "provenance_path": r["provenance_path"],
+            "line_start": r["line_start"],
+            "line_end": r["line_end"],
+            "quote": r["quote"],
+            "structured_data": json.loads(r["structured_data"]),
+            "tags": json.loads(r["tags"]),
+            "status": r["status"],
+            "created_at": r["created_at"],
+        })
+    success_response({"units": units, "count": len(units)})
+
+
+def cmd_evidence_summary(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    total = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchone()["c"]
+
+    by_type = {}
+    for r in conn.execute(
+        "SELECT claim_type, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' GROUP BY claim_type", (sid,)
+    ).fetchall():
+        by_type[r["claim_type"]] = r["c"]
+
+    by_question = {}
+    for r in conn.execute(
+        "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
+    ).fetchall():
+        by_question[r["primary_question_id"]] = r["c"]
+
+    with_spans = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND line_start IS NOT NULL AND line_end IS NOT NULL", (sid,)
+    ).fetchone()["c"]
+
+    by_source = {}
+    for r in conn.execute(
+        "SELECT source_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' GROUP BY source_id", (sid,)
+    ).fetchall():
+        by_source[r["source_id"]] = r["c"]
+
+    conn.close()
+    success_response({
+        "total": total,
+        "by_claim_type": by_type,
+        "by_question": by_question,
+        "with_provenance_spans": with_spans,
+        "by_source": by_source,
+    })
+
+
+def cmd_link_finding_evidence(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+
+    finding_id = args.finding_id
+    evidence_ids = [e.strip() for e in args.evidence_ids.split(",")]
+    role = getattr(args, "role", "primary")
+
+    # Validate finding exists
+    row = conn.execute(
+        "SELECT id FROM findings WHERE id = ? AND session_id = ?",
+        (finding_id, sid)
+    ).fetchone()
+    if not row:
+        conn.close()
+        error_response([f"Finding {finding_id} not found"])
+
+    # Validate evidence units exist and insert links
+    linked = []
+    for ev_id in evidence_ids:
+        row = conn.execute(
+            "SELECT id FROM evidence_units WHERE id = ? AND session_id = ?",
+            (ev_id, sid)
+        ).fetchone()
+        if not row:
+            conn.close()
+            error_response([f"Evidence unit {ev_id} not found"])
+        try:
+            conn.execute(
+                "INSERT INTO finding_evidence (session_id, finding_id, evidence_id, role) VALUES (?, ?, ?, ?)",
+                (sid, finding_id, ev_id, role)
+            )
+            linked.append(ev_id)
+        except sqlite3.IntegrityError:
+            pass  # already linked
+
+    conn.commit()
+    _regenerate_snapshot(args.session_dir, conn, sid)
+    conn.close()
+    success_response({"finding_id": finding_id, "linked_evidence": linked, "count": len(linked)})
 
 
 # ---------------------------------------------------------------------------
@@ -1831,6 +2202,32 @@ def cmd_audit(args):
         "SELECT * FROM gaps WHERE session_id = ? AND status = 'open' ORDER BY id", (sid,)
     ).fetchall()]
 
+    # Evidence layer queries (while conn is open)
+    audit_evidence_total = 0
+    audit_evidence_warnings: list[str] = []
+    audit_findings_without_evidence: list[str] = []
+    audit_evidence_by_question: dict[str, int] = {}
+    try:
+        audit_evidence_total = conn.execute(
+            "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+        ).fetchone()["c"]
+        if audit_evidence_total > 0:
+            for f in findings:
+                link = conn.execute(
+                    "SELECT 1 FROM finding_evidence WHERE finding_id = ? AND session_id = ? LIMIT 1",
+                    (f["id"], sid)
+                ).fetchone()
+                if not link:
+                    audit_findings_without_evidence.append(f["id"])
+            if audit_findings_without_evidence:
+                audit_evidence_warnings.append(f"{len(audit_findings_without_evidence)} finding(s) have no linked evidence units")
+            for r in conn.execute(
+                "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
+            ).fetchall():
+                audit_evidence_by_question[r["primary_question_id"]] = r["c"]
+    except Exception:
+        pass  # table may not exist in old sessions
+
     conn.close()
 
     # Check on-disk files
@@ -2071,6 +2468,21 @@ def cmd_audit(args):
         },
         "warnings": warnings,
     }
+
+    # Evidence layer (data pre-computed while conn was open)
+    if audit_evidence_total > 0:
+        audit_result["evidence_units_total"] = audit_evidence_total
+        if audit_findings_without_evidence:
+            audit_result["findings_without_evidence"] = audit_findings_without_evidence
+            warnings.extend(audit_evidence_warnings)
+        # Questions with findings but no evidence
+        questions_no_evidence = []
+        for q_key in findings_by_question:
+            qid = q_key.split(":")[0].strip() if ":" in q_key else None
+            if qid and audit_evidence_by_question.get(qid, 0) == 0:
+                questions_no_evidence.append(q_key)
+        if questions_no_evidence:
+            audit_result["questions_with_findings_but_no_evidence"] = questions_no_evidence
 
     # --brief: omit large ID arrays, use counts only
     # (degraded_unread, reader_validated, and mismatched_content stay as arrays — orchestrator needs specific IDs)
@@ -3887,6 +4299,7 @@ def main():
     p.add_argument("--sources", default=None)
     p.add_argument("--question", default=None)
     p.add_argument("--question-id", default=None, help="Question ID (e.g. Q1) — preferred over --question for matching")
+    p.add_argument("--evidence-ids", default=None, help="Comma-separated evidence unit IDs to link to this finding")
     p.add_argument("--session-dir", **_sd)
 
     # log-gap
@@ -3904,6 +4317,39 @@ def main():
     # deduplicate-findings
     p = sub.add_parser("deduplicate-findings")
     p.add_argument("--threshold", type=float, default=0.7, help="Token overlap threshold for merging (default 0.7)")
+    p.add_argument("--session-dir", **_sd)
+
+    # add-evidence
+    p = sub.add_parser("add-evidence")
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path (source manifest with units array)")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
+    p.add_argument("--session-dir", **_sd)
+
+    # add-evidence-batch
+    p = sub.add_parser("add-evidence-batch")
+    _json_input = p.add_mutually_exclusive_group(required=True)
+    _json_input.add_argument("--from-json", help="JSON file path (array of source manifests)")
+    _json_input.add_argument("--from-stdin", action="store_true", help="Read JSON from stdin")
+    p.add_argument("--session-dir", **_sd)
+
+    # evidence
+    p = sub.add_parser("evidence")
+    p.add_argument("--source-id", default=None, help="Filter by source ID")
+    p.add_argument("--question-id", default=None, help="Filter by primary question ID")
+    p.add_argument("--claim-type", default=None, choices=["result", "method", "limitation", "contradiction", "background"])
+    p.add_argument("--status", default="active", help="Filter by status (default: active)")
+    p.add_argument("--session-dir", **_sd)
+
+    # evidence-summary
+    p = sub.add_parser("evidence-summary")
+    p.add_argument("--session-dir", **_sd)
+
+    # link-finding-evidence
+    p = sub.add_parser("link-finding-evidence")
+    p.add_argument("--finding-id", required=True)
+    p.add_argument("--evidence-ids", required=True, help="Comma-separated evidence unit IDs")
+    p.add_argument("--role", default="primary", help="Link role (default: primary)")
     p.add_argument("--session-dir", **_sd)
 
     # gap-search-plan
@@ -4116,6 +4562,11 @@ def main():
         "log-gap": cmd_log_gap,
         "resolve-gap": cmd_resolve_gap,
         "deduplicate-findings": cmd_deduplicate_findings,
+        "add-evidence": cmd_add_evidence,
+        "add-evidence-batch": cmd_add_evidence_batch,
+        "evidence": cmd_evidence,
+        "evidence-summary": cmd_evidence_summary,
+        "link-finding-evidence": cmd_link_finding_evidence,
         "gap-search-plan": cmd_gap_search_plan,
         "searches": cmd_searches,
         "sources": cmd_sources,
