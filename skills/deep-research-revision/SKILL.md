@@ -116,8 +116,8 @@ cp <session-dir>/report.md <session-dir>/report_draft.md
 - **`research-verifier`** subagent (Opus) with:
   - Session directory path (absolute)
   - Path to `report.md` (relative from project root)
-  - Research brief
-  - The verifier identifies 8-15 load-bearing claims and checks them against primary sources
+  - **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
+  - The verifier identifies 5-10 load-bearing claims and checks them against primary sources
 
 **Why parallel launch with post-hoc gating:** The synthesis-reviewer takes ~2 min, the verifier ~5 min. Making them sequential (reviewer first, then conditionally launching the verifier) would always add ~2 min of reviewer latency before the verifier could start. Since the most common use case — first revision of a new report — always needs full verification, parallel launch saves wall-clock time in the majority of runs. The tradeoff: in skip/targeted cases, the verifier runs unnecessarily. But verifier tokens are a fixed cost regardless of launch order, and the downstream savings (fewer issues reaching the reviser) are where gating actually saves tokens.
 

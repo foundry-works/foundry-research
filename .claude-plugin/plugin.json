@@ -1,6 +1,6 @@
 {
   "name": "foundry-research",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Deep research agent with academic database search, structured source management, and multi-agent synthesis. Produces evidence-backed research reports.",
   "author": {
     "name": "Tyler Burleigh"

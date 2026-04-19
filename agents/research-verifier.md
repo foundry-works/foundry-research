@@ -22,7 +22,7 @@ A directive from the supervisor containing:
 
 ### Step 1: Identify load-bearing claims
 
-Read the report and identify the **8-15 most important claims** — the ones the report's conclusions and recommendations depend on. A claim is "load-bearing" if, were it false, the report's advice would change.
+Read the report and identify the **5-10 most important claims** — the ones the report's conclusions and recommendations depend on. A claim is "load-bearing" if, were it false, the report's advice would change.
 
 **Prioritize in this order:**
 1. **Specific numbers** (sample sizes, effect sizes, percentages, p-values) — most verifiable, most damaging if wrong
@@ -31,7 +31,7 @@ Read the report and identify the **8-15 most important claims** — the ones the
 
 **De-prioritize:** Definitional statements ("the uncanny valley was proposed by Mori in 1970"), transitional logic, hedged claims, and claims with strong primary source backing already visible in the notes. Spend verification effort where errors are consequential and non-obvious, not on trivially confirmable facts.
 
-**Why 8-15, not 5-10:** At 5-10 claims, the verifier tends to pick a mix of easy and hard claims. The partially-supported findings consistently come from the harder end of the list — suggesting more checking would find more problems. A 4000-word report with 15+ references typically has 15-20 load-bearing claims; checking half of them is a reasonable floor.
+**Why 5-10, not more:** Each claim may require a note read, a full-source read, or a web search — all of which consume context budget. A 4000-word report with 15+ references has 15-20 load-bearing claims; verifying the 5-10 highest-stakes ones catches the most damaging errors while staying within context limits. Subsequent revision passes can verify additional claims if needed.
 
 ### Step 2: Classify current source type
 
@@ -42,14 +42,17 @@ For each claim, check the cited source(s) via `notes/` and `sources/metadata/`:
 
 ### Step 3: Verify against primary sources
 
-For each claim, try **local sources first, then the web**. The session already has downloaded full-text files and reader notes — these are faster and more reliable than web search for verifying claims against academic papers.
+**Context budget:** Full source documents (`sources/src-NNN.md`) can be tens of thousands of lines. Reading them all exhausts the context window. Use **notes-first verification** to stay within bounds.
 
-1. **Check local sources.** If the claim cites a specific source (e.g., src-042), read `sources/src-042.md` (or use the `.toc` file + offset/limit for long papers) and `notes/src-042.md` to verify the claim against the actual text. This catches misquotations, exaggerated findings, and context-stripping that web search can't detect — you're comparing the report's claim against the same document the writer used.
-2. **Search the web** when: the cited source has no local file (paywalled/degraded), the claim needs corroboration beyond its cited source, or the claim has no citation at all. Use WebSearch + WebFetch to find primary/authoritative sources.
-3. **Compare** what the source (local or web) actually says against what the report claims.
-4. If the primary source confirms, note the confirmation and the source (local path or URL).
-5. If the primary source contradicts, note the contradiction with specifics.
-6. If no primary source can be found locally or via web, note it as unverifiable.
+For each claim:
+
+1. **Check notes first.** Read `notes/src-NNN.md` for the cited source. Reader notes contain structured summaries of each source's key findings, methods, and claims. For most verifications, the note is sufficient to confirm or contradict the report's claim without reading the full paper.
+2. **Read full source only when needed.** If the note is ambiguous, incomplete, or the claim hinges on a specific number or passage the note doesn't cover, read the full source using `.toc` + offset/limit to target the relevant section — do not read the entire document. Limit full-source reads to **at most 3-4 claims** per session.
+3. **Search the web** when: the cited source has no local file or note, the note is insufficient and the full source is unavailable, or the claim has no citation at all. Use WebSearch + WebFetch to find primary/authoritative sources.
+4. **Compare** what the source (note, full text, or web) actually says against what the report claims.
+5. If the primary source confirms, note the confirmation and the source (local path or URL).
+6. If the primary source contradicts, note the contradiction with specifics.
+7. If no primary source can be found via notes, full source, or web, note it as unverifiable.
 
 Focus your search effort proportionally: high-stakes claims (recommendations, quantitative assertions, "best" claims) deserve more verification effort than supporting details.
 
