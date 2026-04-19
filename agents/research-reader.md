@@ -43,8 +43,10 @@ Construct output paths by joining the session directory from your directive with
 
 Manifest format:
 ```json
-{"source_id": "src-003", "status": "ok", "path": "notes/src-003.md", "coverage_signal": {"questions": ["Q1: What mechanisms drive X?", "Q3: What are the tradeoffs?"], "evidence_strength": "strong"}}
+{"source_id": "src-003", "status": "ok", "path": "notes/src-003.md", "evidence_count": 5, "coverage_signal": {"questions": ["Q1: What mechanisms drive X?", "Q3: What are the tradeoffs?"], "evidence_strength": "strong"}}
 ```
+
+`evidence_count` is the number of evidence units written to `evidence/src-003.json`. Omit or set to 0 when status is not `"ok"`.
 
 The `coverage_signal` field tells the supervisor which research questions this source is relevant to and how strong the evidence is:
 - **`questions`**: List the research questions (from the directive) that this source provides evidence for. Use the full question text. Omit questions the source doesn't address.
@@ -63,6 +65,83 @@ For key quantitative claims — sample sizes, effect sizes, p-values, percentage
 If you find numbers that seem inflated, inconsistent between sections, or that you cannot verify from the Methods section, add a `## Claims to Verify` section at the end of your note listing each uncertain claim with the specific text and your concern. This lets downstream agents prioritize fact-checking on the most fragile numbers rather than discovering errors late in the pipeline.
 
 **Why this matters:** A 5x inflation in participant count that propagates through findings, the draft report, and into the final output is only caught by the verifier — the last line of defense. Catching it at the reader stage is cheaper and more reliable.
+
+## Evidence extraction
+
+Alongside the markdown note, extract structured evidence units for load-bearing claims. Write them to `evidence/{source_id}.json` using the Write tool.
+
+**Why:** Downstream agents (findings-loggers, claim-verifier) need structured claim records with provenance, not just prose notes. Evidence units at reading time improve verification coverage without any changes to the verifier.
+
+### What to extract
+
+Prioritize in this order:
+1. **Quantitative results** — sample sizes, effect sizes, p-values, percentages, confidence intervals
+2. **Core conclusions** that directly address a research question
+3. **Methodological details** that affect interpretation (study design, population, measures)
+4. **Limitations** that qualify the source's conclusions
+5. **Contradictions** with other known results stated in the source
+
+### What NOT to extract
+
+- Every sentence in the source
+- General background that any source would contain
+- Restatements of prior work without new data
+- Claims you cannot locate in the source text
+
+### Target volume
+
+3-8 units per source. Fewer is acceptable for thin sources. More than 8 means you are over-extracting — keep only the claims that would matter most to a researcher synthesizing across sources.
+
+### Provenance rules
+
+For every unit, provide the strongest provenance you can:
+- `provenance_type`: Use `"content_span"` when you can identify line numbers in the source file. Use `"abstract"` for abstract-only sources. Use `"note_span"` only if you cannot locate the original.
+- `provenance_path`: Always `"sources/{source_id}.md"`
+- `line_start` and `line_end`: Line numbers from the source file where the claim appears. Critical for targeted verification — without line spans, downstream agents must re-read the entire source.
+- `quote`: Short quote (max 120 characters) only for fragile quantitative claims or contradictions. Omit for stable, well-supported claims.
+
+### Schema
+
+Write a JSON file to `evidence/{source_id}.json` with this structure:
+
+```json
+{
+  "source_id": "{source_id}",
+  "generated_by": "research-reader",
+  "units": [
+    {
+      "primary_question_id": "Q1",
+      "question_ids": ["Q1"],
+      "claim_text": "One-sentence claim extracted from the source.",
+      "claim_type": "result",
+      "relation": "supports",
+      "evidence_strength": "strong",
+      "provenance_type": "content_span",
+      "provenance_path": "sources/{source_id}.md",
+      "line_start": 103,
+      "line_end": 116,
+      "quote": "Exact text for fragile claims only",
+      "structured_data": {"key_number": 42},
+      "tags": ["tag1"]
+    }
+  ]
+}
+```
+
+Required fields: `claim_text`, `claim_type`, `provenance_type`.
+- `claim_type`: one of `result`, `method`, `limitation`, `contradiction`, `background`
+- `relation`: one of `supports` (default), `contradicts`, `qualifies`
+- `evidence_strength`: one of `strong`, `moderate`, `weak`
+- `structured_data`: optional JSON object for quantitative fields (sample sizes, counts, percentages, p-values, effect sizes)
+- `tags`: optional array of short labels
+
+### Write order and edge cases
+
+1. Write `evidence/{source_id}.json` using the Write tool
+2. Then write `notes/{source_id}.md` using the Write tool
+3. Both files are needed — neither replaces the other
+
+If status is `"degraded"` or `"unreadable"`, do **not** write an evidence manifest. Evidence is only for `"ok"` sources with substantive content.
 
 ## Status determination rules
 

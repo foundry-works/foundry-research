@@ -25,6 +25,8 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 ├── state.db              # SQLite — search history + source index (source of truth)
 ├── journal.md            # Your reasoning scratchpad (append-only)
 ├── report.md             # Final report
+├── evidence/             # Per-source evidence manifests (from reader subagents)
+│   └── src-001.json
 ├── notes/                # Per-source summaries (from reader subagents)
 │   └── src-001.md
 └── sources/
@@ -40,6 +42,10 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 - Check duplicates: `${CLAUDE_SKILL_DIR}/state check-dup-batch --from-json` (batch)
 - Review progress: `${CLAUDE_SKILL_DIR}/state summary`
 - Pre-report check: `${CLAUDE_SKILL_DIR}/state audit`
+
+### Evidence Units
+
+Reader agents produce structured evidence manifests (`evidence/src-NNN.json`) alongside markdown notes. Each manifest contains 3-8 load-bearing claim records with source provenance, claim type, and optional quantitative fields. The orchestrator batch-ingests them via `state add-evidence-batch` after all readers complete. Query with `state evidence` (filter by `--source-id`, `--question-id`, `--claim-type`) and aggregate with `state evidence-summary`.
 
 ---
 

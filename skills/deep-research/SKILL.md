@@ -101,6 +101,28 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
    This costs one trivial `Read` call per source vs. 20-50K tokens per wasted reader agent. At observed mismatch rates (32-43%), this step saves 150-250K tokens per session. **Why mandatory, not "recommended":** Under time pressure, soft guidance gets skipped. Download-time keyword checks miss topical mismatches where papers share vocabulary with the target title but cover different topics. This step is the last line of defense before committing an agent invocation.
 7. Spawn reader subagents for triaged papers (parallel, one source per agent, **foreground** — see rule 1). Put all reader Agent calls in the same response message to run them concurrently. **As each reader returns, immediately check its `coverage_signal` and log gaps for any research question with thin or conflicting evidence.** Do not batch gap logging until all readers finish — log incrementally as each manifest arrives. **Why:** Early gap detection lets you launch targeted follow-up searches in parallel with remaining readers, while you still have search budget.
 8. After all readers complete, `${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state mark-read --id src-NNN` for **every source where the reader returned `status: "ok"`** (i.e., a note exists in `notes/`). This upgrades the source's quality tier to `reader_validated`, which downstream agents (synthesis, audit) use to distinguish deeply-verified sources from merely-downloaded ones. **Don't skip this step** — without it, audit undercounts deep-read sources and the synthesis-writer can't distinguish reader-validated sources from unread downloads. Review reader notes for coverage: if any question has < 2 supporting sources or only weak/conflicting evidence, call `${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state log-gap` now.
+8b. **Ingest evidence manifests.** Readers that returned `status: "ok"` also wrote structured evidence manifests to `evidence/src-NNN.json`. Ingest them into state.db:
+
+    1. Glob `{session_dir}/evidence/src-*.json` to find all evidence files
+    2. If any exist, assemble them into a JSON array and batch-ingest:
+       ```bash
+       # Write the array to a temp file, then ingest
+       ${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state add-evidence-batch --from-json {path_to_array}
+       ```
+       Alternatively, ingest each file individually in a loop:
+       ```bash
+       for f in {session_dir}/evidence/src-*.json; do
+         ${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state add-evidence --from-json "$f"
+       done
+       ```
+    3. Run `${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state evidence-summary` to verify counts (expect 3-8 units per source)
+
+    **If no evidence files exist** (all sources degraded/unreadable, or pre-evidence session), skip this step. The pipeline is backward compatible.
+
+    **Gap-mode dedup:** When re-reading sources in gap mode, check `state evidence --source-id src-NNN` before ingesting. If units already exist for that source, skip to avoid duplicates.
+
+    **Why after mark-read, before quality report:** Evidence counts per source are useful context for the quality report. Ingesting after mark-read ensures source quality is updated first. Evidence must be in state.db before findings-loggers run so they can query by question ID (Phase 3 will use this).
+
 9. **Source quality report.** After all readers complete and before spawning findings-loggers, review reader manifests and produce a structured quality tally in journal.md:
    ```
    ## Source Quality Report
@@ -109,6 +131,7 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
    - Abstract-only stubs: K sources (src-089, ...)
    - Off-topic but correct content: J sources (src-201, ...)
    - Unreadable/garbled: L sources (src-445, ...)
+	   - Evidence extracted: E sources with evidence units (run `evidence-summary` for per-source counts)
    ```
    This takes 2 minutes and prevents mismatched sources from leaking into findings or citations. It also gives you an accurate denominator for coverage assessment — "12 of 20 sources were usable" is more honest than "20 sources read." **Why structured, not ad hoc:** Informal post-reader quality assessment leads to mismatched sources leaking into findings and inflated source counts in methodology sections. A structured tally makes it systematic, and persisting it in journal.md means the synthesis-writer can reference accurate data.
 10. **Delegate findings logging to findings-logger agents (one per question, parallel, foreground — see rule 1).** For each research question in the brief, spawn a `findings-logger` subagent with the session directory path (absolute), `${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state` path, and that single question's **ID and full text** (e.g. question ID "Q1", full text "What mechanisms drive the uncanny valley effect?"). The question ID is assigned during brief-setting (Q1, Q2, ...) and stored in state.db — pass it so the findings-logger can use `--question-id Q1` for reliable matching instead of fragile text overlap. Launch all agents in the **same response message** so they run concurrently and all return before your next turn. Each agent reads all reader notes, identifies evidence relevant to its question, extracts distinct findings with source citations, and logs them via `log-finding`. Each returns a manifest with finding IDs and count. **Why delegate:** By this point your context holds reader coordination — findings-loggers get clean contexts focused entirely on evidence extraction, run in parallel for speed, and offload dozens of `log-finding` calls from your conversation. **Why per-question:** Each agent has a focused extraction task against one question, matching the reader pattern of one unit of work per agent.
@@ -222,6 +245,11 @@ check-dup --doi/--url/--title     # check before downloading
 check-dup-batch --from-json FILE  # batch dedup check
 log-finding --text "..." --sources "src-001,src-003" --question "Q1: What mechanisms drive X?"
 deduplicate-findings              # merge cross-question duplicate findings (run after all findings-loggers)
+add-evidence --from-json FILE     # ingest evidence units from a reader-produced manifest
+add-evidence-batch --from-json FILE  # batch ingest from array of manifests
+evidence                          # list all evidence units (use --source-id, --question-id, --claim-type, --status to filter)
+evidence-summary                  # aggregate evidence counts by type, question, and source
+link-finding-evidence --finding-id ID --evidence-ids "ev-001,ev-002"  # link finding to evidence units
 log-gap --text "..."              # record coverage gap
 resolve-gap --gap-id "gap-1"      # mark gap resolved
 gap-search-plan                   # suggest searches for open gaps (terms + citation chase)
@@ -280,7 +308,7 @@ cleanup-orphans                   # remove metadata files on disk with no matchi
 
 1. **After brief is set** — Log the research questions and your initial search strategy (which providers, what query angles, expected coverage challenges). This anchors the session's direction so a compressed context can recover it.
 2. **After source-acquisition returns** — Log the manifest summary: source counts by tier, coverage assessment per question (strong/thin/missing), identified gaps, and any surprises (unexpected topic clusters, missing expected papers). This is the baseline your gap-mode decisions build on.
-3. **After readers complete** — Log coverage analysis: which questions have strong vs. thin evidence, emerging patterns across sources, contradictions between sources, and methodological concerns. This is the most critical entry — it captures cross-source reasoning that no single reader note contains.
+3. **After readers complete** — Log coverage analysis: which questions have strong vs. thin evidence, evidence units extracted per source (run `${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state evidence-summary` after ingestion), emerging patterns across sources, contradictions between sources, and methodological concerns. This is the most critical entry — it captures cross-source reasoning that no single reader note contains.
 4. **After gap-mode returns** — Log what was resolved (with which sources), what remains open and why, and your synthesis strategy (theme ordering, which findings are strongest, where to caveat).
 5. **Before synthesis handoff** — Log the narrative key findings summary you'll give the writer: the interpretive layer that turns structured findings into a coherent story. This entry also serves as a recovery point — if synthesis fails or needs re-running, you can reconstruct the handoff from this entry.
 
