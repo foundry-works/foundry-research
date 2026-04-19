@@ -33,14 +33,28 @@ While tools like **Google's Deep Research** have popularized agentic research, t
 - **Structured Orchestration:** Instead of a single autonomous agent that might get stuck in loops, it uses a 5-phase pipeline (Acquire → Read → Synthesize → Verify → Revise) with 9 specialized subagents. This scaffolding allows the subagents enough agency to be creative while keeping the process on track. This structured approach also means it can run successfully on less capable (and less expensive) models like GLM-5.1. Subagents are assigned models proportional to their reasoning needs — complex synthesis and verification run on the most capable models, while high-volume tasks like reading and logging use smaller, cheaper ones.
 - **Terminal Integration:** It runs as a plugin inside Claude Code, the best-in-class general-purpose agentic harness. This brings deep research directly into your IDE/terminal, so you can immediately use the findings in your development workflow.
 
+## Source Coverage by Domain
+
+- **Computer Science & Math:** arXiv, DBLP, Semantic Scholar
+- **Biomedical & Life Sciences:** PubMed, bioRxiv/medRxiv, PubMed Central
+- **Cross-Disciplinary Academic:** Semantic Scholar, OpenAlex, Crossref, CORE, OpenCitations
+- **Preprints & Open Access:** OSF (PsyArXiv, SocArXiv), arXiv, bioRxiv/medRxiv, Unpaywall
+- **Finance & Regulatory:** SEC EDGAR, Yahoo Finance
+- **Community & Discussion:** Reddit, Hacker News, GitHub
+- **General Web:** Tavily, Perplexity, Linkup, Exa, GenSee
+
+See [docs/providers.md](docs/providers.md) for the full provider reference (API keys, rate limits, capabilities).
+
 ## Example Use Cases
 
-- **Academic Literature Reviews:** Map the state of the art in a specific field, trace competing theories, and identify research gaps.
-- **Technical & Architectural Deep Dives:** Compare competing software architectures, machine learning methodologies, or engineering practices based on whitepapers and documentation.
-- **Market & Competitive Intelligence:** Analyze SEC filings (via EDGAR integration), industry reports, and discussion forums (Reddit/HN) to synthesize comprehensive market overviews.
-- **Personal Medical Research:** Investigate specific conditions, treatments, or nutritional supplements by deeply analyzing clinical trials and biomedical literature. *(Disclaimer: AI models can hallucinate and this tool does not provide medical advice. Always consult a qualified healthcare professional.)*
+- **Academic Literature Reviews:** Synthesize the state of the art in a field, resolve competing claims against the evidence, and identify where research gaps remain.
+- **Technical & Architectural Deep Dives:** Compare competing approaches — architectures, algorithms, engineering practices — by weighing evidence from benchmarks, whitepapers, and implementation case studies.
+- **Market & Competitive Intelligence:** Synthesize SEC filings (via EDGAR integration), industry reports, and discussion forums (Reddit/HN) into competitive positioning, emerging trends, and market gaps.
+- **Personal Medical Research:** Investigate conditions, treatments, or supplements by deeply analyzing clinical trials and biomedical literature — comparing efficacy, side-effect profiles, and strength of evidence across studies. *(Disclaimer: AI models can hallucinate and this tool does not provide medical advice. Always consult a qualified healthcare professional.)*
 
 **When NOT to use this:** If you just need a quick summary of a single web page or a factual answer, use out-of-the-box web search tools (like standard Claude or Perplexity). `foundry-research` is for multi-source synthesis that takes 30-60 minutes to run and produces comprehensive, verified reports.
+
+**Where it struggles:** The tool relies on open-access sources, preprints, and grey source databases to obtain full-text PDFs. In domains where most research is locked behind paywalls and hasn't been liberated by preprint sharing practices (e.g., certain humanities disciplines, proprietary market research, paywalled legal databases), it will find metadata and abstracts but may have limited full-text coverage.
 
 ## Pricing / Cost to Run
 
