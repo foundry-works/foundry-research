@@ -343,6 +343,100 @@ def _extract_question_terms(questions: list) -> list[str]:
     return _extract_terms(texts)
 
 
+def _evidence_question_ids(row) -> set[str]:
+    """Return all question IDs associated with an evidence row."""
+    question_ids: set[str] = set()
+    keys = row.keys() if hasattr(row, "keys") else []
+
+    if "primary_question_id" in keys:
+        primary = row["primary_question_id"]
+        if primary:
+            question_ids.add(str(primary))
+
+    if "question_ids" in keys:
+        raw = row["question_ids"]
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                parsed = []
+            for qid in parsed:
+                if qid:
+                    question_ids.add(str(qid))
+
+    return question_ids
+
+
+def _evidence_matches_question(row, question_id: str) -> bool:
+    """Return True when an evidence row is linked to a question ID."""
+    return question_id in _evidence_question_ids(row)
+
+
+def _count_evidence_by_question(rows) -> dict[str, int]:
+    """Count evidence rows against every linked question ID."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        for qid in _evidence_question_ids(row):
+            counts[qid] = counts.get(qid, 0) + 1
+    return counts
+
+
+def _compact_linked_evidence_for_handoff(
+    findings: list[dict], evidence_rows_by_id: dict[str, dict], cap_bytes: int
+) -> tuple[list[dict], set[str], bool, int]:
+    """Return a size-bounded evidence slice without dangling finding references."""
+    if not evidence_rows_by_id:
+        return [], set(), False, 0
+
+    strength_order = {"strong": 0, "moderate": 1, "weak": 2, None: 3}
+
+    def sort_key(ev_id: str) -> tuple[int, str]:
+        row = evidence_rows_by_id[ev_id]
+        return (strength_order.get(row.get("evidence_strength"), 3), ev_id)
+
+    linked_ids: list[str] = []
+    linked_seen: set[str] = set()
+    for finding in findings:
+        for ev_id in finding.get("evidence_ids", []):
+            if ev_id in evidence_rows_by_id and ev_id not in linked_seen:
+                linked_ids.append(ev_id)
+                linked_seen.add(ev_id)
+
+    if not linked_ids:
+        return [], set(), False, 0
+
+    # First pass: keep the strongest linked evidence row for as many findings
+    # as possible before filling any remaining budget with extra rows.
+    primary_ids: list[str] = []
+    primary_seen: set[str] = set()
+    for finding in findings:
+        candidate_ids = [ev_id for ev_id in finding.get("evidence_ids", []) if ev_id in linked_seen]
+        if not candidate_ids:
+            continue
+        best_id = min(candidate_ids, key=sort_key)
+        if best_id not in primary_seen:
+            primary_ids.append(best_id)
+            primary_seen.add(best_id)
+
+    remaining_ids = [ev_id for ev_id in linked_ids if ev_id not in primary_seen]
+    remaining_ids.sort(key=sort_key)
+    ordered_ids = primary_ids + remaining_ids
+
+    selected_rows: list[dict] = []
+    selected_ids: set[str] = set()
+    for ev_id in ordered_ids:
+        row = evidence_rows_by_id[ev_id]
+        trial_rows = selected_rows + [row]
+        encoded = json.dumps(trial_rows).encode("utf-8")
+        if len(encoded) > cap_bytes and selected_rows:
+            continue
+        selected_rows = trial_rows
+        selected_ids.add(ev_id)
+
+    truncated = len(selected_rows) < len(linked_ids)
+    return selected_rows, selected_ids, truncated, len(linked_ids)
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -1263,16 +1357,17 @@ def cmd_summary(args):
     evidence_count = conn.execute(
         "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
     ).fetchone()["c"]
+    active_evidence_rows = conn.execute(
+        "SELECT claim_type, primary_question_id, question_ids, source_id "
+        "FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchall()
+
     evidence_by_type: dict[str, int] = {}
     for r in conn.execute(
         "SELECT claim_type, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' GROUP BY claim_type", (sid,)
     ).fetchall():
         evidence_by_type[r["claim_type"]] = r["c"]
-    evidence_by_question: dict[str, int] = {}
-    for r in conn.execute(
-        "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
-    ).fetchall():
-        evidence_by_question[r["primary_question_id"]] = r["c"]
+    evidence_by_question = _count_evidence_by_question(active_evidence_rows)
     # Findings without linked evidence
     findings_without_evidence = []
     if evidence_count > 0:
@@ -1286,7 +1381,7 @@ def cmd_summary(args):
                 findings_without_evidence.append(fid)
 
     # Fetch compact evidence rows for handoff (while conn is still open)
-    evidence_rows_compact = []
+    evidence_rows_by_id: dict[str, dict] = {}
     if evidence_count > 0:
         for r in conn.execute(
             """SELECT id, source_id, claim_text, claim_type, relation,
@@ -1294,7 +1389,8 @@ def cmd_summary(args):
                FROM evidence_units
                WHERE session_id = ? AND status = 'active' ORDER BY id""", (sid,)
         ).fetchall():
-            evidence_rows_compact.append(dict(r))
+            row_dict = dict(r)
+            evidence_rows_by_id[row_dict["id"]] = row_dict
 
     conn.close()
 
@@ -1333,7 +1429,8 @@ def cmd_summary(args):
         #    the full question string (250-500 chars × 50-80 findings ≈ 28 KB).
         #    The writer can cross-reference brief.questions by question_id.
         for f in full_result["findings"]:
-            f.pop("question", None)
+            if f.get("question_id"):
+                f.pop("question", None)
 
         # 3. Build source quality report with counts only — the writer needs
         #    totals for the Methodology section, not per-source ID lists.
@@ -1362,9 +1459,30 @@ def cmd_summary(args):
 
         full_result["source_quality_report"] = quality_counts
 
-        # 4. Include compact evidence units when available
-        if evidence_rows_compact:
-            full_result["evidence_units"] = evidence_rows_compact
+        # 4. Include linked evidence units when available, with size guardrail.
+        #    Keep the exported findings/evidence arrays internally consistent.
+        if evidence_rows_by_id:
+            EVIDENCE_CAP_BYTES = 15 * 1024
+            selected_rows, selected_ids, truncated, total_count = _compact_linked_evidence_for_handoff(
+                full_result["findings"], evidence_rows_by_id, EVIDENCE_CAP_BYTES
+            )
+
+            for f in full_result["findings"]:
+                kept_ids = [ev_id for ev_id in f.get("evidence_ids", []) if ev_id in selected_ids]
+                if kept_ids:
+                    f["evidence_ids"] = kept_ids
+                else:
+                    f.pop("evidence_ids", None)
+
+            if evidence_count > 0:
+                full_result["findings_without_evidence"] = [
+                    f["id"] for f in full_result["findings"] if not f.get("evidence_ids")
+                ]
+
+            if selected_rows:
+                full_result["evidence_units"] = selected_rows
+            full_result["evidence_truncated"] = truncated
+            full_result["evidence_total_count"] = total_count
 
         handoff_path = os.path.join(args.session_dir, "synthesis-handoff.json")
         with open(handoff_path, "w") as f:
@@ -1510,9 +1628,6 @@ def cmd_evidence(args):
     if getattr(args, "source_id", None):
         query += " AND source_id = ?"
         params.append(args.source_id)
-    if getattr(args, "question_id", None):
-        query += " AND primary_question_id = ?"
-        params.append(args.question_id)
     if getattr(args, "claim_type", None):
         query += " AND claim_type = ?"
         params.append(args.claim_type)
@@ -1523,6 +1638,9 @@ def cmd_evidence(args):
 
     query += " ORDER BY id"
     rows = conn.execute(query, params).fetchall()
+    question_id = getattr(args, "question_id", None)
+    if question_id:
+        rows = [r for r in rows if _evidence_matches_question(r, question_id)]
     conn.close()
 
     units = []
@@ -1563,11 +1681,9 @@ def cmd_evidence_summary(args):
     ).fetchall():
         by_type[r["claim_type"]] = r["c"]
 
-    by_question = {}
-    for r in conn.execute(
-        "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
-    ).fetchall():
-        by_question[r["primary_question_id"]] = r["c"]
+    by_question = _count_evidence_by_question(conn.execute(
+        "SELECT primary_question_id, question_ids FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchall())
 
     with_spans = conn.execute(
         "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND line_start IS NOT NULL AND line_end IS NOT NULL", (sid,)
@@ -1580,12 +1696,22 @@ def cmd_evidence_summary(args):
         by_source[r["source_id"]] = r["c"]
 
     conn.close()
+
+    # Compute total size of evidence JSON artifacts on disk
+    evidence_dir = os.path.join(args.session_dir, "evidence")
+    total_json_size = 0
+    if os.path.isdir(evidence_dir):
+        for f in os.scandir(evidence_dir):
+            if f.name.endswith(".json") and f.is_file():
+                total_json_size += f.stat().st_size
+
     success_response({
         "total": total,
         "by_claim_type": by_type,
         "by_question": by_question,
         "with_provenance_spans": with_spans,
         "by_source": by_source,
+        "total_json_size_bytes": total_json_size,
     })
 
 
@@ -2212,6 +2338,9 @@ def cmd_audit(args):
             "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
         ).fetchone()["c"]
         if audit_evidence_total > 0:
+            audit_evidence_rows = conn.execute(
+                "SELECT primary_question_id, question_ids FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+            ).fetchall()
             for f in findings:
                 link = conn.execute(
                     "SELECT 1 FROM finding_evidence WHERE finding_id = ? AND session_id = ? LIMIT 1",
@@ -2221,10 +2350,7 @@ def cmd_audit(args):
                     audit_findings_without_evidence.append(f["id"])
             if audit_findings_without_evidence:
                 audit_evidence_warnings.append(f"{len(audit_findings_without_evidence)} finding(s) have no linked evidence units")
-            for r in conn.execute(
-                "SELECT primary_question_id, COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active' AND primary_question_id IS NOT NULL GROUP BY primary_question_id", (sid,)
-            ).fetchall():
-                audit_evidence_by_question[r["primary_question_id"]] = r["c"]
+            audit_evidence_by_question = _count_evidence_by_question(audit_evidence_rows)
     except Exception:
         pass  # table may not exist in old sessions
 

@@ -108,7 +108,7 @@ Highest-leverage phase. The claim-verifier is notes-only — its effectiveness i
 ## Documentation
 
 - [x] Add design doc in `docs/structured-evidence-layer.md`
-- [ ] Update `docs/architecture.md` after rollout is stable
+- [x] Update `docs/architecture.md` after rollout is stable
 - [ ] Update example or internal workflow docs if evidence artifacts change the session layout
 
 ## Rollout Guardrails

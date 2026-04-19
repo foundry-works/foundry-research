@@ -134,7 +134,7 @@ Shard the extracted claims into 1 claim per shard. For example, 8 claims produce
 - **`claim-verifier`** subagent(s) (Sonnet, one per shard) with:
   - Session directory path (absolute)
   - Shard index (1, 2, 3, ...)
-  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
+  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
   - **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence provenance for targeted verification
   - Each verifier checks its claim against evidence units (preferred) or local reader notes (fallback), no web search
 

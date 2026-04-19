@@ -309,6 +309,127 @@ def _journal_metrics(session_dir: Path) -> dict:
     }
 
 
+def _evidence_question_ids(row) -> set[str]:
+    """Return all question IDs linked to an evidence row."""
+    qids: set[str] = set()
+    if row["primary_question_id"]:
+        qids.add(str(row["primary_question_id"]))
+    raw = row["question_ids"]
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            parsed = []
+        for qid in parsed:
+            if qid:
+                qids.add(str(qid))
+    return qids
+
+
+def _count_evidence_by_question(rows) -> dict[str, int]:
+    """Count evidence rows across every linked question ID."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        for qid in _evidence_question_ids(row):
+            counts[qid] = counts.get(qid, 0) + 1
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# Evidence metrics
+# ---------------------------------------------------------------------------
+
+def _evidence_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
+    """Compute evidence layer metrics. Graceful no-op if tables don't exist."""
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+    if "evidence_units" not in tables:
+        return {
+            "evidence_units_total": 0,
+            "evidence_units_by_claim_type": {},
+            "evidence_units_by_question": {},
+            "evidence_units_by_source": {},
+            "evidence_units_with_spans": 0,
+            "evidence_units_avg_per_source": 0.0,
+            "evidence_json_files": _count_glob(session_dir / "evidence", "*.json"),
+            "evidence_link_count": 0,
+            "findings_with_evidence": 0,
+            "findings_without_evidence": 0,
+        }
+
+    cur = conn.cursor()
+
+    total = cur.execute(
+        "SELECT COUNT(*) FROM evidence_units WHERE status = 'active'"
+    ).fetchone()[0]
+
+    by_type = {
+        r[0]: r[1]
+        for r in cur.execute(
+            "SELECT claim_type, COUNT(*) FROM evidence_units WHERE status = 'active' GROUP BY claim_type"
+        ).fetchall()
+    }
+
+    by_question = _count_evidence_by_question(cur.execute(
+        "SELECT primary_question_id, question_ids FROM evidence_units "
+        "WHERE status = 'active'"
+    ).fetchall())
+
+    by_source = {
+        r[0]: r[1]
+        for r in cur.execute(
+            "SELECT source_id, COUNT(*) FROM evidence_units WHERE status = 'active' GROUP BY source_id"
+        ).fetchall()
+    }
+
+    with_spans = cur.execute(
+        "SELECT COUNT(*) FROM evidence_units "
+        "WHERE status = 'active' AND line_start IS NOT NULL AND line_end IS NOT NULL"
+    ).fetchone()[0]
+
+    distinct_sources = len(by_source)
+    avg_per_source = round(total / distinct_sources, 1) if distinct_sources > 0 else 0.0
+
+    evidence_json_files = _count_glob(session_dir / "evidence", "*.json")
+
+    # Finding-evidence linkage
+    link_count = 0
+    findings_with = 0
+    findings_without = 0
+
+    if "finding_evidence" in tables and total > 0:
+        link_count = cur.execute(
+            "SELECT COUNT(*) FROM finding_evidence fe "
+            "INNER JOIN evidence_units eu ON fe.evidence_id = eu.id "
+            "WHERE eu.status = 'active'"
+        ).fetchone()[0]
+
+        findings_total = cur.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+        if findings_total > 0:
+            findings_with = cur.execute(
+                "SELECT COUNT(DISTINCT f.id) FROM findings f "
+                "INNER JOIN finding_evidence fe ON f.id = fe.finding_id "
+                "INNER JOIN evidence_units eu ON fe.evidence_id = eu.id "
+                "WHERE eu.status = 'active'"
+            ).fetchone()[0]
+            findings_without = findings_total - findings_with
+
+    return {
+        "evidence_units_total": total,
+        "evidence_units_by_claim_type": by_type,
+        "evidence_units_by_question": by_question,
+        "evidence_units_by_source": by_source,
+        "evidence_units_with_spans": with_spans,
+        "evidence_units_avg_per_source": avg_per_source,
+        "evidence_json_files": evidence_json_files,
+        "evidence_link_count": link_count,
+        "findings_with_evidence": findings_with,
+        "findings_without_evidence": findings_without,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -344,6 +465,7 @@ def main():
             metrics.update(_search_metrics(conn))
             metrics.update(_source_metrics(conn, session_dir))
             metrics.update(_coverage_metrics(conn))
+            metrics.update(_evidence_metrics(conn, session_dir))
             conn.close()
         except Exception as e:
             errors.append(f"Database error: {e}")

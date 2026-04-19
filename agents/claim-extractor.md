@@ -46,7 +46,9 @@ For each extracted claim, check whether structured evidence exists that matches:
 {state_cli_path} evidence --source-id src-NNN
 ```
 
-Query evidence units for each cited source. When a claim's content matches an evidence unit's `claim_text`, add `matched_evidence_ids` to the claim object. Include the evidence unit's `id`, `evidence_strength`, and `claim_type` for downstream verifier use.
+Query evidence units for each cited source. When a claim's content matches an evidence unit's `claim_text`, add `matched_evidence_ids` to the claim object. Include the evidence unit's `id`, `evidence_strength`, `claim_type`, and resolved `source_id` for downstream verifier use.
+
+Resolve the report citation to a concrete `source_id` before emitting the claim object so downstream verifiers can query the correct notes and evidence without inferring from citation order.
 
 Claims with matching evidence units are easier for the verifier to check (provenance spans point to exact source passages). Claims without matches need broader note-reading by the verifier — flag these as higher verification priority.
 
@@ -65,6 +67,7 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
       "quoted_text": "A pooled analysis of 15 studies (Key et al., 2015; 11,239 cases) found OR 0.73 for advanced prostate cancer",
       "report_location": "Section 1, paragraph 4",
       "cited_source_id": "[4]",
+      "source_id": "src-004",
       "source_type": "secondary",
       "claim_category": "quantitative",
       "verification_priority": "High — specific OR value from secondary source, load-bearing for observational convergence",
@@ -80,6 +83,7 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
 - `quoted_text`: exact text from the report containing the claim
 - `report_location`: section and paragraph for downstream targeting
 - `cited_source_id`: the inline citation reference (e.g., `[4]`)
+- `source_id`: the resolved `src-NNN` source identifier for the citation
 - `source_type`: `primary`, `secondary`, or `none`
 - `claim_category`: `quantitative` (specific numbers), `conclusion` (study finding characterization), or `absence_of_evidence` (no study has shown...)
 - `verification_priority`: one-sentence justification for why this claim matters

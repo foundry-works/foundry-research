@@ -13,12 +13,12 @@ You are not editing the report. You return a verification verdict for the revisi
 
 - **Session directory path** (absolute)
 - **Shard index** (e.g., `1`) — identifies your output file
-- **One claim** with: `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids` (may be empty), `evidence_strength` (may be null)
+- **One claim** with: `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids` (may be empty), `evidence_strength` (may be null)
 
 ## How to verify
 
-1. **Find the source reference number** from the claim's `cited_source_id` (e.g., `[4]` means reference 4).
-2. **Look up the source file** in `sources/metadata/` to find which `src-NNN` file corresponds to that reference number.
+1. **Use the claim's `source_id` directly** when present. If it is missing, resolve the `cited_source_id` to a source identifier via `sources/metadata/`.
+2. **Look up the source file** in `sources/metadata/` if you still need citation details or a note path.
 
 ### Evidence-based verification (preferred)
 
@@ -26,7 +26,7 @@ If the claim has `matched_evidence_ids` from the extractor:
 
 3. **Query the evidence units** for provenance details:
    ```bash
-   {state_cli_path} evidence --source-id src-NNN
+   {state_cli_path} evidence --source-id {source_id}
    ```
    Find the matching evidence IDs to get `claim_text`, `structured_data`, `provenance_path`, `line_start`, and `line_end`.
 4. **Read the targeted source passage** at `provenance_path` lines `line_start` to `line_end`. This gives you the exact text the reader extracted — much more precise than scanning the full note.

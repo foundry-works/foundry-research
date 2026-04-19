@@ -48,6 +48,7 @@ Key output fields in `metrics`:
 - **Search:** `searches_total`, `searches_zero_ingested`, `search_providers`, `search_modes`, `search_types`, `searches_by_provider`
 - **Source:** `sources_total`, `sources_downloaded`, `sources_with_notes`, `sources_with_doi`, `sources_with_venue`, `sources_with_citations`, `sources_orphaned`, `sources_by_provider`, `sources_by_type`, `sources_by_quality`, `sources_by_status`, `sources_by_year`, `metadata_json_count`, `notes_on_disk`
 - **Coverage:** `findings_total`, `findings_by_question`, `findings_unsourced`, `gaps_total`, `gaps_resolved`, `gaps_open`
+- **Evidence:** `evidence_units_total`, `evidence_units_by_claim_type`, `evidence_units_by_question`, `evidence_units_by_source`, `evidence_units_with_spans`, `evidence_units_avg_per_source`, `findings_with_evidence`, `findings_without_evidence`, `evidence_json_files`, `evidence_link_count`
 - **Report:** `report_exists`, `report_word_count`, `report_section_count`, `report_reference_count`, `report_unique_citations`, `report_citation_instances`, `report_max_citation`, `report_phantom_refs`
 - **Files:** `source_md_files`, `notes_md_files`, `metadata_json_files`, `toc_files`
 - **Journal:** `journal_exists`, `journal_char_count`, `journal_milestones_found`, `journal_milestones_detail`
@@ -110,6 +111,14 @@ Compute all of the following:
 - Findings with source_ids vs. without (unsourced claims)
 - Total gaps, open vs. resolved
 - Cross-question findings (text containing "[Also relevant to:")
+
+**Evidence metrics:**
+- Total evidence units, by claim_type, by question, by source
+- Evidence units with provenance spans (line_start/line_end)
+- Average evidence units per source (extraction density)
+- Findings with linked evidence vs. without (coverage quality signal)
+- Evidence JSON file count (artifact completeness)
+- Total finding-evidence links
 
 **Report metrics:**
 - Report word count, section count
@@ -206,6 +215,8 @@ Ground every score in specific evidence. "Search Strategy: 7 — used 4 provider
 - **Question-to-finding mapping** is the core signal. Each research question from the brief should have multiple findings with source citations. Questions with zero or one finding represent coverage holes.
 
 - **Source backing** distinguishes evidence-based findings from unsupported claims. Findings with empty source arrays (`sources: []` or `sources: null`) are assertions without evidence. A few interpretive findings without direct source backing are acceptable in synthesis, but the majority should cite specific sources.
+
+- **Evidence linkage** goes deeper than source backing. `findings_without_evidence` counts findings with no linked evidence units — these rely on prose-only handoffs and are harder to verify or trace. A high ratio of unlinked findings (especially in sessions with evidence tables) indicates the findings-loggers didn't wire evidence into their output. This is a coverage quality signal, not a coverage quantity signal.
 
 - **"Was the question actually answered?"** is the ultimate test. Structured tracking (findings logged, gaps tracked) is a means to this end, not the end itself. Read the report sections that address each question and assess whether a reader would come away with a substantive answer. A session with perfect tracking but shallow findings scores lower than one with moderate tracking but insightful, well-sourced conclusions.
 
@@ -466,6 +477,13 @@ Write `reflection.json` to the session directory alongside state.db and report.m
     "findings_unsourced": 0,
     "gaps_total": 0,
     "gaps_resolved": 0,
+    "evidence_units_total": 0,
+    "evidence_units_by_claim_type": {},
+    "evidence_units_by_question": {},
+    "findings_with_evidence": 0,
+    "findings_without_evidence": 0,
+    "evidence_units_avg_per_source": 0.0,
+    "evidence_json_files": 0,
     "report_word_count": 0,
     "report_citation_count": 0,
     "report_reference_count": 0,

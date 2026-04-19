@@ -26,12 +26,13 @@ The orchestrator is defined in `skills/deep-research/SKILL.md` and manages a str
 1. **Brief** — Generate a research brief with evaluative questions from the user's topic
 2. **Acquire sources** — Multi-round search across providers, download PDFs, validate content
 3. **Read sources** — Extract key information from each downloaded source
-4. **Log findings** — Map extracted findings to research questions
-5. **Identify gaps** — Find under-covered questions and search for more sources
-6. **Synthesize** — Draft a research report from the findings
-7. **Review** — Check for contradictions, unsupported claims, and style issues
-8. **Revise** — Make targeted edits based on review feedback
-9. **Deliver** — Final report with references and methodology
+4. **Extract evidence** — Store structured `evidence_units` with source provenance and question mapping
+5. **Log findings** — Map extracted findings to research questions and link them back to evidence IDs
+6. **Identify gaps** — Find under-covered questions and search for more sources
+7. **Synthesize** — Draft a research report from the findings
+8. **Review** — Check for contradictions, unsupported claims, and style issues
+9. **Revise** — Make targeted edits based on review feedback
+10. **Deliver** — Final report with references and methodology
 
 ## Directory Structure
 
@@ -89,7 +90,7 @@ Multi-provider search dispatcher. Routes queries to the right provider(s) based 
 PDF download cascade with seven sources. Tries each source in order until one succeeds. Supports PDF-to-markdown conversion, quality checks, and parallel downloads.
 
 ### state.py
-SQLite-backed session state tracker. Manages search history, source index, findings, gaps, and audit trails. Provides summary and audit commands for pipeline observability.
+SQLite-backed session state tracker. Manages search history, source index, evidence units, findings, gaps, and audit trails. Provides summary and audit commands for pipeline observability, including the compact `synthesis-handoff.json` export used by the writer.
 
 ### triage-relevance
 LLM-powered relevance scoring for source triage. Uses Claude (Haiku) to score how relevant each source's abstract is to the research brief, catching semantic relevance that keyword overlap misses.
@@ -113,7 +114,10 @@ Each research run creates a session directory:
 deep-research-{session}/
 ├── state.db              # SQLite — search history + source index
 ├── journal.md            # Orchestrator reasoning trail (append-only)
+├── synthesis-handoff.json # Writer handoff with findings, gaps, and compact linked evidence
 ├── report.md             # Final research report
+├── evidence/             # Structured evidence manifests produced by readers
+│   └── src-001.json
 ├── notes/                # Per-source summaries from reader agents
 │   └── src-001.md
 └── sources/
@@ -123,6 +127,15 @@ deep-research-{session}/
     ├── src-001.pdf       # Original PDF (if downloaded)
     └── src-001.toc       # Table of contents with line numbers
 ```
+
+## Structured Evidence Layer
+
+The pipeline now preserves claim-level evidence between reading and synthesis instead of relying on notes alone.
+
+- Reader agents write human-readable notes to `notes/` and structured evidence manifests to `evidence/`.
+- `state.py` ingests those manifests into `evidence_units` and links findings to evidence through `finding_evidence`.
+- `summary --write-handoff` exports only finding-linked evidence rows, trimmed to a bounded size, so the writer gets a self-consistent claim substrate without token bloat.
+- Reflection and audit flows use the same evidence layer to measure support coverage and flag findings that still lack linked evidence.
 
 ## Model Tiers
 

@@ -518,6 +518,36 @@ class TestEvidenceQuery:
         assert data["results"]["count"] == 1
         assert data["results"]["units"][0]["claim_text"] == "Method claim"
 
+    def test_filter_by_question_ids_membership(self, tmp_path):
+        """evidence --question-id matches question_ids, not only primary ids."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Shared Question Paper", "doi": "10.1234/shared-q", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Primary Q2 claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q2", "question_ids": ["Q2"], "line_start": 1, "line_end": 5},
+            {"claim_text": "Shared Q1/Q2 claim", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q2", "question_ids": ["Q1", "Q2"], "line_start": 10, "line_end": 15},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        result, data = _run_state("evidence", "--session-dir", session_dir, "--question-id", "Q1")
+        assert result.returncode == 0
+        assert data["results"]["count"] == 1
+        assert data["results"]["units"][0]["claim_text"] == "Shared Q1/Q2 claim"
+
 
 class TestLinkFindingEvidence:
     def test_link_and_query(self, tmp_path):
@@ -597,6 +627,34 @@ class TestEvidenceSummary:
         assert data["results"]["by_question"]["Q2"] == 1
         assert data["results"]["with_provenance_spans"] == 1
 
+    def test_summary_counts_shared_question_ids(self, tmp_path):
+        """evidence-summary counts evidence against all linked question ids."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Shared Summary Paper", "doi": "10.1234/shared-summary", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+        manifest = {"source_id": "src-001", "units": [
+            {"claim_text": "Shared result", "claim_type": "result", "provenance_type": "content_span",
+             "primary_question_id": "Q2", "question_ids": ["Q1", "Q2"], "line_start": 1, "line_end": 5},
+        ]}
+        ef = _write_json_file(tmp_path, manifest, "ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        result, data = _run_state("evidence-summary", "--session-dir", session_dir)
+        assert result.returncode == 0
+        assert data["results"]["by_question"]["Q1"] == 1
+        assert data["results"]["by_question"]["Q2"] == 1
+
 
 class TestEvidenceInSummary:
     def test_summary_compact_includes_evidence(self, tmp_path):
@@ -631,7 +689,7 @@ class TestEvidenceInSummary:
         assert "Q1" in data["results"]["evidence_units_by_question"]
 
     def test_write_handoff_includes_evidence(self, tmp_path):
-        """summary --write-handoff includes compact evidence array."""
+        """summary --write-handoff includes only linked evidence rows."""
         session_dir = str(tmp_path / "session")
         _init_session(session_dir)
         json_file = _write_json_file(tmp_path, {
@@ -643,13 +701,21 @@ class TestEvidenceInSummary:
             capture_output=True, text=True,
         )
         manifest = {"source_id": "src-001", "units": [
-            {"claim_text": "Handoff claim", "claim_type": "result", "provenance_type": "content_span",
+            {"id": "ev-001", "claim_text": "Linked handoff claim", "claim_type": "result", "provenance_type": "content_span",
              "primary_question_id": "Q1", "relation": "supports", "evidence_strength": "strong"},
+            {"id": "ev-002", "claim_text": "Unlinked handoff claim", "claim_type": "background", "provenance_type": "content_span",
+             "primary_question_id": "Q1", "relation": "supports", "evidence_strength": "weak"},
         ]}
         ef = _write_json_file(tmp_path, manifest, "ev.json")
         subprocess.run(
             [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
              "--from-json", ef],
+            capture_output=True, text=True,
+        )
+        subprocess.run(
+            [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
+             "--text", "Linked finding", "--sources", "src-001", "--question-id", "Q1",
+             "--evidence-ids", "ev-001"],
             capture_output=True, text=True,
         )
 
@@ -664,7 +730,87 @@ class TestEvidenceInSummary:
             handoff = json.load(f)
         assert "evidence_units" in handoff
         assert len(handoff["evidence_units"]) == 1
-        assert handoff["evidence_units"][0]["claim_text"] == "Handoff claim"
+        assert handoff["evidence_units"][0]["id"] == "ev-001"
+        assert handoff["findings"][0]["evidence_ids"] == ["ev-001"]
+        assert handoff["evidence_total_count"] == 1
+
+    def test_write_handoff_preserves_legacy_question_text(self, tmp_path):
+        """summary --write-handoff keeps question text for old findings without question_id."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        subprocess.run(
+            [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
+             "--text", "Legacy finding", "--sources", "src-001", "--question", "Legacy question"],
+            capture_output=True, text=True,
+        )
+
+        subprocess.run(
+            [sys.executable, STATE_PY, "summary", "--write-handoff", "--session-dir", session_dir],
+            capture_output=True, text=True,
+        )
+        handoff_path = os.path.join(session_dir, "synthesis-handoff.json")
+        with open(handoff_path) as f:
+            handoff = json.load(f)
+
+        assert handoff["findings"][0]["question"] == "Legacy question"
+        assert "question_id" not in handoff["findings"][0]
+
+    def test_write_handoff_keeps_truncated_evidence_consistent(self, tmp_path):
+        """Truncated handoffs never leave dangling evidence references."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Large Handoff Paper", "doi": "10.1234/large-handoff", "provider": "test",
+        }, "src.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-source", "--session-dir", session_dir,
+             "--from-json", json_file],
+            capture_output=True, text=True,
+        )
+
+        units = []
+        for i in range(1, 26):
+            units.append({
+                "id": f"ev-{i:03d}",
+                "claim_text": f"Claim {i} " + ("x" * 900),
+                "claim_type": "result",
+                "provenance_type": "content_span",
+                "primary_question_id": "Q1",
+                "relation": "supports",
+                "evidence_strength": "strong",
+            })
+        ef = _write_json_file(tmp_path, {"source_id": "src-001", "units": units}, "bulk-ev.json")
+        subprocess.run(
+            [sys.executable, STATE_PY, "add-evidence", "--session-dir", session_dir,
+             "--from-json", ef],
+            capture_output=True, text=True,
+        )
+
+        for i in range(1, 26):
+            subprocess.run(
+                [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
+                 "--text", f"Finding {i}", "--sources", "src-001", "--question-id", "Q1",
+                 "--evidence-ids", f"ev-{i:03d}"],
+                capture_output=True, text=True,
+            )
+
+        subprocess.run(
+            [sys.executable, STATE_PY, "summary", "--write-handoff", "--session-dir", session_dir],
+            capture_output=True, text=True,
+        )
+        handoff_path = os.path.join(session_dir, "synthesis-handoff.json")
+        with open(handoff_path) as f:
+            handoff = json.load(f)
+
+        exported_ids = {row["id"] for row in handoff.get("evidence_units", [])}
+        assert handoff["evidence_truncated"] is True
+        assert len(exported_ids) < handoff["evidence_total_count"]
+        for finding in handoff["findings"]:
+            for evidence_id in finding.get("evidence_ids", []):
+                assert evidence_id in exported_ids
+
+        unsupported = {finding["id"] for finding in handoff["findings"] if not finding.get("evidence_ids")}
+        assert unsupported == set(handoff["findings_without_evidence"])
 
 
 class TestEvidenceInAudit:

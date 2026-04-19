@@ -92,14 +92,14 @@ Deliverable:
 - Findings become auditable summaries of explicit evidence, not free-floating prose.
 - Drafting and verification run from a shared evidence substrate with better citation precision and lower re-parsing cost.
 
-### Phase 4: Metrics, Reflection, and Tightening
+### Phase 4: Metrics, Reflection, and Tightening (DONE)
 
 Measure whether the feature actually improves quality and efficiency.
 
-- Extend `skills/reflect/scripts/metrics.py` with evidence metrics
-- Add audit checks for findings with no linked evidence
-- Add handoff-size guardrails so structured evidence does not become token bloat
-- Update architecture docs after the feature is stable
+- [x] Extend `skills/reflect/scripts/metrics.py` with evidence metrics
+- [x] Add audit checks for findings with no linked evidence
+- [x] Add handoff-size guardrails so structured evidence does not become token bloat
+- [x] Update architecture docs after the feature is stable
 
 Deliverable:
 
