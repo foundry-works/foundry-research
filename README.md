@@ -61,7 +61,7 @@ See [docs/providers.md](docs/providers.md) for the full provider reference (API 
 Running this tool requires two types of APIs: search providers and language models.
 
 - **Search Providers (Free):** You can run the entire pipeline without paying for search APIs. It integrates with 8 providers out-of-the-box (arXiv, PubMed, etc.) that don't require keys. For the mandatory web search provider, services like [Tavily](https://tavily.com) (1,000 free searches/month), [Linkup](https://linkup.so) (€5 free credits/month), and [GenSee](https://gensee.ai) (currently free in Beta) offer generous free tiers.
-- **Language Models (Paid):** The only cost is the API usage for the underlying LLMs (e.g., Anthropic's Claude 3.5 Sonnet/Haiku, or Z.ai's GLM models) that power the subagents. 
+- **Language Models (Paid):** The only cost is the API usage for the underlying LLMs (e.g., Anthropic's Claude Opus/Sonnet/Haiku, or Z.ai's GLM models) that power the subagents. 
 
 > Because the system downloads and reads 20-30 full-text PDFs, a single report consumes a significant number of tokens. To keep costs manageable, the pipeline assigns models by task complexity: Opus for high-reasoning work (acquisition, synthesis, verification, revision), Sonnet for structured reviews, and Haiku for high-volume repetitive tasks (reading sources, logging findings). I personally run the full pipeline on Z.ai's GLM-5.1 for all subagent roles without hitting rate limits — making the entire pipeline effectively free beyond search provider quotas. When using Claude models, the tiered model assignment keeps subscription usage and API costs proportional to task complexity. I have not yet benchmarked exact costs per report and will update this section when I do.
 
