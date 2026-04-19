@@ -21,6 +21,7 @@ The research methodology itself addresses what I found lacking in general-purpos
 - **Citation snowballing** over one-shot search. Traversing citation graphs finds foundational papers and follow-up work that keyword searches miss.
 - **Traceability** over opacity. Every intermediate artifact is saved — raw PDFs in `sources/`, structured reading notes in `notes/`. This means you can verify claims, dig deeper into cited sources, or use the outputs as a launch point for your own literature review: quickly identifying major ideas, prominent figures, controversies, and research findings worth following up on.
 - **Fact-checking** over trust. A dedicated verification agent cross-checks synthesized claims against downloaded source documents.
+- **Clarity and accessibility** over academese and marketing speak. A dedicated style review agent audits the draft for jargon, filler phrases, passive voice, and information density — then a reviser rewrites flagged passages in plain language without weakening scientific accuracy or removing hedging language.
 
 ## Why Foundry Research?
 
@@ -29,7 +30,7 @@ While tools like **Google's Deep Research** have popularized agentic research, t
 - **Academic-First:** Integrates with 20+ specialized providers including PubMed, arXiv, Semantic Scholar, Crossref, and OSF, rather than relying solely on web search. It utilizes grey sources like Anna's Archive and Sci-Hub to access paywalled papers that standard generalist tools miss.
 - **Full-Text PDFs:** It leverages an open-access cascade (Unpaywall, OSF, preprints) and grey sources to download full PDFs.
 - **Fact-Checked:** Uses a dedicated verification agent to cross-check synthesized claims against downloaded source documents.
-- **Structured Orchestration:** Instead of a single autonomous agent that might get stuck in loops, it uses a 5-phase pipeline (Acquire → Read → Synthesize → Verify → Revise) with 9 specialized subagents. This scaffolding allows the subagents enough agency to be creative while keeping the process on track. This structured approach also means it can run successfully on less capable (and less expensive) models like GLM-5.1.
+- **Structured Orchestration:** Instead of a single autonomous agent that might get stuck in loops, it uses a 5-phase pipeline (Acquire → Read → Synthesize → Verify → Revise) with 9 specialized subagents. This scaffolding allows the subagents enough agency to be creative while keeping the process on track. This structured approach also means it can run successfully on less capable (and less expensive) models like GLM-5.1. Subagents are assigned models proportional to their reasoning needs — complex synthesis and verification run on the most capable models, while high-volume tasks like reading and logging use smaller, cheaper ones.
 - **Terminal Integration:** It runs as a plugin inside Claude Code, the best-in-class general-purpose agentic harness. This brings deep research directly into your IDE/terminal, so you can immediately use the findings in your development workflow.
 
 ## Example Use Cases
@@ -48,7 +49,7 @@ Running this tool requires two types of APIs: search providers and language mode
 - **Search Providers (Free):** You can run the entire pipeline without paying for search APIs. It integrates with 8 providers out-of-the-box (arXiv, PubMed, etc.) that don't require keys. For the mandatory web search provider, services like [Tavily](https://tavily.com) (1,000 free searches/month), [Linkup](https://linkup.so) (€5 free credits/month), and [GenSee](https://gensee.ai) (currently free in Beta) offer generous free tiers.
 - **Language Models (Paid):** The only cost is the API usage for the underlying LLMs (e.g., Anthropic's Claude 3.5 Sonnet/Haiku, or Z.ai's GLM models) that power the subagents. 
 
-> **TODO:** We have not yet benchmarked the exact token usage for a standard deep research execution. Because the system downloads and reads 20-30 full-text PDFs, expect a single report to consume a significant number of tokens. We will update this section with a cost estimate per report soon.
+> Because the system downloads and reads 20-30 full-text PDFs, a single report consumes a significant number of tokens. To keep costs manageable, the pipeline assigns models by task complexity: Opus for high-reasoning work (acquisition, synthesis, verification, revision), Sonnet for structured reviews, and Haiku for high-volume repetitive tasks (reading sources, logging findings). I personally run the full pipeline on Z.ai's GLM-5.1 for all subagent roles without hitting rate limits — making the entire pipeline effectively free beyond search provider quotas. When using Claude models, the tiered model assignment keeps subscription usage and API costs proportional to task complexity. I have not yet benchmarked exact costs per report and will update this section when I do.
 
 ## Quick Start
 
