@@ -19,7 +19,7 @@ User → Claude Code → /deep-research skill (orchestrator)
                           └─ report-reviser agent       (surgical edits)
 ```
 
-The orchestrator is defined in `skills/deep-research/SKILL.md` and manages a 15-step workflow. Each subagent is a markdown prompt in `agents/` with YAML frontmatter specifying its model tier and available tools.
+The orchestrator is defined in `skills/deep-research/SKILL.md` and manages a structured workflow. Each subagent is a markdown prompt in `agents/` with YAML frontmatter specifying its model tier and available tools.
 
 ## Pipeline Overview
 
@@ -39,7 +39,7 @@ The orchestrator is defined in `skills/deep-research/SKILL.md` and manages a 15-
 foundry-research/
 ├── skills/                      # Source of truth for skills
 │   ├── deep-research/           # Main research skill
-│   │   ├── SKILL.md             # Orchestrator prompt (15-step workflow)
+│   │   ├── SKILL.md             # Orchestrator prompt
 │   │   ├── REFERENCE.md         # Provider guidance, session structure
 │   │   ├── requirements.txt     # Python dependencies
 │   │   ├── bootstrap-venv.sh    # Shared venv bootstrap (sourced by wrappers)
@@ -54,7 +54,7 @@ foundry-research/
 │   │       ├── download.py      # PDF cascade downloader
 │   │       ├── state.py         # SQLite session state tracker
 │   │       ├── enrich.py        # Crossref metadata enrichment
-│   │       ├── providers/       # 20 search provider modules
+│   │       ├── providers/       # 19 search provider modules
 │   │       └── _shared/         # Config, HTTP client, PDF utils, etc.
 │   ├── deep-research-revision/  # Report revision skill
 │   ├── reflect/                 # Quality evaluation skill
@@ -70,6 +70,7 @@ foundry-research/
 │   ├── style-reviewer.md
 │   └── report-reviser.md
 ├── .claude-plugin/
+│   ├── marketplace.json         # Marketplace config
 │   └── plugin.json              # Plugin manifest
 ├── hooks/
 │   └── hooks.json               # SessionStart venv bootstrap
@@ -90,34 +91,19 @@ PDF download cascade with seven sources. Tries each source in order until one su
 ### state.py
 SQLite-backed session state tracker. Manages search history, source index, findings, gaps, and audit trails. Provides summary and audit commands for pipeline observability.
 
+### triage-relevance
+LLM-powered relevance scoring for source triage. Uses Claude (Haiku) to score how relevant each source's abstract is to the research brief, catching semantic relevance that keyword overlap misses.
+
 ### enrich.py
 Crossref-based metadata enrichment. Fills in missing DOIs, titles, authors, and journal names for sources that have incomplete metadata.
 
 ## Search Provider Landscape
 
-20 providers organized by type:
-
-**Academic search** — Semantic Scholar, OpenAlex, arXiv, PubMed, bioRxiv, Crossref, OpenCitations, DBLP, CORE
-
-**Web search** — Tavily, Perplexity, Linkup, Exa, GenSee (at least one key required)
-
-**Discussion** — Reddit, Hacker News
-
-**Financial** — yfinance, SEC EDGAR
-
-**Code** — GitHub
-
-The source-acquisition agent selects providers based on research domain. See [configuration.md](configuration.md) for credential details.
+19 providers across five categories: academic search (Semantic Scholar, OpenAlex, arXiv, PubMed, bioRxiv, Crossref, OpenCitations, DBLP, CORE), web search (Tavily, Perplexity, Linkup, Exa, GenSee — at least one key required), discussion (Reddit, Hacker News), financial (yfinance, SEC EDGAR), and code (GitHub). The source-acquisition agent selects providers based on research domain. See [providers.md](providers.md) for the full reference with rate limits and capabilities, and [configuration.md](configuration.md) for credential details.
 
 ## Download Cascade
 
-When downloading a paper by DOI, the system tries sources in order:
-
-```
-OpenAlex → Unpaywall → arXiv → PMC → OSF → Anna's Archive → Sci-Hub
-```
-
-The first five are legitimate open-access channels. The last two are shadow libraries that can be disabled. See [grey-sources.md](grey-sources.md) for details.
+When downloading a paper by DOI, sources are tried in order: OpenAlex → Unpaywall → arXiv → PMC → OSF → Anna's Archive → Sci-Hub. The first five are legitimate open-access channels. The last two are shadow libraries that can be disabled. See [providers.md](providers.md) for the full cascade table and [grey-sources.md](grey-sources.md) for the ethical discussion and disable instructions.
 
 ## Session Structure
 

@@ -61,10 +61,4 @@ Sources 6 and 7 are grey sources (shadow libraries). They can be disabled via `D
 
 ## Configuration
 
-All configuration uses a 3-layer precedence system:
-
-1. **Environment variables** (highest priority)
-2. **Global config** at `~/.deep-research/config.json`
-3. **Session config** at `<session-dir>/.config.json` (lowest priority)
-
-Web search provider keys (Tavily, Perplexity, Linkup, Exa, GenSee) are read exclusively from environment variables. Academic and financial keys can go in either the config file or env vars.
+See [configuration.md](configuration.md) for the full configuration guide including precedence, key setup, and cascade source control.
