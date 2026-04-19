@@ -120,7 +120,7 @@ The extractor reads the report, identifies 5-10 load-bearing claims, classifies 
 
 #### Phase B: Parallel review and verification
 
-Shard the extracted claims into groups of 1-2. For example, 8 claims produces shards: [1,2], [3,4], [5,6], [7,8]. Smaller shards keep each verifier prompt tight and maximize parallel success rate.
+Shard the extracted claims into 1 claim per shard. For example, 8 claims produces 8 shards: [1], [2], ..., [8]. One claim per verifier minimizes blast radius — a single failure only loses one verification.
 
 **Launch synthesis-reviewer + claim-verifier shards in parallel** (all Agent calls in the same response message):
 
@@ -130,13 +130,13 @@ Shard the extracted claims into groups of 1-2. For example, 8 claims produces sh
   - Research brief
   - The reviewer audits for: internal contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity
 
-- **`claim-verifier`** subagent(s) (Opus, one per shard) with:
+- **`claim-verifier`** subagent(s) (Sonnet, one per shard) with:
   - Session directory path (absolute)
   - Shard index (1, 2, 3, ...)
-  - The 1-2 claims for this shard, passed as inline JSON (the full claim objects from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
-  - Each verifier checks its claims against primary sources via web search
+  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_type`, `claim_category`, `verification_priority`)
+  - Each verifier checks its claim against local reader notes only (no web search)
 
-**Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits at launch time. The extractor reads the report once (Sonnet, cheap), and each verifier shard receives only 1-2 claims as inline text — no report reading needed. Smaller shards also maximize parallel success rate: if one shard fails, the others still return results.
+**Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits during execution. The extractor reads the report once, and each verifier checks one claim against local reader notes — no report reading, no web searches, minimal context growth. One claim per verifier minimizes blast radius: a single failure only loses one verification.
 
 **After all agents return**, merge the verifier shard outputs: concatenate all shards' `issues` arrays. Re-number `verify-N` IDs sequentially across shards (e.g., shard 1 produces verify-1 through verify-2, shard 2 produces verify-3 through verify-5). Then apply verifier gating to decide how much of the merged verifier output to use:
 
@@ -329,11 +329,11 @@ Use the **Agent tool** to spawn subagents:
 
 - **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Returns structured issues list. Use `subagent_type: "synthesis-reviewer"`.
 - **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Returns structured claim list for verification. Use `subagent_type: "claim-extractor"`.
-- **`claim-verifier`** (Opus) — verifies pre-extracted claims against primary sources via web search. Receives 2-3 claims as inline text, no report reading. Returns verification report with per-claim verdicts. Launch one per shard. Use `subagent_type: "claim-verifier"`.
+- **`claim-verifier`** (Sonnet) — verifies a pre-extracted claim against local reader notes. One claim per verifier, no web search, no report reading. Returns verification report with verdict. Launch one per claim. Use `subagent_type: "claim-verifier"`.
 - **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Returns structured issues list. Use `subagent_type: "style-reviewer"`.
 - **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Uses Edit tool only. Returns edit manifest. Launch via Agent tool with the `agents/report-reviser.md` prompt.
 
-**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, put all Agent calls in one response message.
+**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, put all Agent calls in one response message. With 1 claim per verifier and notes-only verification, each verifier is lightweight.
 
 ---
 
