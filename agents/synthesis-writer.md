@@ -54,6 +54,8 @@ A directive from the supervisor containing:
 
 ## Output format
 
+**You MUST use the Write tool to save the report to disk.** Do not return the report content as text in your response — your response must only be the JSON manifest below. The Write tool path should be relative from the project root (e.g., `deep-research-topic/report.md`).
+
 Write the report to `report.md` in the session directory using a relative path.
 
 Structure:
@@ -96,10 +98,10 @@ For each cited source:
 
 ### Deduplication
 
-Before assigning reference numbers, run dedup on your cited sources:
+Before assigning reference numbers, run dedup on your cited sources using the CLI path provided in your directive:
 
 ```bash
-{cli_dir}/state dedup-references --sources src-001,src-003,src-007,src-012,src-042,src-089
+<cli_path>/state dedup-references --sources src-001,src-003,src-007,src-012,src-042,src-089
 ```
 
 Pass all source IDs you plan to cite as a comma-separated list. The command returns:

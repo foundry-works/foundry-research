@@ -33,7 +33,7 @@ These rules prevent the most common token-wasting failure modes. Follow them str
 
 A directive from the supervisor containing:
 - **Session directory path** (absolute)
-- **CLI directory path** (absolute path to the skill directory with `search`, `download`, `state`, `enrich` commands)
+- **CLI directory path** (absolute path to the skill directory with `search`, `download`, `state`, `enrich` commands) — use this as the prefix for all `<cli_dir>` command examples below
 - **Research brief** — scope, questions (Q1-QN), completeness criteria
 - **Mode**: `initial` or `gap`
 
@@ -43,7 +43,7 @@ Full source acquisition pipeline: connectivity test → broad searches → citat
 **Before round 1 searches, test web search connectivity:**
 
 ```bash
-{cli_dir}/search --probe-web --query "<brief-derived topic query>"
+<cli_dir>/search --probe-web --query "<brief-derived topic query>"
 ```
 
 Use a short topic-relevant query derived from the research brief (e.g., for "uncanny valley mechanisms", use `--query "uncanny valley"` — never a generic word like "test"). The command tests Tavily → Perplexity → Linkup → Gensee → Exa in sequence and returns:
@@ -184,7 +184,7 @@ Before building your manifest, check provider distribution with `state sources -
 After search rounds complete and before triage, run LLM relevance scoring to replace keyword matching with semantic relevance judgments. This prevents high-citation off-topic papers from dominating triage rankings.
 
 ```
-{cli_dir}/triage-relevance --top 60 --batch-size 15
+<cli_dir>/triage-relevance --top 60 --batch-size 15
 ```
 
 This scores source abstracts against the research brief using Haiku, writing `relevance_score` (0-1) and `relevance_rationale` back to state.db. The subsequent `state triage` command will use these LLM scores instead of keyword matching when available.
@@ -239,7 +239,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 After all downloads and recovery attempts complete, run content validation to catch mismatches that slip past the title-word check — papers sharing common words with the target title but covering a completely different topic (e.g., "The 'Uncanny Valley' and the Verisimilitude of Sexual Offenders" passing a check for a perception paper because both contain "uncanny valley").
 
 ```bash
-{cli_dir}/state validate-content --top 30 --domain-terms "term1,term2,term3" --expected-domains "domain1,domain2"
+<cli_dir>/state validate-content --top 30 --domain-terms "term1,term2,term3" --expected-domains "domain1,domain2"
 ```
 
 - **`--domain-terms`**: 5-8 key domain terms from the research brief (the same terms you used for `--brief-keywords`)
@@ -265,20 +265,20 @@ After `recover-failed` completes, check whether any **high-priority** sources (t
 
 2. Run a web search with author name + title keywords + "PDF" (use whichever web provider is available — Tavily, Exa, or Gensee):
    ```
-   {cli_dir}/search --provider tavily --query '"{first author last name}" "{key title words}" PDF' --limit 10
+   <cli_dir>/search --provider tavily --query '"{first author last name}" "{key title words}" PDF' --limit 10
    # If Tavily is down, use exa or gensee instead
    ```
    This finds author lab sites, university repositories, ResearchGate, Academia.edu, OSF, and preprint servers.
 
 3. If that misses, try a broader title-only search:
    ```
-   {cli_dir}/search --provider tavily --query '"{full paper title}" PDF' --limit 10
+   <cli_dir>/search --provider tavily --query '"{full paper title}" PDF' --limit 10
    # If Tavily is down, use exa or gensee instead
    ```
 
 4. When a search finds a plausible URL (PDF link on an `.edu` domain, ResearchGate, OSF, or author site), download the source directly by ID:
    ```
-   {cli_dir}/download <source-id> --url "<found-url>"
+   <cli_dir>/download <source-id> --url "<found-url>"
    ```
 
 **Why this works:** Authors frequently self-host their most-cited papers on personal websites, lab pages, or university repositories. A targeted Tavily search with author name + title keywords + "PDF" finds these copies when the API cascade fails.
@@ -317,7 +317,7 @@ Next step: [what to search next and why]
 
 ### Search
 ```
-{cli_dir}/search --provider <name> --query "..." --limit N --compact --brief-keywords "term1,term2,..."
+<cli_dir>/search --provider <name> --query "..." --limit N --compact --brief-keywords "term1,term2,..."
 ```
 **Always use `--compact`** — it strips abstracts and full metadata from results, returning only (id, title, citation_count, doi, provider, year, type). Full metadata is still written to state.db by the auto-ingest pipeline. You don't need abstracts in your context — titles and citation counts are sufficient for search strategy decisions.
 
@@ -327,23 +327,23 @@ Next step: [what to search next and why]
 
 Citation traversal (Semantic Scholar, PubMed only) — `--compact` and `--brief-keywords` apply here too:
 ```
-{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --limit 10 --compact --brief-keywords "..."
-{cli_dir}/search --provider semantic_scholar --references PAPER_ID --limit 10 --compact --brief-keywords "..."
-{cli_dir}/search --provider semantic_scholar --cited-by PAPER_ID --min-citations 20 --limit 10 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --cited-by PAPER_ID --limit 10 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --references PAPER_ID --limit 10 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --cited-by PAPER_ID --min-citations 20 --limit 10 --compact --brief-keywords "..."
 ```
 
 **Citation chasing workflow example:** After round 1 finds a seminal paper (e.g., src-012, "Uncanny Valley Revisited", 440 citations, S2 ID `a1b2c3d4...`):
 ```
 # Forward: who cited this paper? (filter for quality with --min-citations)
-{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --min-citations 20 --limit 20 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --min-citations 20 --limit 20 --compact --brief-keywords "..."
 # Backward: what did this paper cite? (its bibliography)
-{cli_dir}/search --provider semantic_scholar --references a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --references a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
 # If you only have a DOI (raw DOIs are auto-prefixed to DOI:10.xxx):
-{cli_dir}/search --provider semantic_scholar --cited-by 10.1016/j.cognition.2012.04.007 --limit 20 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --cited-by 10.1016/j.cognition.2012.04.007 --limit 20 --compact --brief-keywords "..."
 # If --cited-by returns 0 with --min-citations, retry without the filter:
-{cli_dir}/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --cited-by a1b2c3d4e5f6... --limit 20 --compact --brief-keywords "..."
 # Last resort: keyword search with the paper's exact title
-{cli_dir}/search --provider semantic_scholar --query "Uncanny Valley Revisited" --limit 10 --compact --brief-keywords "..."
+<cli_dir>/search --provider semantic_scholar --query "Uncanny Valley Revisited" --limit 10 --compact --brief-keywords "..."
 ```
 
 Common flags: `--limit N`, `--offset N`, `--year-range YYYY-YYYY`, `--open-access-only`, `--min-citations N`
@@ -354,40 +354,40 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 ### State
 ```
 # Manifest — use this to build your return value (replaces manual multi-command assembly)
-{cli_dir}/state manifest --mode initial --top 30   # pre-assembled manifest (single command)
-{cli_dir}/state manifest --mode gap --top 30       # gap-mode manifest
+<cli_dir>/state manifest --mode initial --top 30   # pre-assembled manifest (single command)
+<cli_dir>/state manifest --mode gap --top 30       # gap-mode manifest
 
 # Downloads — batch-size defaults to 5 (fits within default 120s Bash timeout)
 # Call in a loop until "remaining": 0 — no need for --max-batches or timeout overrides
-{cli_dir}/state download-pending --auto-download --min-relevance 0.0
-{cli_dir}/state download-pending --auto-download --prioritize-gaps --min-relevance 0.0  # gap mode
-{cli_dir}/state download-pending           # list sources without content (dry run)
+<cli_dir>/state download-pending --auto-download --min-relevance 0.0
+<cli_dir>/state download-pending --auto-download --prioritize-gaps --min-relevance 0.0  # gap mode
+<cli_dir>/state download-pending           # list sources without content (dry run)
 
 # Triage and sources — use during search rounds for coverage assessment
-{cli_dir}/state triage --top 30            # rank sources by relevance × citations
-{cli_dir}/state sources --providers        # provider distribution counts only
-{cli_dir}/state sources --title-contains "keyword"  # find specific sources
+<cli_dir>/state triage --top 30            # rank sources by relevance × citations
+<cli_dir>/state sources --providers        # provider distribution counts only
+<cli_dir>/state sources --title-contains "keyword"  # find specific sources
 
 # Gaps
-{cli_dir}/state log-gap --text "..."       # record coverage gap
-{cli_dir}/state gap-search-plan            # suggested queries for open gaps
+<cli_dir>/state log-gap --text "..."       # record coverage gap
+<cli_dir>/state gap-search-plan            # suggested queries for open gaps
 
 # Recovery — ⚠ slow command, set Bash timeout to 600000
-{cli_dir}/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
+<cli_dir>/state recover-failed --min-relevance 0.3 --title-keywords "term1,term2,term3"
 
 # PDF conversion — batch-convert unconverted PDFs and rescue PDF-in-.md files
-{cli_dir}/state convert-pdfs
+<cli_dir>/state convert-pdfs
 ```
 
 ### Relevance Scoring
 ```
-{cli_dir}/triage-relevance                 # score abstracts against brief (default: top 60, batch 15)
-{cli_dir}/triage-relevance --top 40 --batch-size 20  # custom limits
+<cli_dir>/triage-relevance                 # score abstracts against brief (default: top 60, batch 15)
+<cli_dir>/triage-relevance --top 40 --batch-size 20  # custom limits
 ```
 
 ### Download
 ```
-{cli_dir}/download --retry-sync            # recover sync failures
+<cli_dir>/download --retry-sync            # recover sync failures
 ```
 
 ### Response Schemas
@@ -487,13 +487,13 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 
 After completing all search rounds, triage, and downloads, return a **compact JSON manifest only**. Do not narrate what you did — the journal has the details, state.db has the data.
 
-**Reconcile disk and state.db counts before building the manifest.** Run `ls sources/*.md 2>/dev/null | wc -l` to get the on-disk count, then run `{cli_dir}/state download-pending` (dry run, no `--auto-download`) to get the true remaining count from state.db. If the disk count and state.db's `content_file` count differ by more than 5, state.db hasn't fully synced — report the higher of the two as `downloads.success` and add a `downloads.success_note` field explaining the discrepancy. Never report `remaining: 0` unless both disk and state.db agree.
+**Reconcile disk and state.db counts before building the manifest.** Run `ls sources/*.md 2>/dev/null | wc -l` to get the on-disk count, then run `<cli_dir>/state download-pending` (dry run, no `--auto-download`) to get the true remaining count from state.db. If the disk count and state.db's `content_file` count differ by more than 5, state.db hasn't fully synced — report the higher of the two as `downloads.success` and add a `downloads.success_note` field explaining the discrepancy. Never report `remaining: 0` unless both disk and state.db agree.
 
 **Why reconcile:** The incident manifest reported `remaining: 0` and `success: 107` when state.db showed 65 with content — a 42-source discrepancy that the orchestrator treated as informational rather than a blocker. Comparing both sources of truth catches this.
 
 **How to build the manifest:**
 
-1. Run `{cli_dir}/state manifest --mode initial --top 30` (or `--mode gap` for gap mode). This is a single readonly query that returns all the numbers you need — do NOT run separate `state sources`, `state triage`, `state searches` commands to assemble the manifest yourself.
+1. Run `<cli_dir>/state manifest --mode initial --top 30` (or `--mode gap` for gap mode). This is a single readonly query that returns all the numbers you need — do NOT run separate `state sources`, `state triage`, `state searches` commands to assemble the manifest yourself.
 2. Parse the `results` object from the command output.
 3. Add `"mode": "initial"` (or `"gap"`) and your `content_validation` results from the post-download validation step.
 4. Return the merged JSON as your response. That's it — no manual assembly needed.
