@@ -4,6 +4,8 @@ Complete reference for all search providers, download sources, and their configu
 
 ## Academic Search Providers
 
+> **Why no Google Scholar?** Google Scholar blocks automated access (CAPTCHAs, no public API). The providers below offer comparable coverage through APIs designed for programmatic use.
+
 | Provider | Domain | API Key | Rate Limit | Key Capabilities |
 |----------|--------|---------|------------|------------------|
 | **Semantic Scholar** | Cross-disciplinary | Optional (`SEMANTIC_SCHOLAR_API_KEY`) | 1 req/s (10 with key) | Keyword search, forward/backward citations, recommendations, author search, citation count filter, fields-of-study filter |

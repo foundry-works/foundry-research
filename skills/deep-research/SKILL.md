@@ -332,7 +332,7 @@ Use the **Agent tool** to spawn subagents for:
 - **`brief-writer`** (Opus) — generates the research brief with tradeoffs and adversarial questions. Receives the query, assumption surfacing results, and session directory. Returns `brief.json`. Spawn via Agent tool and include the `agents/brief-writer.md` prompt in your directive.
 
 **Synthesis** (step 14 in the workflow). Foreground, per rule 1.
-- **`synthesis-writer`** (Opus) — drafts `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "general-purpose"` and include the `agents/synthesis-writer.md` prompt in your directive.
+- **`synthesis-writer`** (Opus) — drafts `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "synthesis-writer"` so Claude Code reads the agent's `tools: Read, Glob, Write` frontmatter and grants Write access. Include the session directory and research handoff in your directive.
 
 **Review & revision** is handled by the separate `/deep-research-revision` skill, which orchestrates the `synthesis-reviewer`, `research-verifier`, `style-reviewer`, and `report-reviser` agents. The user runs it after reviewing the draft.
 

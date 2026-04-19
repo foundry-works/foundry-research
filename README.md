@@ -45,7 +45,7 @@ While tools like **Google's Deep Research** have popularized agentic research, t
 - **Community & Discussion:** Reddit, Hacker News, GitHub
 - **General Web:** Tavily, Perplexity, Linkup, Exa, GenSee
 
-See [docs/providers.md](docs/providers.md) for the full provider reference (API keys, rate limits, capabilities).
+See [docs/providers.md](docs/providers.md) for the full provider reference (API keys, rate limits, capabilities). Google Scholar is not included because it blocks automated access — the academic providers above offer comparable coverage through proper APIs.
 
 ## Example Use Cases
 
