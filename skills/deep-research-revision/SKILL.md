@@ -179,7 +179,7 @@ If the user provided feedback, add the structured user directives (from the User
 
 ### Step 2b: Deduplicate issues
 
-Before passing issues to the reviser, deduplicate across reviewer and verifier results. The synthesis-reviewer and research-verifier examine the report independently and often flag the same underlying problem with different phrasings, IDs, and suggested fixes. Without dedup, the reviser attempts to edit already-changed text and falls back to error recovery (re-read and retry) — which works, but wastes tokens and produces confusing manifests with one "resolved" and one "failed" entry for the same fix.
+Before passing issues to the reviser, deduplicate across reviewer and verifier results. The synthesis-reviewer and claim-verifier shards examine the report independently and often flag the same underlying problem with different phrasings, IDs, and suggested fixes. Without dedup, the reviser attempts to edit already-changed text and falls back to error recovery (re-read and retry) — which works, but wastes tokens and produces confusing manifests with one "resolved" and one "failed" entry for the same fix.
 
 **Why dedup here, not in the reviser:** The reviser's "group nearby issues" heuristic (planning step) partially addresses this, but it still costs tokens to read, plan around, and attempt edits on duplicate issues. Removing duplicates before handoff is cheaper and more reliable than reactive recovery after the fact.
 

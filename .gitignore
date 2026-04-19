@@ -35,6 +35,10 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Working planning docs
+PLAN.md
+PLAN-CHECKLIST.md
 .ruff_cache
 .claude/
 .cache/

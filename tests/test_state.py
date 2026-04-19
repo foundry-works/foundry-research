@@ -380,7 +380,7 @@ class TestAddEvidence:
         data = json.loads(result.stdout)
         assert data["results"]["count"] == 2
         assert len(data["results"]["evidence_ids"]) == 2
-        assert data["results"]["evidence_ids"][0] == "ev-001"
+        assert data["results"]["evidence_ids"][0] == "ev-0001"
 
     def test_rejects_unknown_source(self, tmp_path):
         """add-evidence returns error if source_id doesn't exist."""
@@ -583,11 +583,11 @@ class TestLinkFindingEvidence:
         # Link
         result, data = _run_state(
             "link-finding-evidence", "--session-dir", session_dir,
-            "--finding-id", "finding-1", "--evidence-ids", "ev-001",
+            "--finding-id", "finding-1", "--evidence-ids", "ev-0001",
         )
         assert result.returncode == 0
         assert data["results"]["count"] == 1
-        assert "ev-001" in data["results"]["linked_evidence"]
+        assert "ev-0001" in data["results"]["linked_evidence"]
 
 
 class TestEvidenceSummary:
@@ -701,9 +701,9 @@ class TestEvidenceInSummary:
             capture_output=True, text=True,
         )
         manifest = {"source_id": "src-001", "units": [
-            {"id": "ev-001", "claim_text": "Linked handoff claim", "claim_type": "result", "provenance_type": "content_span",
+            {"claim_text": "Linked handoff claim", "claim_type": "result", "provenance_type": "content_span",
              "primary_question_id": "Q1", "relation": "supports", "evidence_strength": "strong"},
-            {"id": "ev-002", "claim_text": "Unlinked handoff claim", "claim_type": "background", "provenance_type": "content_span",
+            {"claim_text": "Unlinked handoff claim", "claim_type": "background", "provenance_type": "content_span",
              "primary_question_id": "Q1", "relation": "supports", "evidence_strength": "weak"},
         ]}
         ef = _write_json_file(tmp_path, manifest, "ev.json")
@@ -715,7 +715,7 @@ class TestEvidenceInSummary:
         subprocess.run(
             [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
              "--text", "Linked finding", "--sources", "src-001", "--question-id", "Q1",
-             "--evidence-ids", "ev-001"],
+             "--evidence-ids", "ev-0001"],
             capture_output=True, text=True,
         )
 
@@ -730,8 +730,8 @@ class TestEvidenceInSummary:
             handoff = json.load(f)
         assert "evidence_units" in handoff
         assert len(handoff["evidence_units"]) == 1
-        assert handoff["evidence_units"][0]["id"] == "ev-001"
-        assert handoff["findings"][0]["evidence_ids"] == ["ev-001"]
+        assert handoff["evidence_units"][0]["id"] == "ev-0001"
+        assert handoff["findings"][0]["evidence_ids"] == ["ev-0001"]
         assert handoff["evidence_total_count"] == 1
 
     def test_write_handoff_preserves_legacy_question_text(self, tmp_path):
@@ -790,7 +790,7 @@ class TestEvidenceInSummary:
             subprocess.run(
                 [sys.executable, STATE_PY, "log-finding", "--session-dir", session_dir,
                  "--text", f"Finding {i}", "--sources", "src-001", "--question-id", "Q1",
-                 "--evidence-ids", f"ev-{i:03d}"],
+                 "--evidence-ids", f"ev-{i:04d}"],
                 capture_output=True, text=True,
             )
 

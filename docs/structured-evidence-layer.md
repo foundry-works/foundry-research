@@ -2,22 +2,22 @@
 
 ## Summary
 
-This document proposes a new capability for `foundry-research`: a structured evidence layer between reading and synthesis.
+This document describes the structured evidence layer in `foundry-research`: a capability between reading and synthesis that preserves claim-level structure across the pipeline.
 
-The current pipeline already does four hard things well:
+The pipeline already does several hard things well:
 
 - source acquisition across many providers
 - download and content-quality validation
 - session state tracking
 - multi-agent review and revision
 
-Its weakest point is the representation of evidence after reading. The system gathers high-quality sources, but the most important claims become progressively less structured as they move from source content to notes to findings to report prose.
+Previously, its weakest point was the representation of evidence after reading. The system gathered high-quality sources, but the most important claims became progressively less structured as they moved from source content to notes to findings to report prose.
 
-The proposed fix is to add `evidence_units`: machine-readable claim records with durable provenance.
+The fix is `evidence_units`: machine-readable claim records with durable provenance, extracted at reading time and carried through findings, synthesis, and verification.
 
-## Current Problem
+## Problem (Prior State)
 
-Today the knowledge flow looks like this:
+Before the evidence layer, the knowledge flow looked like this:
 
 1. the reader reads `sources/src-NNN.md`
 2. the reader writes a markdown note in `notes/src-NNN.md`
@@ -43,7 +43,7 @@ But once this becomes a `finding`, the state layer stores only prose and source 
 
 ### 3. Verification budget is spent on discovery, not checking
 
-`agents/research-verifier.md` correctly focuses on 5-10 load-bearing claims because exhaustive claim tracing is too expensive. Without structured evidence, the verifier must first reconstruct what the draft is probably grounded in before it can verify anything.
+The old `agents/research-verifier.md` (now split into `claim-extractor.md` and `claim-verifier.md`) focused on 5-10 load-bearing claims because exhaustive claim tracing was too expensive. Without structured evidence, the verifier had to first reconstruct what the draft was probably grounded in before it could verify anything.
 
 ## Goals
 
@@ -60,7 +60,7 @@ But once this becomes a `finding`, the state layer stores only prose and source 
 - Fully automate synthesis or contradiction resolution
 - Build a heavy knowledge graph before proving value
 
-## Proposed Design
+## Design
 
 ### New Concept: `evidence_units`
 

@@ -188,7 +188,7 @@ class TestEvidenceFindingLinks:
         # Link first finding to evidence
         _run_state(
             "link-finding-evidence", "--session-dir", session_dir,
-            "--finding-id", "finding-1", "--evidence-ids", "ev-001",
+            "--finding-id", "finding-1", "--evidence-ids", "ev-0001",
         )
 
         result, data = _run_metrics(session_dir)

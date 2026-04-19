@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0
+
+- Add structured evidence layer: `evidence_units` table, `evidence/` artifacts, `finding_evidence` links
+- Split `research-verifier` into `claim-extractor` (sonnet) + `claim-verifier` (sonnet, notes-only, 1 claim per shard)
+- Readers extract structured evidence manifests alongside markdown notes
+- Findings-loggers query evidence units as primary input, link findings to evidence IDs
+- Synthesis-writer reads `synthesis-handoff.json` with compact linked evidence
+- Reflect/metrics include evidence coverage metrics
+- Claim-extractor cross-references evidence units for downstream verification
+- Handoff export bounded at 15KB with no dangling evidence references
+
+## 1.1.0
+
+- Split monolithic `research-verifier` into two-phase `claim-extractor` + `claim-verifier` architecture
+- Switch claim-verifier to notes-only verification (no web search), sonnet model
+- Reduce shard size to 1 claim per verifier to minimize blast radius
+
 ## 1.0.3
 
 - Fix research-verifier agent "Prompt is too long" error by switching to notes-first verification (reads summaries before full source docs), capping full-source reads at 3-4 per session, and reducing claim count from 8-15 to 5-10

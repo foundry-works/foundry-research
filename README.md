@@ -1,6 +1,6 @@
 # foundry-research
 
-![MIT License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-1.0.5-purple) ![Last commit](https://img.shields.io/github/last-commit/foundry-works/foundry-research)
+![MIT License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-1.2.0-purple) ![Last commit](https://img.shields.io/github/last-commit/foundry-works/foundry-research)
 
 An open-source deep research plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) featuring academic database search, structured source management, and multi-agent synthesis. Designed for the Claude Code harness, but compatible with any model it supports — including [GLM models from Z.ai](https://docs.z.ai/devpack/tool/claude).
 
@@ -21,8 +21,8 @@ The research methodology itself addresses what I found lacking in general-purpos
 - **Strategic discovery** over keyword scraping. General agents grab whatever ranks highest on Google. Real researchers target domain-specific archives (arXiv, PubMed, PsyArXiv) and prioritize by citation count.
 - **Full-text depth** over abstract skimming. The open-access cascade (Unpaywall, OSF, preprints) downloads actual PDFs, not just metadata.
 - **Citation snowballing** over one-shot search. Traversing citation graphs finds foundational papers and follow-up work that keyword searches miss.
-- **Traceability** over opacity. Every intermediate artifact is saved — raw PDFs in `sources/`, structured reading notes in `notes/`. This means you can verify claims, dig deeper into cited sources, or use the outputs as a launch point for your own literature review: quickly identifying major ideas, prominent figures, controversies, and research findings worth following up on.
-- **Fact-checking** over trust. A dedicated verification agent cross-checks synthesized claims against downloaded source documents.
+- **Traceability** over opacity. Every intermediate artifact is saved — raw PDFs in `sources/`, structured reading notes in `notes/`, and machine-readable evidence records in `evidence/`. This means you can verify claims, dig deeper into cited sources, or use the outputs as a launch point for your own literature review: quickly identifying major ideas, prominent figures, controversies, and research findings worth following up on.
+- **Fact-checking** over trust. A two-phase verification pipeline extracts load-bearing claims, then checks each one against structured evidence units with source provenance — tracing every quantitative claim back to the exact passage in the original source.
 - **Clarity and accessibility** over academese and marketing speak. A dedicated style review agent audits the draft for jargon, filler phrases, passive voice, and information density — then a reviser rewrites flagged passages in plain language without weakening scientific accuracy or removing hedging language.
 
 ## Why Foundry Research?
@@ -31,7 +31,7 @@ While tools like **Google's Deep Research** have popularized agentic research, t
 
 - **Academic-First:** Integrates with 20+ specialized providers including PubMed, arXiv, Semantic Scholar, Crossref, and OSF, rather than relying solely on web search. It utilizes grey sources like Anna's Archive and Sci-Hub to access paywalled papers that standard generalist tools miss.
 - **Full-Text PDFs:** It leverages an open-access cascade (Unpaywall, OSF, preprints) and grey sources to download full PDFs.
-- **Fact-Checked:** Uses a dedicated verification agent to cross-check synthesized claims against downloaded source documents.
+- **Fact-Checked:** A two-phase verification pipeline extracts load-bearing claims from the report, cross-references them against structured evidence units with source provenance, and checks each claim against the original source text.
 - **Structured Orchestration:** Instead of a single autonomous agent that might get stuck in loops, it uses a 5-phase pipeline (Acquire → Read → Synthesize → Verify → Revise) with 9 specialized subagents. This scaffolding allows the subagents enough agency to be creative while keeping the process on track. This structured approach also means it can run successfully on less capable (and less expensive) models like GLM-5.1. Subagents are assigned models proportional to their reasoning needs — complex synthesis and verification run on the most capable models, while high-volume tasks like reading and logging use smaller, cheaper ones.
 - **Terminal Integration:** It runs as a plugin inside Claude Code, the best-in-class general-purpose agentic harness. This brings deep research directly into your IDE/terminal, so you can immediately use the findings in your development workflow.
 
@@ -140,26 +140,27 @@ Acquire → Read → Synthesize → Verify → Revise
 
 **Acquire** — The orchestrator fans out searches across 20+ providers, triages results by relevance, and downloads the most promising sources.
 
-**Read** — Each source is read, summarized, and indexed against the research questions.
+**Read** — Each source is read, summarized, and indexed against the research questions. Readers extract structured evidence units with source provenance alongside markdown notes.
 
-**Synthesize** — Findings are extracted per question, then woven into a theme-based report with citations and contradiction analysis.
+**Synthesize** — Findings are extracted per question and linked to evidence units, then woven into a theme-based report with citations and contradiction analysis.
 
-**Verify** — Claims are fact-checked against authoritative sources. Synthesis and style reviewers audit the draft for gaps, contradictions, and clarity.
+**Verify** — Load-bearing claims are extracted and verified against evidence units with source provenance. Synthesis and style reviewers audit the draft for gaps, contradictions, and clarity.
 
 **Revise** — Targeted edits are applied to the report based on reviewer feedback, preserving clean sections.
 
 ### Agents
 
-9 specialized subagents handle the work:
+10 specialized subagents handle the work:
 
 | Agent | Model | Phase | Role |
 |-------|-------|-------|------|
 | brief-writer | opus | Acquire | Generate research briefs with evaluative questions |
 | source-acquisition | opus | Acquire | Run search, triage, and download pipeline |
-| research-reader | haiku | Read | Read and summarize individual source files |
+| research-reader | haiku | Read | Read, summarize, and extract evidence units from source files |
 | findings-logger | haiku | Read | Extract and log findings per research question |
 | synthesis-writer | opus | Synthesize | Draft theme-based research reports |
-| research-verifier | opus | Verify | Fact-check claims against authoritative sources |
+| claim-extractor | sonnet | Verify | Identify load-bearing claims for verification |
+| claim-verifier | sonnet | Verify | Verify claims against evidence units and reader notes |
 | synthesis-reviewer | sonnet | Verify | Audit drafts for contradictions and gaps |
 | style-reviewer | sonnet | Verify | Audit for clarity and plain-language style |
 | report-reviser | opus | Revise | Make targeted edits based on review issues |

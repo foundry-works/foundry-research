@@ -343,42 +343,9 @@ def _extract_question_terms(questions: list) -> list[str]:
     return _extract_terms(texts)
 
 
-def _evidence_question_ids(row) -> set[str]:
-    """Return all question IDs associated with an evidence row."""
-    question_ids: set[str] = set()
-    keys = row.keys() if hasattr(row, "keys") else []
-
-    if "primary_question_id" in keys:
-        primary = row["primary_question_id"]
-        if primary:
-            question_ids.add(str(primary))
-
-    if "question_ids" in keys:
-        raw = row["question_ids"]
-        if raw:
-            try:
-                parsed = json.loads(raw)
-            except (TypeError, json.JSONDecodeError):
-                parsed = []
-            for qid in parsed:
-                if qid:
-                    question_ids.add(str(qid))
-
-    return question_ids
-
-
-def _evidence_matches_question(row, question_id: str) -> bool:
-    """Return True when an evidence row is linked to a question ID."""
-    return question_id in _evidence_question_ids(row)
-
-
-def _count_evidence_by_question(rows) -> dict[str, int]:
-    """Count evidence rows against every linked question ID."""
-    counts: dict[str, int] = {}
-    for row in rows:
-        for qid in _evidence_question_ids(row):
-            counts[qid] = counts.get(qid, 0) + 1
-    return counts
+from _shared.evidence_helpers import evidence_question_ids as _evidence_question_ids
+from _shared.evidence_helpers import evidence_matches_question as _evidence_matches_question
+from _shared.evidence_helpers import count_evidence_by_question as _count_evidence_by_question
 
 
 def _compact_linked_evidence_for_handoff(
@@ -1546,39 +1513,47 @@ def _ingest_evidence_manifest(conn: sqlite3.Connection, sid: str, manifest: dict
     if not units:
         return []
 
-    # Get current evidence count for ID generation
+    # Get current evidence count for ID generation (may collide under
+    # concurrent writes, so retry on IntegrityError with incremented suffix)
     count = conn.execute(
         "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ?", (sid,)
     ).fetchone()["c"]
 
     ids = []
     now = _now()
-    for i, unit in enumerate(units):
-        ev_id = f"ev-{count + i + 1:03d}"
-        conn.execute(
-            """INSERT INTO evidence_units
-               (id, session_id, source_id, primary_question_id, question_ids,
-                claim_text, claim_type, relation, evidence_strength,
-                provenance_type, provenance_path, line_start, line_end, quote,
-                structured_data, tags, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (ev_id, sid, source_id,
-             unit.get("primary_question_id"),
-             json.dumps(unit.get("question_ids", [])),
-             unit["claim_text"],
-             unit["claim_type"],
-             unit.get("relation", "supports"),
-             unit.get("evidence_strength"),
-             unit["provenance_type"],
-             unit.get("provenance_path"),
-             unit.get("line_start"),
-             unit.get("line_end"),
-             unit.get("quote"),
-             json.dumps(unit.get("structured_data", {})),
-             json.dumps(unit.get("tags", [])),
-             "active", now)
-        )
+    next_seq = count + 1
+    for unit in units:
+        while True:
+            ev_id = f"ev-{next_seq:04d}"
+            try:
+                conn.execute(
+                    """INSERT INTO evidence_units
+                       (id, session_id, source_id, primary_question_id, question_ids,
+                        claim_text, claim_type, relation, evidence_strength,
+                        provenance_type, provenance_path, line_start, line_end, quote,
+                        structured_data, tags, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (ev_id, sid, source_id,
+                     unit.get("primary_question_id"),
+                     json.dumps(unit.get("question_ids", [])),
+                     unit["claim_text"],
+                     unit["claim_type"],
+                     unit.get("relation", "supports"),
+                     unit.get("evidence_strength"),
+                     unit["provenance_type"],
+                     unit.get("provenance_path"),
+                     unit.get("line_start"),
+                     unit.get("line_end"),
+                     unit.get("quote"),
+                     json.dumps(unit.get("structured_data", {})),
+                     json.dumps(unit.get("tags", [])),
+                     "active", now)
+                )
+                break
+            except sqlite3.IntegrityError:
+                next_seq += 1
         ids.append(ev_id)
+        next_seq += 1
     return ids
 
 
@@ -1631,6 +1606,12 @@ def cmd_evidence(args):
     if getattr(args, "claim_type", None):
         query += " AND claim_type = ?"
         params.append(args.claim_type)
+
+    question_id = getattr(args, "question_id", None)
+    if question_id:
+        query += " AND (primary_question_id = ? OR question_ids LIKE ?)"
+        params.extend([question_id, f'%"{question_id}"%'])
+
     status = getattr(args, "status", "active")
     if status:
         query += " AND status = ?"
@@ -1638,9 +1619,6 @@ def cmd_evidence(args):
 
     query += " ORDER BY id"
     rows = conn.execute(query, params).fetchall()
-    question_id = getattr(args, "question_id", None)
-    if question_id:
-        rows = [r for r in rows if _evidence_matches_question(r, question_id)]
     conn.close()
 
     units = []

@@ -14,7 +14,8 @@ User → Claude Code → /deep-research skill (orchestrator)
                           ├─ findings-logger agents     (extract findings per question)
                           ├─ synthesis-writer agent     (draft report)
                           ├─ synthesis-reviewer agent   (audit for contradictions)
-                          ├─ research-verifier agent    (fact-check claims)
+                          ├─ claim-extractor agent      (identify load-bearing claims)
+                          ├─ claim-verifier agents      (verify claims against evidence)
                           ├─ style-reviewer agent       (plain-language review)
                           └─ report-reviser agent       (surgical edits)
 ```
@@ -67,7 +68,8 @@ foundry-research/
 │   ├── findings-logger.md
 │   ├── synthesis-writer.md
 │   ├── synthesis-reviewer.md
-│   ├── research-verifier.md
+│   ├── claim-extractor.md
+│   ├── claim-verifier.md
 │   ├── style-reviewer.md
 │   └── report-reviser.md
 ├── .claude-plugin/
@@ -141,8 +143,8 @@ The pipeline now preserves claim-level evidence between reading and synthesis in
 
 Subagents use different model tiers based on their task:
 
-- **opus** — Complex reasoning tasks: brief writing, source acquisition, synthesis, verification, revision
-- **sonnet** — Review tasks: contradiction checking, style auditing
+- **opus** — Complex reasoning tasks: brief writing, source acquisition, synthesis, revision
+- **sonnet** — Review and verification tasks: contradiction checking, claim extraction and verification, style auditing
 - **haiku** — High-volume tasks: reading sources, logging findings
 
 ## Installation Flow

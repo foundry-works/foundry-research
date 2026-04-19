@@ -10,10 +10,15 @@ Usage:
 """
 
 import json
+import os
 import re
 import sqlite3
 import sys
 from pathlib import Path
+
+# Reuse evidence helpers from the deep-research skill to avoid logic divergence
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "deep-research", "scripts"))
+from _shared.evidence_helpers import count_evidence_by_question
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -309,32 +314,6 @@ def _journal_metrics(session_dir: Path) -> dict:
     }
 
 
-def _evidence_question_ids(row) -> set[str]:
-    """Return all question IDs linked to an evidence row."""
-    qids: set[str] = set()
-    if row["primary_question_id"]:
-        qids.add(str(row["primary_question_id"]))
-    raw = row["question_ids"]
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            parsed = []
-        for qid in parsed:
-            if qid:
-                qids.add(str(qid))
-    return qids
-
-
-def _count_evidence_by_question(rows) -> dict[str, int]:
-    """Count evidence rows across every linked question ID."""
-    counts: dict[str, int] = {}
-    for row in rows:
-        for qid in _evidence_question_ids(row):
-            counts[qid] = counts.get(qid, 0) + 1
-    return counts
-
-
 # ---------------------------------------------------------------------------
 # Evidence metrics
 # ---------------------------------------------------------------------------
@@ -372,7 +351,7 @@ def _evidence_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
         ).fetchall()
     }
 
-    by_question = _count_evidence_by_question(cur.execute(
+    by_question = count_evidence_by_question(cur.execute(
         "SELECT primary_question_id, question_ids FROM evidence_units "
         "WHERE status = 'active'"
     ).fetchall())
