@@ -59,9 +59,9 @@ A directive from the supervisor containing:
 
 ## Output format
 
-**You MUST use the Write tool to save the report to disk.** Do not return the report content as text in your response — your response must only be the JSON manifest below. The Write tool path should be relative from the project root (e.g., `deep-research-topic/report.md`).
+**You MUST use the Write tool to save the report to disk.** Do not return the report content as text in your response — your response must only be the JSON manifest below. The Write tool path should be relative from the project root.
 
-Write the report to `report.md` in the session directory using a relative path.
+Write the report to `draft.md` (not `report.md`) in the session directory using a relative path. Claude Code blocks subagents from writing to files named `report.md` — always use `draft.md`. The orchestrator will rename it after you return.
 
 Structure:
 ```markdown
@@ -129,7 +129,7 @@ After finalizing the references list (post-dedup, post-drop), verify that refere
 
 After writing the report, return a compact JSON manifest:
 ```json
-{"status": "ok", "path": "deep-research-topic/report.md", "word_count": 2500, "sources_cited": 15}
+{"status": "ok", "path": "deep-research-topic/draft.md", "word_count": 2500, "sources_cited": 15}
 ```
 
 ## Error handling

@@ -212,11 +212,17 @@ These prevent the most common token-wasting failure modes. Follow them strictly.
 
     **Why both structured and narrative:** The structured findings in `synthesis-handoff.json` give the writer precise evidence with source IDs for citation. The narrative summary gives interpretive context — which findings are strongest, where sources conflict, what the evidence pattern means. Either alone is insufficient: structured data without interpretation produces a list, not a synthesis; narrative without structured data loses citation precision and risks the writer misattributing claims.
 
-    The writer reads `notes/` and `sources/metadata/` directly, drafts `report.md`, and returns a JSON manifest.
+    The writer reads `notes/` and `sources/metadata/` directly, drafts `draft.md`, and returns a JSON manifest.
 
-    **c. Verify reference numbering.** After the synthesis-writer returns, check that references in `report.md` are sequentially numbered [1] through [N] with no gaps. If any numbers are skipped (e.g., [8] missing after a source was dropped during synthesis), renumber them before proceeding to revision. The synthesis-writer has renumbering logic, but it doesn't always catch gaps from late-stage source removal — this verification step catches what the agent missed. **Why:** Reference gaps are cosmetic but reduce professional polish and can confuse readers who look for a cited source.
+    **c. Rename draft to report.** After the synthesis-writer returns, rename `draft.md` to `report.md`:
+    ```bash
+    mv {session_dir}/draft.md {session_dir}/report.md
+    ```
+    The writer uses `draft.md` because Claude Code blocks subagents from writing to files named `report.md`. The orchestrator renames it immediately after the writer returns.
 
-    **d. Present the draft and hand off to the user.** Once the writer returns:
+    **d. Verify reference numbering.** Check that references in `report.md` are sequentially numbered [1] through [N] with no gaps. If any numbers are skipped (e.g., [8] missing after a source was dropped during synthesis), renumber them before proceeding to revision. The synthesis-writer has renumbering logic, but it doesn't always catch gaps from late-stage source removal — this verification step catches what the agent missed. **Why:** Reference gaps are cosmetic but reduce professional polish and can confuse readers who look for a cited source.
+
+    **e. Present the draft and hand off to the user.** Once the writer returns:
     1. Read and present `report.md` to the user
     2. Log the draft completion in journal.md (sources used, coverage summary)
     3. Tell the user: "Draft is at `report.md`. Review it, then run `/deep-research-revision <session-dir>` to review and revise — you can include feedback like 'section 3 is too long' or 'the conclusion ignores cost constraints'."
@@ -360,7 +366,7 @@ Use the **Agent tool** to spawn subagents for:
 - **`brief-writer`** (Opus) — generates the research brief with tradeoffs and adversarial questions. Receives the query, assumption surfacing results, and session directory. Returns `brief.json`. Spawn via Agent tool and include the `agents/brief-writer.md` prompt in your directive.
 
 **Synthesis** (step 14 in the workflow). Foreground, per rule 1.
-- **`synthesis-writer`** (Opus) — drafts `report.md`. Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "synthesis-writer"` so Claude Code reads the agent's `tools: Read, Glob, Write` frontmatter and grants Write access. Include the session directory and research handoff in your directive.
+- **`synthesis-writer`** (Opus) — drafts `draft.md` (renamed to `report.md` by orchestrator). Gets a clean context with only the research handoff, no search logistics. Spawn via Agent tool with `subagent_type: "synthesis-writer"` so Claude Code reads the agent's `tools: Read, Glob, Write` frontmatter and grants Write access. Include the session directory and research handoff in your directive.
 
 **Review & revision** is handled by the separate `/deep-research-revision` skill, which orchestrates the `synthesis-reviewer`, `claim-extractor`, `claim-verifier`, `style-reviewer`, and `report-reviser` agents. The user runs it after reviewing the draft.
 
