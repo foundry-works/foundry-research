@@ -178,6 +178,7 @@ Dependencies are auto-installed on first use via virtual environment.
 - [Configuration](docs/configuration.md) — API keys, provider setup
 - [Grey Sources](docs/grey-sources.md) — shadow library details and opt-out
 - [Architecture](docs/architecture.md) — skill/agent model, pipeline overview
+- [Web Research Intelligence](docs/web-research-intelligence.md) — design note for non-academic, current web-heavy research
 - [Design Principles](PRINCIPLES.md) — project philosophy
 - [Plugin Development](CLAUDE.md) — local testing and gotchas
 
