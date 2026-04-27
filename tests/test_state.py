@@ -27,7 +27,7 @@ class TestSchemaInit:
         ).fetchall()}
         conn.close()
 
-        expected = {"sessions", "brief", "searches", "sources", "findings", "gaps", "metrics"}
+        expected = {"sessions", "brief", "searches", "sources", "findings", "gaps", "metrics", "source_flags"}
         assert expected.issubset(tables)
 
     def test_init_creates_indexes(self, tmp_path):
@@ -279,6 +279,332 @@ class TestSummaryCompact:
         assert "provider" in entry
         # Abstract should NOT be in summary source list
         assert "abstract" not in entry
+
+
+# ---------------------------------------------------------------------------
+# 6. Optional support context
+# ---------------------------------------------------------------------------
+
+class TestSupportContext:
+    def test_support_context_works_without_policy(self, tmp_path):
+        """support-context degrades cleanly when evidence-policy.yaml is absent."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        result, data = _run_state("support-context", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        policy = data["results"]["evidence_policy"]
+        assert policy["present"] is False
+        assert policy["path"] == "evidence-policy.yaml"
+        assert policy["fields"]["source_expectations"] is None
+        assert policy["fields"]["high_stakes_claim_patterns"] == []
+
+    def test_support_context_reads_policy(self, tmp_path):
+        """support-context includes optional run-local policy fields when present."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        with open(os.path.join(session_dir, "evidence-policy.yaml"), "w") as f:
+            f.write(
+                "\n".join([
+                    'source_expectations: "Prefer primary sources for quantitative claims."',
+                    'freshness_requirement: "high for current prices"',
+                    'inference_tolerance: "low"',
+                    "high_stakes_claim_patterns:",
+                    "  - current pricing",
+                    "  - legal requirements",
+                    "known_failure_modes:",
+                    "  - treating stale sources as current",
+                ])
+            )
+
+        result, data = _run_state("support-context", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        policy = data["results"]["evidence_policy"]
+        assert policy["present"] is True
+        assert policy["fields"]["source_expectations"] == "Prefer primary sources for quantitative claims."
+        assert policy["fields"]["freshness_requirement"] == "high for current prices"
+        assert policy["fields"]["inference_tolerance"] == "low"
+        assert policy["fields"]["high_stakes_claim_patterns"] == ["current pricing", "legal requirements"]
+        assert policy["fields"]["known_failure_modes"] == ["treating stale sources as current"]
+
+    def test_write_handoff_includes_support_context(self, tmp_path):
+        """summary --write-handoff gives the synthesis writer the optional support context."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        result, data = _run_state("summary", "--write-handoff", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        handoff_path = os.path.join(session_dir, "synthesis-handoff.json")
+        assert data["results"]["path"].endswith("synthesis-handoff.json")
+        with open(handoff_path) as f:
+            handoff = json.load(f)
+        assert handoff["support_context"]["schema_version"] == "support-context-v1"
+        assert handoff["support_context"]["evidence_policy"]["present"] is False
+
+
+# ---------------------------------------------------------------------------
+# 7. Source caution flags
+# ---------------------------------------------------------------------------
+
+class TestSourceFlags:
+    def _setup_session_with_source(self, tmp_path):
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        json_file = _write_json_file(tmp_path, {
+            "title": "Source Flag Test Paper",
+            "doi": "10.1234/source-flag",
+            "provider": "test",
+        }, "source_flag_source.json")
+        result, _ = _run_state("add-source", "--session-dir", session_dir, "--from-json", json_file)
+        assert result.returncode == 0
+        return session_dir
+
+    def test_set_and_list_source_flags(self, tmp_path):
+        """Source caution flags are additive scoped annotations."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        result, data = _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-001",
+            "--flag", "secondary_source",
+            "--rationale", "Review article summarizing primary studies.",
+        )
+        assert result.returncode == 0
+        assert data["results"]["id"] == "sflag-001"
+        assert data["results"]["created"] is True
+
+        result, data = _run_state("source-flags", "--session-dir", session_dir, "--source-id", "src-001")
+        assert result.returncode == 0
+        assert len(data["results"]) == 1
+        assert data["results"][0]["flag"] == "secondary_source"
+        assert data["results"][0]["applies_to_type"] == "run"
+
+    def test_scoped_source_flags_require_target_id(self, tmp_path):
+        """Narrower source caution scopes require applies_to_id."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        result, data = _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-001",
+            "--flag", "potentially_stale",
+            "--applies-to", "finding",
+            "--rationale", "Older source for a current-state finding.",
+        )
+        assert data["status"] == "error"
+        assert "applies-to-id is required" in data["errors"][0]
+
+    def test_source_flag_summary_and_quality_summary(self, tmp_path):
+        """Summaries include raw quality aliases, canonical quality counts, and caution counts."""
+        session_dir = self._setup_session_with_source(tmp_path)
+
+        _run_state(
+            "set-quality", "--session-dir", session_dir,
+            "--id", "src-001", "--quality", "mismatched",
+        )
+        _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-001",
+            "--flag", "potentially_stale",
+            "--applies-to", "finding",
+            "--applies-to-id", "finding-1",
+            "--rationale", "Source is old for a current pricing claim.",
+        )
+
+        result, data = _run_state("source-flag-summary", "--session-dir", session_dir, "--include-rows")
+        assert result.returncode == 0
+        assert data["results"]["total"] == 1
+        assert data["results"]["by_flag"] == {"potentially_stale": 1}
+        assert data["results"]["by_scope"] == {"finding": 1}
+        assert data["results"]["flags"][0]["applies_to_id"] == "finding-1"
+
+        result, data = _run_state("source-quality-summary", "--session-dir", session_dir)
+        assert result.returncode == 0
+        assert data["results"]["raw_counts"]["mismatched"] == 1
+        assert data["results"]["access_quality_counts"]["title_content_mismatch"] == 1
+        assert data["results"]["source_caution_flags"]["total"] == 1
+
+    def test_support_context_includes_source_flags(self, tmp_path):
+        """support-context surfaces source caution flags when present."""
+        session_dir = self._setup_session_with_source(tmp_path)
+        _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-001",
+            "--flag", "self_interested_source",
+            "--rationale", "Vendor-authored source.",
+        )
+
+        result, data = _run_state("support-context", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        assert data["results"]["available_context"]["source_caution_flags"] is True
+        flags = data["results"]["source_caution_flags"]
+        assert flags["total"] == 1
+        assert flags["by_flag"] == {"self_interested_source": 1}
+
+
+# ---------------------------------------------------------------------------
+# 8. Report grounding manifests
+# ---------------------------------------------------------------------------
+
+class TestReportGrounding:
+    def _setup_grounded_report(self, tmp_path):
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        source_file = _write_json_file(tmp_path, {
+            "title": "Grounding Source",
+            "doi": "10.1234/grounding",
+            "provider": "test",
+        }, "grounding_source.json")
+        result, _ = _run_state("add-source", "--session-dir", session_dir, "--from-json", source_file)
+        assert result.returncode == 0
+
+        evidence_file = _write_json_file(tmp_path, {
+            "source_id": "src-001",
+            "units": [
+                {
+                    "claim_text": "Grounded finding evidence.",
+                    "claim_type": "result",
+                    "provenance_type": "content_span",
+                    "primary_question_id": "Q1",
+                }
+            ],
+        }, "grounding_evidence.json")
+        result, _ = _run_state("add-evidence", "--session-dir", session_dir, "--from-json", evidence_file)
+        assert result.returncode == 0
+
+        result, _ = _run_state(
+            "log-finding", "--session-dir", session_dir,
+            "--text", "Grounded finding.",
+            "--sources", "src-001",
+            "--question-id", "Q1",
+            "--evidence-ids", "ev-0001",
+        )
+        assert result.returncode == 0
+
+        report_path = os.path.join(session_dir, "draft.md")
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Grounded paragraph with a citation [1].\n\n"
+                "## References\n\n"
+                "[1] Grounding Source.\n"
+            )
+
+        result, data = _run_state("report-paragraphs", "--session-dir", session_dir, "--report", report_path)
+        assert result.returncode == 0
+        paragraph = next(p for p in data["results"]["paragraphs"] if p["section"] == "Executive Summary")
+
+        manifest = {
+            "schema_version": "report-grounding-v1",
+            "report_path": report_path,
+            "targets": [
+                {
+                    "target_id": "rp-001",
+                    "section": paragraph["section"],
+                    "paragraph": paragraph["paragraph"],
+                    "text_hash": paragraph["text_hash"],
+                    "text_snippet": paragraph["text_snippet"],
+                    "citation_refs": ["[1]"],
+                    "source_ids": ["src-001"],
+                    "finding_ids": ["finding-1"],
+                    "evidence_ids": ["ev-0001"],
+                    "warnings": [],
+                    "grounding_status": "declared_grounded",
+                }
+            ],
+        }
+        manifest_path = os.path.join(session_dir, "report-grounding.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+        return session_dir, report_path, manifest_path, manifest
+
+    def test_validate_report_grounding_valid_manifest(self, tmp_path):
+        """validate-report-grounding accepts a structurally consistent manifest."""
+        session_dir, _, manifest_path, _ = self._setup_grounded_report(tmp_path)
+
+        result, data = _run_state("validate-report-grounding", "--session-dir", session_dir, "--manifest", manifest_path)
+
+        assert result.returncode == 0
+        assert data["results"]["valid"] is True
+        assert data["results"]["summary"]["valid_targets"] == 1
+        assert data["results"]["summary"]["ungrounded_paragraphs"] == 0
+
+        _, context = _run_state("support-context", "--session-dir", session_dir)
+        assert context["results"]["available_context"]["report_grounding"] is True
+        assert context["results"]["report_grounding"]["status"] == "declared_provenance_not_verified"
+
+    def test_validate_report_grounding_stale_hash(self, tmp_path):
+        """Stale paragraph hashes are surfaced, not trusted."""
+        session_dir, _, manifest_path, manifest = self._setup_grounded_report(tmp_path)
+        manifest["targets"][0]["text_hash"] = "sha256:" + ("0" * 64)
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        _, data = _run_state("validate-report-grounding", "--session-dir", session_dir, "--manifest", manifest_path)
+
+        target = data["results"]["targets"][0]
+        assert data["results"]["valid"] is False
+        assert target["status"] == "stale_hash"
+        assert target["issues"][0]["code"] == "stale_hash"
+
+    def test_validate_report_grounding_missing_citation(self, tmp_path):
+        """Citation refs listed in a target must occur in that target text."""
+        session_dir, _, manifest_path, manifest = self._setup_grounded_report(tmp_path)
+        manifest["targets"][0]["citation_refs"] = ["[2]"]
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        _, data = _run_state("validate-report-grounding", "--session-dir", session_dir, "--manifest", manifest_path)
+
+        codes = [issue["code"] for issue in data["results"]["targets"][0]["issues"]]
+        assert data["results"]["valid"] is False
+        assert "citation_ref_missing" in codes
+
+    def test_validate_report_grounding_missing_referenced_ids(self, tmp_path):
+        """Missing source, finding, and evidence IDs are surfaced."""
+        session_dir, _, manifest_path, manifest = self._setup_grounded_report(tmp_path)
+        manifest["targets"][0]["source_ids"] = ["src-999"]
+        manifest["targets"][0]["finding_ids"] = ["finding-999"]
+        manifest["targets"][0]["evidence_ids"] = ["ev-9999"]
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        _, data = _run_state("validate-report-grounding", "--session-dir", session_dir, "--manifest", manifest_path)
+
+        missing = [
+            (issue["field"], issue["id"])
+            for issue in data["results"]["targets"][0]["issues"]
+            if issue["code"] == "missing_referenced_id"
+        ]
+        assert data["results"]["valid"] is False
+        assert ("source_ids", "src-999") in missing
+        assert ("finding_ids", "finding-999") in missing
+        assert ("evidence_ids", "ev-9999") in missing
+
+    def test_validate_report_grounding_reports_ungrounded_paragraphs(self, tmp_path):
+        """Body paragraphs without grounding entries are audit findings, not hard gates."""
+        session_dir, report_path, manifest_path, _ = self._setup_grounded_report(tmp_path)
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Grounded paragraph with a citation [1].\n\n"
+                "Second ungrounded paragraph.\n\n"
+                "## References\n\n"
+                "[1] Grounding Source.\n"
+            )
+
+        _, data = _run_state("validate-report-grounding", "--session-dir", session_dir, "--manifest", manifest_path)
+
+        assert data["results"]["valid"] is False
+        assert data["results"]["summary"]["ungrounded_paragraphs"] == 1
+        assert data["results"]["issues"][0]["code"] == "ungrounded_paragraphs"
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +1049,7 @@ class TestEvidenceInSummary:
             [sys.executable, STATE_PY, "summary", "--write-handoff", "--session-dir", session_dir],
             capture_output=True, text=True,
         )
-        data = json.loads(result.stdout)
+        assert result.returncode == 0
         # Read the handoff file
         handoff_path = os.path.join(session_dir, "synthesis-handoff.json")
         with open(handoff_path) as f:

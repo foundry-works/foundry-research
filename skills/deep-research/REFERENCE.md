@@ -24,6 +24,8 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 ./deep-research-{session}/
 ├── state.db              # SQLite — search history + source index (source of truth)
 ├── journal.md            # Your reasoning scratchpad (append-only)
+├── evidence-policy.yaml  # Optional run-local support calibration
+├── report-grounding.json # Declared paragraph-level report provenance
 ├── report.md             # Final report
 ├── evidence/             # Per-source evidence manifests (from reader subagents)
 │   └── src-001.json
@@ -46,6 +48,83 @@ Provider selection is handled by the `source-acquisition` agent (see `agents/sou
 ### Evidence Units
 
 Reader agents produce structured evidence manifests (`evidence/src-NNN.json`) alongside markdown notes. Each manifest contains 3-8 load-bearing claim records with source provenance, claim type, and optional quantitative fields. The orchestrator batch-ingests them via `state add-evidence-batch` after all readers complete. Query with `state evidence` (filter by `--source-id`, `--question-id`, `--claim-type`) and aggregate with `state evidence-summary`.
+
+### Source Quality And Caution
+
+`sources.quality` is reserved for access and extraction condition:
+
+- `ok`
+- `inaccessible`
+- `abstract_only`
+- `degraded_extraction`
+- `metadata_incomplete`
+- `title_content_mismatch`
+
+Legacy sessions may still contain `degraded`, `mismatched`, `empty`, `paywall_stub`, `paywall_page`, or `reader_validated`; `state source-quality-summary` maps those to canonical access/extraction categories without rewriting old state.
+
+Use source caution flags for source authority or context-specific warnings:
+
+- `secondary_source`
+- `self_interested_source`
+- `undated`
+- `potentially_stale`
+- `low_relevance`
+
+Set them with `state set-source-flag --source-id src-NNN --flag potentially_stale --applies-to finding --applies-to-id finding-1 --rationale "..."`. List and aggregate them with `state source-flags`, `state source-flag-summary`, and `state source-quality-summary`.
+
+### Optional Evidence Policy
+
+When useful, write a short `evidence-policy.yaml` in the session root. It is advisory calibration for the agents, not required state and not a delivery gate. The v1 fields are:
+
+```yaml
+source_expectations: "Prefer primary sources for quantitative, legal, scientific, and current claims."
+freshness_requirement: "High for current prices, products, regulations, and fast-changing software capabilities."
+inference_tolerance: "low"
+high_stakes_claim_patterns:
+  - "quantitative claims"
+  - "legal or regulatory claims"
+known_failure_modes:
+  - "treating stale sources as current"
+  - "using secondary summaries as primary evidence"
+```
+
+Use `state support-context` to format this policy for prompts. If the file is absent, the command still returns valid JSON with `evidence_policy.present: false`.
+
+### Report Grounding Manifest
+
+`report-grounding.json` is a file manifest written beside `draft.md`/`report.md`. It is declared provenance from the writer, not verified support. Deterministic tools may validate structure, hashes, citation locations, and referenced IDs, but an agent still judges semantic support.
+
+V1 schema:
+
+```json
+{
+  "schema_version": "report-grounding-v1",
+  "report_path": "deep-research-topic/draft.md",
+  "targets": [
+    {
+      "target_id": "rp-001",
+      "section": "Executive Summary",
+      "paragraph": 1,
+      "text_hash": "sha256:...",
+      "text_snippet": "Paragraph text snippet...",
+      "citation_refs": ["[1]", "[3]"],
+      "source_ids": ["src-001"],
+      "finding_ids": ["finding-1"],
+      "evidence_ids": ["ev-0001"],
+      "warnings": [],
+      "grounding_status": "declared_grounded",
+      "not_grounded_reason": null,
+      "support_note": "Optional writer-authored note."
+    }
+  ]
+}
+```
+
+Required target fields: `target_id`, `section`, `paragraph`, `text_hash`, `text_snippet`, `citation_refs`, `source_ids`, `finding_ids`, `evidence_ids`, and `warnings`.
+
+Optional advisory fields: `grounding_status`, `not_grounded_reason`, `support_note`, `support_level`, and `claim_type`.
+
+Use `state report-paragraphs --report <path>` to get paragraph locators and hashes. Hashes are `sha256:` over paragraph text after collapsing whitespace and trimming ends. Use `state validate-report-grounding` to surface missing manifests, stale hashes, citation-ref mismatches, missing source/finding/evidence IDs, and ungrounded body paragraphs.
 
 ---
 

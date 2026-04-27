@@ -46,7 +46,7 @@ This outputs a JSON object to stdout with all search, source, coverage, report, 
 
 Key output fields in `metrics`:
 - **Search:** `searches_total`, `searches_zero_ingested`, `search_providers`, `search_modes`, `search_types`, `searches_by_provider`
-- **Source:** `sources_total`, `sources_downloaded`, `sources_with_notes`, `sources_with_doi`, `sources_with_venue`, `sources_with_citations`, `sources_orphaned`, `sources_by_provider`, `sources_by_type`, `sources_by_quality`, `sources_by_status`, `sources_by_year`, `metadata_json_count`, `notes_on_disk`
+- **Source:** `sources_total`, `sources_downloaded`, `sources_with_notes`, `sources_with_doi`, `sources_with_venue`, `sources_with_citations`, `sources_orphaned`, `sources_by_provider`, `sources_by_type`, `sources_by_quality`, `sources_by_access_quality`, `source_caution_flags_total`, `source_caution_flags_by_flag`, `source_caution_flags_by_scope`, `sources_with_caution_flags`, `sources_by_status`, `sources_by_year`, `metadata_json_count`, `notes_on_disk`
 - **Coverage:** `findings_total`, `findings_by_question`, `findings_unsourced`, `gaps_total`, `gaps_resolved`, `gaps_open`
 - **Evidence:** `evidence_units_total`, `evidence_units_by_claim_type`, `evidence_units_by_question`, `evidence_units_by_source`, `evidence_units_with_spans`, `evidence_units_avg_per_source`, `findings_with_evidence`, `findings_without_evidence`, `evidence_json_files`, `evidence_link_count`
 - **Report:** `report_exists`, `report_word_count`, `report_section_count`, `report_reference_count`, `report_unique_citations`, `report_citation_instances`, `report_max_citation`, `report_phantom_refs`
@@ -69,6 +69,9 @@ SELECT provider, query, search_mode, search_type, result_count, ingested_count F
 
 -- Source inventory with quality tiers
 SELECT id, title, type, provider, quality, status, relevance_score, content_file, is_read FROM sources;
+
+-- Source caution flags
+SELECT source_id, flag, applies_to_type, applies_to_id, rationale FROM source_flags;
 
 -- Findings with source backing
 SELECT id, question, text, sources FROM findings;
@@ -102,7 +105,8 @@ Compute all of the following:
 **Source metrics:**
 - Total sources tracked, downloaded (status = 'downloaded'), with reader notes (is_read = 1)
 - Sources by provider, by type (academic/web/preprint/etc.)
-- Quality tier counts: ok, abstract_only, degraded, mismatched, reader_validated
+- Quality/access counts: raw legacy quality values plus canonical access/extraction categories (`ok`, `inaccessible`, `abstract_only`, `degraded_extraction`, `metadata_incomplete`, `title_content_mismatch`)
+- Source caution counts: secondary, self-interested, undated, potentially stale, and low-relevance flags
 - Sources with DOI, with venue, with citation_count — metadata completeness
 - Year distribution (for recency analysis)
 
@@ -198,7 +202,7 @@ Ground every score in specific evidence. "Search Strategy: 7 — used 4 provider
 
 - **Provider concentration** can indicate corpus bias — if 80% of sources come from one provider, the bibliography reflects that provider's indexing choices, not necessarily the best available evidence. But concentration is appropriate when the domain has a canonical database (PubMed for clinical research, arXiv for ML). Evaluate whether concentration is a choice or a limitation.
 
-- **Quality tiers** matter for citation integrity. Sources with quality `ok` or `reader_validated` are fully citable. `abstract_only` sources provide metadata but weren't deeply read. `degraded` sources had PDF conversion issues. `mismatched` sources downloaded wrong content. The ratio of deeply-read sources to total sources indicates research depth.
+- **Quality tiers** matter for citation integrity. Canonical access/extraction quality values are `ok`, `inaccessible`, `abstract_only`, `degraded_extraction`, `metadata_incomplete`, and `title_content_mismatch`. Legacy values such as `degraded`, `mismatched`, and `reader_validated` may appear in old sessions and are mapped in `sources_by_access_quality`. Source caution flags are separate: they describe authority, staleness, self-interest, dating, or relevance concerns without overwriting extraction quality.
 
 - **Source ID gaps** (non-sequential IDs like src-001, src-003, src-007) are normal — deduplication removes duplicate sources, creating gaps by design. Do not penalize this.
 

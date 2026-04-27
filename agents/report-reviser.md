@@ -14,6 +14,7 @@ A directive from the supervisor containing:
 - **Draft path** — relative path to the report to revise (e.g., `deep-research-topic/report.md`)
 - **Issues list** — structured issues from one or more of: synthesis-reviewer, claim-verifier, style-reviewer, user feedback
 - **Pass type** — one of `"accuracy"`, `"style"`, or `"combined"`. Combined passes contain both accuracy and style issues in a single list, with accuracy issues ordered before style issues. **Why accuracy first in combined mode:** Accuracy edits (correcting numbers, adding hedges, qualifying claims) may change the text targeted by style issues. Processing accuracy issues first ensures style edits target the corrected text, not text that's about to be rewritten.
+- **Support context** (optional) — output from `state support-context`; use any evidence policy to preserve calibrated hedging, freshness qualifiers, and uncertainty language while editing
 
 Each issue has:
 - `issue_id` — unique identifier (e.g., `review-1`, `verify-3`, `style-5`, `user-1`)
@@ -31,6 +32,8 @@ User feedback items use the `user-N` ID prefix and are always treated as high pr
 1. Read the draft report at the provided path
 2. Read all issues carefully — understand what each one asks for
 3. If any issue references a source (e.g., "verify against src-007"), read the relevant file from `notes/` or `sources/metadata/` to get the correct information. You may read `notes/` summaries and `sources/metadata/*.json` files for verification context.
+4. If support context includes an evidence policy, keep its source expectations, freshness requirement, and inference tolerance in mind when applying fixes. Do not remove caution or uncertainty language that exists to satisfy the policy unless the issue specifically asks for it and the evidence supports the change.
+5. If support context includes source caution flags, preserve or add appropriate caveats when editing claims that rely on flagged sources. Do not delete caution-driven limitations just to make prose cleaner.
 
 **Do NOT read full source text files** (`sources/src-NNN.md`). Full source files run 10-50K tokens each — reading even a few would consume most of your context budget on verification rather than editing. Reader notes and metadata contain the key claims, methodology, and conclusions you need for most fixes. If an issue requires information only available in the full source text and you cannot resolve it from notes and metadata alone, mark it as unresolved rather than guessing.
 

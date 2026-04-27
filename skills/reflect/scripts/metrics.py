@@ -33,9 +33,43 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in cur.fetchall()}
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
 def _count_glob(directory: Path, pattern: str) -> int:
     """Count files matching a glob pattern in directory."""
     return len(list(directory.glob(pattern)))
+
+
+def _canonical_source_quality(quality: object) -> str:
+    aliases = {
+        "degraded": "degraded_extraction",
+        "empty": "inaccessible",
+        "paywall_page": "inaccessible",
+        "paywall_stub": "abstract_only",
+        "mismatched": "title_content_mismatch",
+        "reader_validated": "ok",
+    }
+    canonical = {
+        "ok",
+        "inaccessible",
+        "abstract_only",
+        "degraded_extraction",
+        "metadata_incomplete",
+        "title_content_mismatch",
+    }
+    if quality is None or quality == "":
+        return "unknown"
+    if isinstance(quality, int | float):
+        return "degraded_extraction" if quality < 0.5 else "ok"
+    if not isinstance(quality, str):
+        return "unknown"
+    return aliases.get(quality, quality if quality in canonical else "unknown")
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +162,30 @@ def _source_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
             "SELECT quality, count(*) FROM sources GROUP BY quality ORDER BY count(*) DESC"
         ).fetchall()
     }
+    by_access_quality: dict[str, int] = {}
+    for row in cur.execute("SELECT quality, count(*) FROM sources GROUP BY quality").fetchall():
+        canonical_quality = _canonical_source_quality(row[0])
+        by_access_quality[canonical_quality] = by_access_quality.get(canonical_quality, 0) + row[1]
+
+    source_caution_total = 0
+    source_caution_by_flag: dict[str, int] = {}
+    source_caution_by_scope: dict[str, int] = {}
+    sources_with_cautions = 0
+    if _table_exists(conn, "source_flags"):
+        source_caution_total = cur.execute("SELECT count(*) FROM source_flags").fetchone()[0]
+        source_caution_by_flag = {
+            r[0]: r[1]
+            for r in cur.execute(
+                "SELECT flag, count(*) FROM source_flags GROUP BY flag ORDER BY count(*) DESC"
+            ).fetchall()
+        }
+        source_caution_by_scope = {
+            r[0]: r[1]
+            for r in cur.execute(
+                "SELECT applies_to_type, count(*) FROM source_flags GROUP BY applies_to_type ORDER BY count(*) DESC"
+            ).fetchall()
+        }
+        sources_with_cautions = cur.execute("SELECT count(DISTINCT source_id) FROM source_flags").fetchone()[0]
     by_status = {
         r[0]: r[1]
         for r in cur.execute(
@@ -157,8 +215,13 @@ def _source_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
         "sources_by_provider": by_provider,
         "sources_by_type": by_type,
         "sources_by_quality": by_quality,
+        "sources_by_access_quality": by_access_quality,
         "sources_by_status": by_status,
         "sources_by_year": by_year,
+        "source_caution_flags_total": source_caution_total,
+        "source_caution_flags_by_flag": source_caution_by_flag,
+        "source_caution_flags_by_scope": source_caution_by_scope,
+        "sources_with_caution_flags": sources_with_cautions,
         "metadata_json_count": metadata_count,
         "notes_on_disk": notes_on_disk,
     }

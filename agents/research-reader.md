@@ -18,14 +18,18 @@ A directive from the supervisor containing:
 - A single source ID to process (e.g., src-003)
 - The research question or context for relevance assessment
 - Specific instructions (summarize, verify claims, assess relevance)
+- Support context (optional) from `state support-context`, including `evidence_policy` when the supervisor created `evidence-policy.yaml`
+
+If support context includes an evidence policy, use it as calibration for what to inspect most carefully. A low `inference_tolerance` or high-stakes claim patterns should make you verify quantitative, current, legal, regulatory, scientific, or other fragile claims against the strongest available passage before extracting evidence. Freshness requirements should be noted in the summary when the source is old relative to the question. The policy is advisory; absence of a policy does not change the normal reading workflow.
 
 ## How to read the source
 
 1. Read `sources/metadata/{source_id}.json` first for structured metadata (title, authors, abstract, venue, year, citation count, quality)
-2. **Check the `quality` field before proceeding.** If `quality` is `"mismatched"` or `"degraded"`, note this prominently in your summary and do not treat the content as authoritative for the stated paper. For mismatched sources, the on-disk content likely belongs to a different paper than the metadata describes — flag this so the supervisor knows the source can't be cited for its intended purpose. For degraded sources, rely primarily on the abstract from metadata.
+2. **Check the `quality` field before proceeding.** If `quality` is `"title_content_mismatch"`/legacy `"mismatched"` or `"degraded_extraction"`/legacy `"degraded"`, note this prominently in your summary and do not treat the content as authoritative for the stated paper. For title/content mismatches, the on-disk content likely belongs to a different paper than the metadata describes. For degraded extraction, rely primarily on the abstract from metadata.
 3. **Assess actual content quality** regardless of the `quality` field — it may not have been set yet. Read enough of the content file to determine whether it contains substantive paper text (methods, results, discussion) or just navigation/stub/paywall content.
-4. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
-4. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
+4. If the source itself is secondary, self-interested, undated, potentially stale, or low relevance for the assigned question, tell the supervisor to record a source caution flag or record it directly if your directive provided the state CLI path. Do not change `sources.quality` for these concerns.
+5. If a `.toc` file exists (`sources/{source_id}.toc`), read it to identify relevant sections with line numbers
+6. Read the full `.md` file (`sources/{source_id}.md`) or targeted sections using offset/limit based on TOC
 
 ## File paths
 

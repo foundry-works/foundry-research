@@ -94,8 +94,9 @@ In quick mode, skip to **Step 3** (accuracy revision) with only the user's struc
 
 1. Read `report.md` to confirm it exists and is non-empty
 2. Read the research brief from `journal.md` or `brief.json` in the session directory — the reviewers need this for context
-3. Check for an existing `revision/revision-manifest.json` from a prior run. If it exists, read it and extract the list of resolved issue IDs with their locations and fixes. Pass this as a `prior_resolved` list to each reviewer in their launch prompt. **Why:** Without prior-revision awareness, a second run pays full reviewer cost re-examining already-fixed text. Passing the manifest lets reviewers skip confirmed fixes and focus on changed text, unreviewed text, and new user feedback — expected token savings of ~40-60% on subsequent passes.
-4. Copy `report.md` to `report_draft.md` to preserve the original for diffing
+3. Run `{cli_dir}/state support-context --session-dir <session-dir>` and keep the result for all reviewer, verifier, and reviser launch prompts. If `evidence-policy.yaml` is absent, the command returns `evidence_policy.present: false`; this is normal and must not block revision.
+4. Check for an existing `revision/revision-manifest.json` from a prior run. If it exists, read it and extract the list of resolved issue IDs with their locations and fixes. Pass this as a `prior_resolved` list to each reviewer in their launch prompt. **Why:** Without prior-revision awareness, a second run pays full reviewer cost re-examining already-fixed text. Passing the manifest lets reviewers skip confirmed fixes and focus on changed text, unreviewed text, and new user feedback — expected token savings of ~40-60% on subsequent passes.
+5. Copy `report.md` to `report_draft.md` to preserve the original for diffing
 
 ```bash
 cp <session-dir>/report.md <session-dir>/report_draft.md
@@ -114,6 +115,7 @@ Launch **`claim-extractor`** subagent (Sonnet, foreground) with:
 - Path to `report.md` (relative from project root)
 - **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
 - **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence units for claim cross-referencing
+- **Support context** from `state support-context` — lets the extractor prioritize policy-defined high-stakes, freshness-sensitive, or low-tolerance claims
 
 The extractor reads the report, identifies 5-10 load-bearing claims, classifies their source types, and returns a structured claims manifest.
 
@@ -129,6 +131,7 @@ Shard the extracted claims into 1 claim per shard. For example, 8 claims produce
   - Session directory path (absolute)
   - Path to `report.md` (relative from project root)
   - Research brief
+  - Support context from `state support-context`
   - The reviewer audits for: internal contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity
 
 - **`claim-verifier`** subagent(s) (Sonnet, one per shard) with:
@@ -136,6 +139,7 @@ Shard the extracted claims into 1 claim per shard. For example, 8 claims produce
   - Shard index (1, 2, 3, ...)
   - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
   - **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence provenance for targeted verification
+  - Support context from `state support-context`
   - Each verifier checks its claim against evidence units (preferred) or local reader notes (fallback), no web search
 
 **Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits during execution. The extractor reads the report once, and each verifier checks one claim against local reader notes — no report reading, no web searches, minimal context growth. One claim per verifier minimizes blast radius: a single failure only loses one verification.
@@ -222,6 +226,7 @@ Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 - Draft path: relative path to `report.md`
 - Pass type: `"accuracy"`
 - Accuracy issues list (ordered as above)
+- Support context from `state support-context`
 
 The reviser makes surgical edits using the Edit tool and returns a manifest mapping each issue to the edit made (or explaining why it's unresolved).
 
@@ -265,6 +270,7 @@ Launch **`style-reviewer`** subagent (Sonnet, foreground) with:
 - Session directory path (absolute)
 - Path to `report.md` (the accuracy-corrected version)
 - Research brief
+- Support context from `state support-context`
 
 No `skip_locations` needed — the style reviewer sees corrected text and can flag issues anywhere.
 
@@ -289,6 +295,7 @@ Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 - Draft path: relative path to `report.md`
 - Pass type: `"style"`
 - Style issues list (high → medium, with opportunistic lows at the end)
+- Support context from `state support-context`
 
 **After the reviser returns:**
 - Check the manifest for unresolved issues
@@ -329,11 +336,11 @@ You are the supervisor. You orchestrate reviewers and the reviser — you do not
 
 Use the **Agent tool** to spawn subagents:
 
-- **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Returns structured issues list. Use `subagent_type: "synthesis-reviewer"`.
-- **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Returns structured claim list for verification. Use `subagent_type: "claim-extractor"`.
-- **`claim-verifier`** (Sonnet) — verifies a pre-extracted claim against local reader notes. One claim per verifier, no web search, no report reading. Returns verification report with verdict. Launch one per claim. Use `subagent_type: "claim-verifier"`.
-- **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Returns structured issues list. Use `subagent_type: "style-reviewer"`.
-- **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Uses Edit tool only. Returns edit manifest. Launch via Agent tool with the `agents/report-reviser.md` prompt.
+- **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Pass support context when present. Returns structured issues list. Use `subagent_type: "synthesis-reviewer"`.
+- **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Pass support context when present. Returns structured claim list for verification. Use `subagent_type: "claim-extractor"`.
+- **`claim-verifier`** (Sonnet) — verifies a pre-extracted claim against local reader notes. One claim per verifier, no web search, no report reading. Pass support context when present. Returns verification report with verdict. Launch one per claim. Use `subagent_type: "claim-verifier"`.
+- **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Pass support context when present so style suggestions preserve calibrated hedging and freshness qualifiers. Returns structured issues list. Use `subagent_type: "style-reviewer"`.
+- **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Pass support context when present. Uses Edit tool only. Returns edit manifest. Launch via Agent tool with the `agents/report-reviser.md` prompt.
 
 **All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, put all Agent calls in one response message. With 1 claim per verifier and notes-only verification, each verifier is lightweight.
 

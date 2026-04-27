@@ -2,7 +2,9 @@
 """Session state tracker — SQLite-backed search history, source dedup, findings, gaps, and metrics."""
 
 import argparse
+import ast
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -153,6 +155,44 @@ CREATE TABLE IF NOT EXISTS finding_evidence (
     PRIMARY KEY (finding_id, evidence_id),
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
+
+CREATE TABLE IF NOT EXISTS source_flags (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    flag TEXT NOT NULL,
+    applies_to_type TEXT NOT NULL DEFAULT 'run',
+    applies_to_id TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (source_id) REFERENCES sources(id),
+    UNIQUE(session_id, source_id, flag, applies_to_type, applies_to_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_flags_source ON source_flags(session_id, source_id);
+CREATE INDEX IF NOT EXISTS idx_source_flags_scope ON source_flags(session_id, applies_to_type, applies_to_id);
+"""
+
+_ADDITIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS source_flags (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    flag TEXT NOT NULL,
+    applies_to_type TEXT NOT NULL DEFAULT 'run',
+    applies_to_id TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id),
+    FOREIGN KEY (source_id) REFERENCES sources(id),
+    UNIQUE(session_id, source_id, flag, applies_to_type, applies_to_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_flags_source ON source_flags(session_id, source_id);
+CREATE INDEX IF NOT EXISTS idx_source_flags_scope ON source_flags(session_id, applies_to_type, applies_to_id);
 """
 
 
@@ -175,6 +215,443 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("gaps", "question_id", "TEXT"),
 ]
 
+_POLICY_FILENAME = "evidence-policy.yaml"
+_POLICY_FIELDS = (
+    "source_expectations",
+    "freshness_requirement",
+    "inference_tolerance",
+    "high_stakes_claim_patterns",
+    "known_failure_modes",
+)
+_POLICY_LIST_FIELDS = {"high_stakes_claim_patterns", "known_failure_modes"}
+
+_SOURCE_QUALITY_CANONICAL = (
+    "ok",
+    "inaccessible",
+    "abstract_only",
+    "degraded_extraction",
+    "metadata_incomplete",
+    "title_content_mismatch",
+)
+_SOURCE_QUALITY_LEGACY_ALIASES = {
+    "degraded": "degraded_extraction",
+    "empty": "inaccessible",
+    "paywall_page": "inaccessible",
+    "paywall_stub": "abstract_only",
+    "mismatched": "title_content_mismatch",
+    "reader_validated": "ok",
+}
+_SOURCE_QUALITY_ACCEPTED = set(_SOURCE_QUALITY_CANONICAL) | set(_SOURCE_QUALITY_LEGACY_ALIASES)
+
+_SOURCE_CAUTION_FLAGS = (
+    "secondary_source",
+    "self_interested_source",
+    "undated",
+    "potentially_stale",
+    "low_relevance",
+)
+_SOURCE_FLAG_SCOPES = ("run", "brief", "finding", "report_target", "citation")
+_REPORT_GROUNDING_FILENAME = "report-grounding.json"
+_REPORT_GROUNDING_SCHEMA_VERSION = "report-grounding-v1"
+_REPORT_GROUNDING_REQUIRED_FIELDS = (
+    "target_id",
+    "section",
+    "paragraph",
+    "text_hash",
+    "text_snippet",
+    "citation_refs",
+    "source_ids",
+    "finding_ids",
+    "evidence_ids",
+    "warnings",
+)
+_REPORT_GROUNDING_OPTIONAL_FIELDS = (
+    "grounding_status",
+    "not_grounded_reason",
+    "support_note",
+    "support_level",
+    "claim_type",
+)
+_NON_BODY_SECTIONS = {"references", "further reading"}
+
+
+def _empty_policy_fields() -> dict[str, str | list[str] | None]:
+    return {
+        field: [] if field in _POLICY_LIST_FIELDS else None
+        for field in _POLICY_FIELDS
+    }
+
+
+def _strip_yaml_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _parse_policy_list(value: str) -> list[str]:
+    value = value.strip()
+    if not value:
+        return []
+    if value.startswith("[") and value.endswith("]"):
+        try:
+            parsed = ast.literal_eval(value)
+            if isinstance(parsed, list | tuple):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except (SyntaxError, ValueError):
+            pass
+        inner = value[1:-1]
+        return [_strip_yaml_scalar(item) for item in inner.split(",") if item.strip()]
+    return [_strip_yaml_scalar(value)]
+
+
+def _parse_evidence_policy(text: str) -> tuple[dict[str, str | list[str] | None], list[str], list[str]]:
+    """Parse the small run-local evidence policy subset without adding PyYAML."""
+    fields = _empty_policy_fields()
+    seen: set[str] = set()
+    warnings: list[str] = []
+    current_list_key: str | None = None
+
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        indent = len(line) - len(line.lstrip())
+        if indent > 0 and current_list_key:
+            if stripped.startswith("- "):
+                items = fields[current_list_key]
+                if isinstance(items, list):
+                    items.append(_strip_yaml_scalar(stripped[2:]))
+                continue
+            warnings.append(f"line {lineno} ignored: expected list item for {current_list_key}")
+            continue
+
+        current_list_key = None
+        if ":" not in stripped:
+            warnings.append(f"line {lineno} ignored: expected key: value")
+            continue
+
+        key, raw_value = stripped.split(":", 1)
+        key = key.strip()
+        if key not in _POLICY_FIELDS:
+            warnings.append(f"line {lineno} ignored: unknown evidence policy field {key}")
+            continue
+
+        seen.add(key)
+        if key in _POLICY_LIST_FIELDS:
+            value = raw_value.strip()
+            fields[key] = _parse_policy_list(value)
+            if not value:
+                current_list_key = key
+        else:
+            fields[key] = _strip_yaml_scalar(raw_value)
+
+    missing = [field for field in _POLICY_FIELDS if field not in seen]
+    return fields, missing, warnings
+
+
+def _canonical_source_quality(quality: object) -> str:
+    if quality is None or quality == "":
+        return "unknown"
+    if isinstance(quality, int | float):
+        return "degraded_extraction" if quality < 0.5 else "ok"
+    if not isinstance(quality, str):
+        return "unknown"
+    normalized = quality.strip()
+    return _SOURCE_QUALITY_LEGACY_ALIASES.get(normalized, normalized if normalized in _SOURCE_QUALITY_CANONICAL else "unknown")
+
+
+def _next_source_flag_id(conn: sqlite3.Connection, session_id: str) -> str:
+    row = conn.execute("SELECT COUNT(*) as c FROM source_flags WHERE session_id = ?", (session_id,)).fetchone()
+    return f"sflag-{row['c'] + 1:03d}"
+
+
+def _source_quality_counts(conn: sqlite3.Connection, session_id: str) -> dict:
+    raw_counts: dict[str, int] = {}
+    access_counts: dict[str, int] = {}
+    rows = conn.execute("SELECT quality, COUNT(*) as c FROM sources WHERE session_id = ? GROUP BY quality", (session_id,)).fetchall()
+    for row in rows:
+        raw_key = row["quality"] if row["quality"] not in (None, "") else "unknown"
+        raw_counts[str(raw_key)] = row["c"]
+        canonical = _canonical_source_quality(row["quality"])
+        access_counts[canonical] = access_counts.get(canonical, 0) + row["c"]
+
+    for key in _SOURCE_QUALITY_CANONICAL:
+        access_counts.setdefault(key, 0)
+
+    return {
+        "raw_counts": raw_counts,
+        "access_quality_counts": access_counts,
+        "legacy_aliases": _SOURCE_QUALITY_LEGACY_ALIASES,
+        "accepted_values": list(_SOURCE_QUALITY_CANONICAL),
+    }
+
+
+def _source_flag_rows(conn: sqlite3.Connection, session_id: str, limit: int | None = None) -> list[dict]:
+    query = (
+        "SELECT id, source_id, flag, applies_to_type, applies_to_id, rationale, created_by, created_at "
+        "FROM source_flags WHERE session_id = ? ORDER BY source_id, flag, applies_to_type, applies_to_id, id"
+    )
+    params: list = [session_id]
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _source_flag_summary(conn: sqlite3.Connection, session_id: str, include_rows: bool = False) -> dict:
+    try:
+        total = conn.execute("SELECT COUNT(*) as c FROM source_flags WHERE session_id = ?", (session_id,)).fetchone()["c"]
+    except sqlite3.OperationalError:
+        return {"total": 0, "by_flag": {}, "by_scope": {}, "by_source": {}, "sources_with_flags": 0}
+
+    by_flag = {
+        row["flag"]: row["c"]
+        for row in conn.execute(
+            "SELECT flag, COUNT(*) as c FROM source_flags WHERE session_id = ? GROUP BY flag ORDER BY c DESC, flag",
+            (session_id,),
+        ).fetchall()
+    }
+    by_scope = {
+        row["applies_to_type"]: row["c"]
+        for row in conn.execute(
+            "SELECT applies_to_type, COUNT(*) as c FROM source_flags WHERE session_id = ? GROUP BY applies_to_type ORDER BY c DESC, applies_to_type",
+            (session_id,),
+        ).fetchall()
+    }
+    by_source = {
+        row["source_id"]: row["c"]
+        for row in conn.execute(
+            "SELECT source_id, COUNT(*) as c FROM source_flags WHERE session_id = ? GROUP BY source_id ORDER BY c DESC, source_id",
+            (session_id,),
+        ).fetchall()
+    }
+    result = {
+        "total": total,
+        "by_flag": by_flag,
+        "by_scope": by_scope,
+        "by_source": by_source,
+        "sources_with_flags": len(by_source),
+    }
+    if include_rows:
+        result["flags"] = _source_flag_rows(conn, session_id, limit=100)
+    return result
+
+
+def _normalize_grounding_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _grounding_text_hash(text: str) -> str:
+    normalized = _normalize_grounding_text(text)
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _grounding_snippet(text: str, max_chars: int = 220) -> str:
+    normalized = _normalize_grounding_text(text)
+    return normalized[:max_chars]
+
+
+def _extract_citation_refs(text: str) -> list[str]:
+    refs = []
+    seen = set()
+    for match in re.finditer(r"\[\d+\]", text):
+        ref = match.group(0)
+        if ref not in seen:
+            refs.append(ref)
+            seen.add(ref)
+    return refs
+
+
+def _resolve_session_file(session_dir: str, path: str | None, default_name: str | None = None) -> str:
+    candidate = path or default_name
+    if not candidate:
+        return session_dir
+    if os.path.isabs(candidate):
+        return candidate
+    session_candidate = os.path.join(session_dir, candidate)
+    if os.path.exists(session_candidate):
+        return session_candidate
+    return os.path.abspath(candidate)
+
+
+def _parse_report_paragraphs(report_text: str) -> list[dict]:
+    paragraphs: list[dict] = []
+    section = "Document"
+    section_counts: dict[str, int] = {}
+    in_fence = False
+    buffer: list[str] = []
+
+    def flush() -> None:
+        nonlocal buffer
+        raw = "\n".join(buffer).strip()
+        buffer = []
+        if not raw:
+            return
+        paragraph_no = section_counts.get(section, 0) + 1
+        section_counts[section] = paragraph_no
+        normalized = _normalize_grounding_text(raw)
+        paragraphs.append({
+            "section": section,
+            "paragraph": paragraph_no,
+            "text": normalized,
+            "text_hash": _grounding_text_hash(normalized),
+            "text_snippet": _grounding_snippet(normalized),
+            "citation_refs": _extract_citation_refs(normalized),
+        })
+
+    for line in report_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            buffer.append(line)
+            continue
+        if not in_fence:
+            heading = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+            if heading:
+                flush()
+                section = heading.group(1).strip()
+                section_counts.setdefault(section, 0)
+                continue
+            if not stripped:
+                flush()
+                continue
+        buffer.append(line)
+    flush()
+    return paragraphs
+
+
+def _body_paragraphs(paragraphs: list[dict]) -> list[dict]:
+    return [
+        p for p in paragraphs
+        if p["section"].strip().lower() not in _NON_BODY_SECTIONS
+    ]
+
+
+def _load_report_grounding_manifest(path: str) -> tuple[dict | None, list[dict]]:
+    if not os.path.exists(path):
+        return None, [{"code": "manifest_missing", "message": f"Report grounding manifest not found: {path}"}]
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        return None, [{"code": "manifest_invalid_json", "message": f"Invalid JSON in report grounding manifest: {exc}"}]
+    except OSError as exc:
+        return None, [{"code": "manifest_unreadable", "message": f"Could not read report grounding manifest: {exc}"}]
+    if not isinstance(data, dict):
+        return None, [{"code": "manifest_invalid_shape", "message": "Report grounding manifest must be a JSON object"}]
+    return data, []
+
+
+def _load_evidence_policy(session_dir: str) -> dict:
+    path = os.path.join(session_dir, _POLICY_FILENAME)
+    result = {
+        "present": False,
+        "path": _POLICY_FILENAME,
+        "fields": _empty_policy_fields(),
+        "missing_fields": list(_POLICY_FIELDS),
+        "warnings": [],
+    }
+    if not os.path.exists(path):
+        return result
+
+    result["present"] = True
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as exc:
+        result["warnings"] = [f"could not read {_POLICY_FILENAME}: {exc}"]
+        return result
+
+    fields, missing, warnings = _parse_evidence_policy(text)
+    result["fields"] = fields
+    result["missing_fields"] = missing
+    result["warnings"] = warnings
+    return result
+
+
+def _build_support_context(
+    session_dir: str,
+    conn: sqlite3.Connection | None = None,
+    session_id: str | None = None,
+) -> dict:
+    policy = _load_evidence_policy(session_dir)
+    source_quality = None
+    source_flags = None
+    if conn is not None and session_id is not None:
+        source_quality = _source_quality_counts(conn, session_id)
+        source_flags = _source_flag_summary(conn, session_id, include_rows=True)
+    grounding_path = os.path.join(session_dir, _REPORT_GROUNDING_FILENAME)
+    grounding_present = os.path.exists(grounding_path)
+    return {
+        "schema_version": "support-context-v1",
+        "session_dir": session_dir,
+        "available_context": {
+            "evidence_policy": policy["present"],
+            "source_quality": source_quality is not None,
+            "source_caution_flags": bool(source_flags and source_flags["total"] > 0),
+            "report_grounding": grounding_present,
+            "citation_audit": False,
+            "review_issues": False,
+        },
+        "evidence_policy": policy,
+        "source_quality": source_quality,
+        "source_caution_flags": source_flags,
+        "report_grounding": {
+            "present": grounding_present,
+            "path": _REPORT_GROUNDING_FILENAME,
+            "status": "declared_provenance_not_verified" if grounding_present else "missing",
+        },
+        "notes": [
+            "Evidence policy is optional run-local calibration, not a required workflow phase.",
+            "Source caution flags are additive warnings; they do not replace access/extraction quality.",
+            "Report grounding is declared provenance until an agent audits citation fit or claim support.",
+            "Use this context to guide agent judgment; deterministic tools do not decide semantic support.",
+        ],
+    }
+
+
+def _support_context_markdown(context: dict) -> str:
+    policy = context["evidence_policy"]
+    lines = ["# Support Context", ""]
+    if policy["present"]:
+        lines.append(f"Evidence policy: present at `{policy['path']}`.")
+        fields = policy["fields"]
+        for field in _POLICY_FIELDS:
+            value = fields.get(field)
+            if isinstance(value, list):
+                if value:
+                    lines.append(f"- `{field}`: " + "; ".join(value))
+                else:
+                    lines.append(f"- `{field}`: []")
+            elif value:
+                lines.append(f"- `{field}`: {value}")
+            else:
+                lines.append(f"- `{field}`: null")
+        if policy["missing_fields"]:
+            missing = ", ".join(policy["missing_fields"])
+            lines.append(f"- Missing fields: {missing}")
+        if policy["warnings"]:
+            lines.append("- Warnings: " + "; ".join(policy["warnings"]))
+    else:
+        lines.append(f"Evidence policy: not present. Expected optional path: `{policy['path']}`.")
+
+    source_flags = context.get("source_caution_flags")
+    if source_flags and source_flags.get("total", 0) > 0:
+        lines.extend(["", f"Source caution flags: {source_flags['total']} total."])
+        for flag, count in source_flags.get("by_flag", {}).items():
+            lines.append(f"- `{flag}`: {count}")
+    else:
+        lines.extend(["", "Source caution flags: none recorded."])
+
+    lines.extend([
+        "",
+        "Use this as advisory calibration only. Absence of a policy must not block search, reading, synthesis, verification, or review.",
+    ])
+    return "\n".join(lines)
+
 
 def _migrate_schema(db_path: str) -> None:
     """Run ALTER TABLE migrations in a dedicated writable connection.
@@ -185,6 +662,8 @@ def _migrate_schema(db_path: str) -> None:
     try:
         conn = sqlite3.connect(f"file:{db_path}", uri=True)
         try:
+            conn.executescript(_ADDITIVE_SCHEMA)
+            conn.commit()
             for table, col, defn in _MIGRATIONS:
                 try:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
@@ -343,8 +822,6 @@ def _extract_question_terms(questions: list) -> list[str]:
     return _extract_terms(texts)
 
 
-from _shared.evidence_helpers import evidence_question_ids as _evidence_question_ids
-from _shared.evidence_helpers import evidence_matches_question as _evidence_matches_question
 from _shared.evidence_helpers import count_evidence_by_question as _count_evidence_by_question
 
 
@@ -456,6 +933,7 @@ def _regenerate_snapshot(session_dir: str, conn: sqlite3.Connection, sid: str) -
     for s in sources:
         s["authors"] = json.loads(s["authors"]) if s.get("authors") else []
         s["tags"] = json.loads(s["tags"]) if s.get("tags") else []
+    source_flags = _source_flag_rows(conn, sid)
 
     findings = [dict(r) for r in conn.execute("SELECT * FROM findings WHERE session_id = ? ORDER BY id", (sid,)).fetchall()]
     for f in findings:
@@ -491,6 +969,7 @@ def _regenerate_snapshot(session_dir: str, conn: sqlite3.Connection, sid: str) -
         "brief": brief,
         "searches": searches,
         "sources": sources,
+        "source_flags": source_flags,
         "findings": findings,
         "gaps": gaps,
         "metrics": metrics_list,
@@ -499,6 +978,7 @@ def _regenerate_snapshot(session_dir: str, conn: sqlite3.Connection, sid: str) -
             "total_sources": len(sources),
             "sources_by_type": sources_by_type,
             "sources_by_provider": sources_by_provider,
+            "source_caution_flags_count": len(source_flags),
             "evidence_units_count": evidence_count,
             "evidence_units_by_question": evidence_by_question,
         },
@@ -1359,6 +1839,9 @@ def cmd_summary(args):
             row_dict = dict(r)
             evidence_rows_by_id[row_dict["id"]] = row_dict
 
+    source_quality_summary = _source_quality_counts(conn, sid)
+    source_caution_summary = _source_flag_summary(conn, sid, include_rows=True)
+    support_context = _build_support_context(args.session_dir, conn, sid)
     conn.close()
 
     full_result = {
@@ -1425,6 +1908,9 @@ def cmd_summary(args):
                 quality_counts["on_topic_with_evidence"] += 1
 
         full_result["source_quality_report"] = quality_counts
+        full_result["source_quality_summary"] = source_quality_summary
+        full_result["source_caution_summary"] = source_caution_summary
+        full_result["support_context"] = support_context
 
         # 4. Include linked evidence units when available, with size guardrail.
         #    Keep the exported findings/evidence arrays internally consistent.
@@ -1489,6 +1975,17 @@ def cmd_summary(args):
         return
 
     success_response(full_result)
+
+
+def cmd_support_context(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    context = _build_support_context(args.session_dir, conn, sid)
+    conn.close()
+    if args.format == "markdown":
+        success_response({"format": "markdown", "content": _support_context_markdown(context)})
+        return
+    success_response(context)
 
 
 # ---------------------------------------------------------------------------
@@ -1851,6 +2348,11 @@ def cmd_set_quality(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
 
+    if args.quality not in _SOURCE_QUALITY_ACCEPTED:
+        conn.close()
+        allowed = sorted(_SOURCE_QUALITY_ACCEPTED)
+        error_response([f"Invalid quality: {args.quality}. Allowed: {', '.join(allowed)}"])
+
     cur = conn.execute(
         "UPDATE sources SET quality = ? WHERE id = ? AND session_id = ?",
         (args.quality, args.id, sid)
@@ -1861,7 +2363,113 @@ def cmd_set_quality(args):
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": args.id, "quality": args.quality})
+    success_response({"id": args.id, "quality": args.quality, "access_quality": _canonical_source_quality(args.quality)})
+
+
+def cmd_set_source_flag(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+
+    if args.flag not in _SOURCE_CAUTION_FLAGS:
+        conn.close()
+        error_response([f"Invalid source flag: {args.flag}. Allowed: {', '.join(_SOURCE_CAUTION_FLAGS)}"])
+    if args.applies_to not in _SOURCE_FLAG_SCOPES:
+        conn.close()
+        error_response([f"Invalid applies_to: {args.applies_to}. Allowed: {', '.join(_SOURCE_FLAG_SCOPES)}"])
+    applies_to_id = "" if args.applies_to == "run" else (args.applies_to_id or "")
+    if args.applies_to != "run" and not applies_to_id:
+        conn.close()
+        error_response([f"--applies-to-id is required when --applies-to is {args.applies_to}"])
+
+    row = conn.execute(
+        "SELECT id FROM sources WHERE id = ? AND session_id = ?",
+        (args.source_id, sid),
+    ).fetchone()
+    if not row:
+        conn.close()
+        error_response([f"Source {args.source_id} not found"])
+
+    existing = conn.execute(
+        """SELECT id FROM source_flags
+           WHERE session_id = ? AND source_id = ? AND flag = ? AND applies_to_type = ? AND applies_to_id = ?""",
+        (sid, args.source_id, args.flag, args.applies_to, applies_to_id),
+    ).fetchone()
+
+    if existing:
+        flag_id = existing["id"]
+        conn.execute(
+            """UPDATE source_flags
+               SET rationale = ?, created_by = ?, created_at = ?
+               WHERE id = ? AND session_id = ?""",
+            (args.rationale, args.created_by, _now(), flag_id, sid),
+        )
+        created = False
+    else:
+        flag_id = _next_source_flag_id(conn, sid)
+        conn.execute(
+            """INSERT INTO source_flags
+               (id, session_id, source_id, flag, applies_to_type, applies_to_id, rationale, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (flag_id, sid, args.source_id, args.flag, args.applies_to, applies_to_id, args.rationale, args.created_by, _now()),
+        )
+        created = True
+
+    conn.commit()
+    _regenerate_snapshot(args.session_dir, conn, sid)
+    conn.close()
+    success_response({
+        "id": flag_id,
+        "source_id": args.source_id,
+        "flag": args.flag,
+        "applies_to": args.applies_to,
+        "applies_to_id": applies_to_id,
+        "created": created,
+    })
+
+
+def cmd_source_flags(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+
+    clauses = ["session_id = ?"]
+    params: list = [sid]
+    if args.source_id:
+        clauses.append("source_id = ?")
+        params.append(args.source_id)
+    if args.flag:
+        clauses.append("flag = ?")
+        params.append(args.flag)
+    if args.applies_to:
+        clauses.append("applies_to_type = ?")
+        params.append(args.applies_to)
+    if args.applies_to_id is not None:
+        clauses.append("applies_to_id = ?")
+        params.append(args.applies_to_id)
+
+    rows = conn.execute(
+        "SELECT id, source_id, flag, applies_to_type, applies_to_id, rationale, created_by, created_at "
+        f"FROM source_flags WHERE {' AND '.join(clauses)} ORDER BY source_id, flag, applies_to_type, applies_to_id, id",
+        params,
+    ).fetchall()
+    conn.close()
+    success_response([dict(row) for row in rows])
+
+
+def cmd_source_flag_summary(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    result = _source_flag_summary(conn, sid, include_rows=getattr(args, "include_rows", False))
+    conn.close()
+    success_response(result)
+
+
+def cmd_source_quality_summary(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    result = _source_quality_counts(conn, sid)
+    result["source_caution_flags"] = _source_flag_summary(conn, sid, include_rows=getattr(args, "include_rows", False))
+    conn.close()
+    success_response(result)
 
 
 def cmd_log_metric(args):
@@ -2332,6 +2940,8 @@ def cmd_audit(args):
     except Exception:
         pass  # table may not exist in old sessions
 
+    source_quality_summary = _source_quality_counts(conn, sid)
+    source_caution_summary = _source_flag_summary(conn, sid, include_rows=True)
     conn.close()
 
     # Check on-disk files
@@ -2343,6 +2953,8 @@ def cmd_audit(args):
     degraded_unread = []
     reader_validated = []
     mismatched = []
+    inaccessible = []
+    metadata_incomplete = []
     no_content = []
     abstract_only = []
     irrelevant = []
@@ -2382,17 +2994,19 @@ def cmd_audit(args):
 
         # Check quality
         quality = s.get("quality")
-        if isinstance(quality, str):
-            if quality == "degraded":
-                degraded_unread.append(sid_val)
-            elif quality == "reader_validated":
-                reader_validated.append(sid_val)
-            elif quality == "mismatched":
-                mismatched.append(sid_val)
-            elif quality == "abstract_only":
-                abstract_only.append(sid_val)
-        elif isinstance(quality, int | float) and quality < 0.5:
+        access_quality = _canonical_source_quality(quality)
+        if quality == "reader_validated":
+            reader_validated.append(sid_val)
+        elif access_quality == "degraded_extraction":
             degraded_unread.append(sid_val)
+        elif access_quality == "title_content_mismatch":
+            mismatched.append(sid_val)
+        elif access_quality == "abstract_only":
+            abstract_only.append(sid_val)
+        elif access_quality == "inaccessible":
+            inaccessible.append(sid_val)
+        elif access_quality == "metadata_incomplete":
+            metadata_incomplete.append(sid_val)
 
     # Build question text list and ID-to-text map from brief
     question_texts = []
@@ -2495,9 +3109,11 @@ def cmd_audit(args):
     # Build warnings
     warnings = []
     for sid_val in degraded_unread:
-        warnings.append(f"{sid_val} has degraded PDF quality — do not claim deep reading")
+        warnings.append(f"{sid_val} has degraded extraction quality — do not claim deep reading without reader validation")
     for sid_val in mismatched:
-        warnings.append(f"{sid_val} has mismatched content — downloaded PDF may be wrong paper")
+        warnings.append(f"{sid_val} has title/content mismatch — downloaded content may be the wrong source")
+    for sid_val in inaccessible:
+        warnings.append(f"{sid_val} is marked inaccessible — do not cite as deeply read")
     if downloaded_no_content_file:
         warnings.append(
             f"{len(downloaded_no_content_file)} source(s) have status='downloaded' but null "
@@ -2524,7 +3140,9 @@ def cmd_audit(args):
     log(f"Degraded (unread):   {len(degraded_unread)}  ({', '.join(degraded_unread)})" if degraded_unread else "Degraded (unread):   0")
     log(f"Reader validated:    {len(reader_validated)}  ({', '.join(reader_validated)})" if reader_validated else "Reader validated:    0")
     log(f"Mismatched content:  {len(mismatched)}  ({', '.join(mismatched)})" if mismatched else "Mismatched content:  0")
+    log(f"Inaccessible:        {len(inaccessible)}  ({', '.join(inaccessible)})" if inaccessible else "Inaccessible:        0")
     log(f"Abstract only:       {len(abstract_only)}  ({', '.join(abstract_only)})" if abstract_only else "Abstract only:       0")
+    log(f"Source cautions:     {source_caution_summary['total']}")
     log(f"Findings logged:     {len(findings)}")
     log(f"Open gaps:           {len(gaps)}")
     if sparse_questions:
@@ -2552,6 +3170,10 @@ def cmd_audit(args):
         "degraded_unread": degraded_unread,
         "reader_validated": reader_validated,
         "mismatched_content": mismatched,
+        "inaccessible": inaccessible,
+        "metadata_incomplete": metadata_incomplete,
+        "source_quality_summary": source_quality_summary,
+        "source_caution_summary": source_caution_summary,
         "findings_count": len(findings),
         "findings_by_question": {k: len(v) for k, v in findings_by_question.items()},
         "open_gaps": len(gaps),
@@ -3910,7 +4532,256 @@ def cmd_validate_edits(args):
     if pass_type:
         result["pass"] = pass_type
 
-    success_response(result)
+        success_response(result)
+
+
+# ---------------------------------------------------------------------------
+# report-grounding — paragraph hashes and manifest validation
+# ---------------------------------------------------------------------------
+
+def cmd_report_paragraphs(args):
+    report_path = _resolve_session_file(args.session_dir, args.report, None)
+    if not os.path.exists(report_path):
+        success_response({
+            "status": "missing_report",
+            "report_path": report_path,
+            "paragraphs": [],
+            "issues": [{"code": "report_missing", "message": f"Report not found: {report_path}"}],
+        })
+        return
+    with open(report_path, encoding="utf-8") as f:
+        report_text = f.read()
+    paragraphs = _parse_report_paragraphs(report_text)
+    body = _body_paragraphs(paragraphs)
+    success_response({
+        "schema_version": "report-paragraphs-v1",
+        "report_path": os.path.relpath(report_path),
+        "paragraph_count": len(paragraphs),
+        "body_paragraph_count": len(body),
+        "paragraphs": paragraphs,
+        "hash_normalization": "Collapse all whitespace to single spaces, trim ends, SHA-256 UTF-8, prefix with sha256:",
+    })
+
+
+def cmd_validate_report_grounding(args):
+    manifest_path = _resolve_session_file(args.session_dir, args.manifest, _REPORT_GROUNDING_FILENAME)
+    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+    if manifest is None:
+        success_response({
+            "schema_version": "report-grounding-validation-v1",
+            "manifest_path": manifest_path,
+            "manifest_status": "missing_or_invalid",
+            "valid": False,
+            "issues": manifest_issues,
+            "summary": {"targets": 0, "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
+        })
+        return
+
+    report_value = args.report or manifest.get("report_path") or "draft.md"
+    report_path = _resolve_session_file(args.session_dir, report_value, None)
+    issues: list[dict] = []
+    target_results: list[dict] = []
+
+    if manifest.get("schema_version") not in (None, _REPORT_GROUNDING_SCHEMA_VERSION):
+        issues.append({
+            "code": "schema_version_unknown",
+            "message": f"Unknown report grounding schema_version: {manifest.get('schema_version')}",
+        })
+
+    if not os.path.exists(report_path):
+        issues.append({"code": "report_missing", "message": f"Report path does not exist: {report_value}"})
+        success_response({
+            "schema_version": "report-grounding-validation-v1",
+            "manifest_path": os.path.relpath(manifest_path),
+            "manifest_status": "loaded",
+            "report_path": report_value,
+            "valid": False,
+            "issues": issues,
+            "targets": [],
+            "summary": {"targets": len(manifest.get("targets", [])) if isinstance(manifest.get("targets"), list) else 0,
+                        "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
+        })
+        return
+
+    with open(report_path, encoding="utf-8") as f:
+        report_text = f.read()
+    paragraphs = _parse_report_paragraphs(report_text)
+    body_paragraphs = _body_paragraphs(paragraphs)
+    by_locator = {(p["section"], p["paragraph"]): p for p in paragraphs}
+    by_hash: dict[str, list[dict]] = {}
+    for p in paragraphs:
+        by_hash.setdefault(p["text_hash"], []).append(p)
+
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    source_ids = {row["id"] for row in conn.execute("SELECT id FROM sources WHERE session_id = ?", (sid,)).fetchall()}
+    finding_ids = {row["id"] for row in conn.execute("SELECT id FROM findings WHERE session_id = ?", (sid,)).fetchall()}
+    evidence_ids = {row["id"] for row in conn.execute("SELECT id FROM evidence_units WHERE session_id = ?", (sid,)).fetchall()}
+    conn.close()
+
+    targets = manifest.get("targets", [])
+    if not isinstance(targets, list):
+        issues.append({"code": "targets_invalid", "message": "Manifest field 'targets' must be an array"})
+        targets = []
+
+    grounded_keys = set()
+    valid_targets = 0
+    stale_targets = 0
+    orphaned_targets = 0
+
+    for index, target in enumerate(targets):
+        target_id = target.get("target_id") if isinstance(target, dict) else None
+        target_ref = target_id or f"target[{index}]"
+        target_issues: list[dict] = []
+        status = "valid"
+        matched = None
+
+        if not isinstance(target, dict):
+            target_results.append({"target_id": target_ref, "status": "invalid", "issues": [{"code": "target_invalid", "message": "Target must be an object"}]})
+            continue
+
+        for field in _REPORT_GROUNDING_REQUIRED_FIELDS:
+            if field not in target:
+                target_issues.append({"code": "missing_required_field", "field": field})
+
+        locator = (target.get("section"), target.get("paragraph"))
+        if isinstance(locator[0], str) and isinstance(locator[1], int):
+            matched = by_locator.get(locator)
+
+        expected_hash = target.get("text_hash")
+        if matched and expected_hash == matched["text_hash"]:
+            grounded_keys.add((matched["section"], matched["paragraph"]))
+        elif expected_hash in by_hash:
+            relocated = by_hash[expected_hash][0]
+            target_issues.append({
+                "code": "stale_locator",
+                "message": "Target hash exists in report but section/paragraph locator changed",
+                "current_section": relocated["section"],
+                "current_paragraph": relocated["paragraph"],
+            })
+            status = "stale_locator"
+            matched = relocated
+            grounded_keys.add((relocated["section"], relocated["paragraph"]))
+        elif matched:
+            target_issues.append({
+                "code": "stale_hash",
+                "message": "Target locator exists but text_hash no longer matches current paragraph text",
+                "current_text_hash": matched["text_hash"],
+            })
+            status = "stale_hash"
+            grounded_keys.add((matched["section"], matched["paragraph"]))
+        else:
+            snippet = _normalize_grounding_text(str(target.get("text_snippet", "")))
+            if snippet:
+                for p in paragraphs:
+                    if snippet and snippet in p["text"]:
+                        matched = p
+                        target_issues.append({
+                            "code": "stale_hash",
+                            "message": "Target reconnected by snippet but text_hash/locator did not match",
+                            "current_section": p["section"],
+                            "current_paragraph": p["paragraph"],
+                            "current_text_hash": p["text_hash"],
+                        })
+                        status = "stale_hash"
+                        grounded_keys.add((p["section"], p["paragraph"]))
+                        break
+            if matched is None:
+                target_issues.append({"code": "orphaned_target", "message": "Target could not be matched by locator, hash, or snippet"})
+                status = "orphaned"
+
+        text_for_checks = matched["text"] if matched else ""
+        citation_refs = target.get("citation_refs", [])
+        if not isinstance(citation_refs, list):
+            target_issues.append({"code": "field_type", "field": "citation_refs", "message": "citation_refs must be an array"})
+            citation_refs = []
+        for ref in citation_refs:
+            if ref not in text_for_checks:
+                target_issues.append({"code": "citation_ref_missing", "citation_ref": ref, "message": "Listed citation_ref does not occur in target text"})
+
+        for field, existing_ids in (("source_ids", source_ids), ("finding_ids", finding_ids), ("evidence_ids", evidence_ids)):
+            values = target.get(field, [])
+            if not isinstance(values, list):
+                target_issues.append({"code": "field_type", "field": field, "message": f"{field} must be an array"})
+                continue
+            for value in values:
+                if value not in existing_ids:
+                    target_issues.append({"code": "missing_referenced_id", "field": field, "id": value})
+
+        finding_values = target.get("finding_ids", [])
+        evidence_values = target.get("evidence_ids", [])
+        if (isinstance(finding_values, list)
+                and isinstance(evidence_values, list)
+                and not finding_values
+                and not evidence_values
+                and not target.get("not_grounded_reason")):
+            target_issues.append({
+                "code": "missing_declared_grounding",
+                "message": "Target has no finding_ids, evidence_ids, or not_grounded_reason",
+            })
+
+        warnings_value = target.get("warnings", [])
+        if "warnings" in target and not isinstance(warnings_value, list):
+            target_issues.append({"code": "field_type", "field": "warnings", "message": "warnings must be an array"})
+
+        if status == "valid" and target_issues:
+            status = "invalid"
+        if status == "valid":
+            valid_targets += 1
+        elif status.startswith("stale"):
+            stale_targets += 1
+        elif status == "orphaned":
+            orphaned_targets += 1
+
+        target_results.append({
+            "target_id": target_ref,
+            "status": status,
+            "section": target.get("section"),
+            "paragraph": target.get("paragraph"),
+            "matched_section": matched["section"] if matched else None,
+            "matched_paragraph": matched["paragraph"] if matched else None,
+            "issues": target_issues,
+        })
+
+    ungrounded = []
+    for p in body_paragraphs:
+        key = (p["section"], p["paragraph"])
+        if key not in grounded_keys:
+            ungrounded.append({
+                "section": p["section"],
+                "paragraph": p["paragraph"],
+                "text_hash": p["text_hash"],
+                "text_snippet": p["text_snippet"],
+                "citation_refs": p["citation_refs"],
+            })
+
+    if ungrounded:
+        issues.append({
+            "code": "ungrounded_paragraphs",
+            "message": f"{len(ungrounded)} body paragraph(s) have no grounding target",
+        })
+
+    target_issue_count = sum(len(t["issues"]) for t in target_results)
+    valid = not issues and target_issue_count == 0
+    success_response({
+        "schema_version": "report-grounding-validation-v1",
+        "manifest_path": os.path.relpath(manifest_path),
+        "manifest_status": "loaded",
+        "report_path": report_value,
+        "valid": valid,
+        "issues": issues,
+        "targets": target_results,
+        "ungrounded_paragraphs": ungrounded,
+        "summary": {
+            "targets": len(target_results),
+            "valid_targets": valid_targets,
+            "stale_targets": stale_targets,
+            "orphaned_targets": orphaned_targets,
+            "target_issue_count": target_issue_count,
+            "ungrounded_paragraphs": len(ungrounded),
+            "report_body_paragraphs": len(body_paragraphs),
+        },
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -4492,6 +5363,11 @@ def main():
     p.add_argument("--write-handoff", action="store_true", help="Write full summary to synthesis-handoff.json, return only path and counts")
     p.add_argument("--session-dir", **_sd)
 
+    # support-context
+    p = sub.add_parser("support-context")
+    p.add_argument("--format", choices=["json", "markdown"], default="json", help="Output JSON context or compact markdown")
+    p.add_argument("--session-dir", **_sd)
+
     # mark-read
     p = sub.add_parser("mark-read")
     p.add_argument("--id", required=True)
@@ -4521,7 +5397,32 @@ def main():
     # set-quality
     p = sub.add_parser("set-quality")
     p.add_argument("--id", required=True)
-    p.add_argument("--quality", type=str, choices=["ok", "abstract_only", "degraded", "mismatched", "reader_validated"], required=True)
+    p.add_argument("--quality", type=str, choices=sorted(_SOURCE_QUALITY_ACCEPTED), required=True)
+    p.add_argument("--session-dir", **_sd)
+
+    # source flags
+    p = sub.add_parser("set-source-flag")
+    p.add_argument("--source-id", required=True)
+    p.add_argument("--flag", required=True, choices=list(_SOURCE_CAUTION_FLAGS))
+    p.add_argument("--applies-to", default="run", choices=list(_SOURCE_FLAG_SCOPES))
+    p.add_argument("--applies-to-id", default="")
+    p.add_argument("--rationale", required=True)
+    p.add_argument("--created-by", default="agent")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("source-flags")
+    p.add_argument("--source-id", default=None)
+    p.add_argument("--flag", default=None, choices=list(_SOURCE_CAUTION_FLAGS))
+    p.add_argument("--applies-to", default=None, choices=list(_SOURCE_FLAG_SCOPES))
+    p.add_argument("--applies-to-id", default=None)
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("source-flag-summary")
+    p.add_argument("--include-rows", action="store_true")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("source-quality-summary")
+    p.add_argument("--include-rows", action="store_true")
     p.add_argument("--session-dir", **_sd)
 
     # log-metric
@@ -4635,6 +5536,16 @@ def main():
     p.add_argument("--pass", dest="pass_type", default=None, choices=["accuracy", "style"],
                    help="Filter to edits from a specific pass (default: check all)")
 
+    # report grounding
+    p = sub.add_parser("report-paragraphs", help="List report paragraphs with stable text hashes")
+    p.add_argument("--report", required=True, help="Path to draft.md/report.md")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("validate-report-grounding", help="Validate report-grounding.json against report text and state IDs")
+    p.add_argument("--manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
+    p.add_argument("--report", default=None, help="Override report path from manifest")
+    p.add_argument("--session-dir", **_sd)
+
     # validate-content
     p = sub.add_parser("validate-content", help="Validate downloaded content against source metadata")
     p.add_argument("--top", type=int, default=30, help="Number of top sources to check (default 30)")
@@ -4677,12 +5588,17 @@ def main():
         "get-source": cmd_get_source,
         "update-source": cmd_update_source,
         "summary": cmd_summary,
+        "support-context": cmd_support_context,
         "mark-read": cmd_mark_read,
         "set-status": cmd_set_status,
         "add-tag": cmd_add_tag,
         "list-sources": cmd_list_sources,
         "search-sources": cmd_search_sources,
         "set-quality": cmd_set_quality,
+        "set-source-flag": cmd_set_source_flag,
+        "source-flags": cmd_source_flags,
+        "source-flag-summary": cmd_source_flag_summary,
+        "source-quality-summary": cmd_source_quality_summary,
         "log-metric": cmd_log_metric,
         "log-metrics": cmd_log_metrics,
         "get-metrics": cmd_get_metrics,
@@ -4700,6 +5616,8 @@ def main():
         "dedup-references": cmd_dedup_references,
         "dedup-issues": cmd_dedup_issues,
         "validate-edits": cmd_validate_edits,
+        "report-paragraphs": cmd_report_paragraphs,
+        "validate-report-grounding": cmd_validate_report_grounding,
         "validate-content": cmd_validate_content,
     }
 

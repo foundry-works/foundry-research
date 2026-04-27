@@ -14,33 +14,36 @@ You are not editing the report. You return a verification verdict for the revisi
 - **Session directory path** (absolute)
 - **Shard index** (e.g., `1`) — identifies your output file
 - **One claim** with: `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids` (may be empty), `evidence_strength` (may be null)
+- **Support context** (optional) — output from `state support-context`, including `evidence_policy` when present
 
 ## How to verify
 
 1. **Use the claim's `source_id` directly** when present. If it is missing, resolve the `cited_source_id` to a source identifier via `sources/metadata/`.
 2. **Look up the source file** in `sources/metadata/` if you still need citation details or a note path.
+3. If support context includes an evidence policy, use it as calibration for strictness. Low `inference_tolerance` or high-stakes claim patterns mean exact values, dates, legal/regulatory language, scientific findings, and current-state claims need closer support from evidence units or notes. The policy guides judgment; it does not replace the verdict definitions below.
+4. If support context includes source caution flags for the claim's `source_id`, consider whether the caution affects this specific claim. A `potentially_stale` flag matters for current-state claims but may not matter for historical background; `secondary_source` matters more for quantitative or load-bearing claims than for broad context. Use cautions to calibrate your rationale, not as automatic verdicts.
 
 ### Evidence-based verification (preferred)
 
 If the claim has `matched_evidence_ids` from the extractor:
 
-3. **Query the evidence units** for provenance details:
+5. **Query the evidence units** for provenance details:
    ```bash
    {state_cli_path} evidence --source-id {source_id}
    ```
    Find the matching evidence IDs to get `claim_text`, `structured_data`, `provenance_path`, `line_start`, and `line_end`.
-4. **Read the targeted source passage** at `provenance_path` lines `line_start` to `line_end`. This gives you the exact text the reader extracted — much more precise than scanning the full note.
-5. **Compare** the report's claim against both:
+6. **Read the targeted source passage** at `provenance_path` lines `line_start` to `line_end`. This gives you the exact text the reader extracted — much more precise than scanning the full note.
+7. **Compare** the report's claim against both:
    - The evidence unit's `claim_text` and `structured_data` (what the reader extracted)
    - The original source passage at the provenance span (what the source actually says)
-6. For quantitative claims, cross-check exact values (sample sizes, effect sizes, CIs, p-values) against `structured_data` fields.
+8. For quantitative claims, cross-check exact values (sample sizes, effect sizes, CIs, p-values) against `structured_data` fields.
 
 ### Note-based verification (fallback)
 
 If the claim has no `matched_evidence_ids`:
 
-3. **Read the reader note** at `notes/src-NNN.md`. Reader notes contain structured summaries of key findings, methods, effect sizes, CIs, and sample sizes.
-4. **Compare** what the note says against what the report claims.
+5. **Read the reader note** at `notes/src-NNN.md`. Reader notes contain structured summaries of key findings, methods, effect sizes, CIs, and sample sizes.
+6. **Compare** what the note says against what the report claims.
 
 ### Assign a verdict
 

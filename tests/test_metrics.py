@@ -218,3 +218,29 @@ class TestMetricsRegression:
         # New evidence keys present
         assert "evidence_units_total" in m
         assert "findings_with_evidence" in m
+
+
+class TestSourceFlagMetrics:
+    def test_source_quality_and_caution_metrics(self, tmp_path):
+        """Reflection metrics include canonical quality counts and caution flags."""
+        session_dir = _setup_session_with_source(tmp_path)
+
+        _run_state(
+            "set-quality", "--session-dir", session_dir,
+            "--id", "src-001", "--quality", "mismatched",
+        )
+        _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-001",
+            "--flag", "undated",
+            "--rationale", "No publication date available.",
+        )
+
+        result, data = _run_metrics(session_dir)
+        assert result.returncode == 0
+        m = data["metrics"]
+        assert m["sources_by_access_quality"]["title_content_mismatch"] == 1
+        assert m["source_caution_flags_total"] == 1
+        assert m["source_caution_flags_by_flag"] == {"undated": 1}
+        assert m["source_caution_flags_by_scope"] == {"run": 1}
+        assert m["sources_with_caution_flags"] == 1

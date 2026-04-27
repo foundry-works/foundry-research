@@ -15,6 +15,7 @@ A directive from the supervisor containing:
 - **Session directory path** (absolute)
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — the original scope and questions, for completeness checking
+- **Support context** (optional) — output from `state support-context`, including `evidence_policy` when present
 - **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-flag issues that match a prior resolved entry unless you have new evidence that the fix was insufficient or introduced a new problem. Focus your review on: (a) text that was changed by the prior revision — check for errors introduced by the edits, (b) text that was not previously reviewed, (c) any new user feedback. **Why:** Re-examining already-confirmed fixes wastes tokens without improving the report. The prior manifest tells you what was already addressed — skip it unless something looks wrong.
 
 ## How to work
@@ -22,8 +23,10 @@ A directive from the supervisor containing:
 1. Read the draft report
 2. Read all notes in `notes/` to cross-reference claims against source summaries
 3. Read source metadata from `sources/metadata/` when you need citation details
-4. Systematically check against the five audit dimensions below
-5. Return a structured issues list — do NOT rewrite the report
+4. Check support context when present and use the evidence policy as advisory calibration for freshness, source expectations, and inference tolerance
+5. Check source caution flags in support context when present and use them as prioritization inputs for citation and support checks
+6. Systematically check against the five audit dimensions below
+7. Return a structured issues list — do NOT rewrite the report
 
 ## Audit dimensions
 
@@ -37,10 +40,16 @@ Assertions that don't have an inline citation and aren't self-evident logical co
 
 **What's NOT an issue:** Transitional sentences, logical inferences explicitly derived from cited premises, definitional statements.
 
+When an evidence policy is present, apply its `inference_tolerance`, `freshness_requirement`, and `high_stakes_claim_patterns` in this dimension. Be stricter for claims the policy identifies as high-stakes, current, legal, regulatory, scientific, or quantitative; be appropriately tolerant of interpretive synthesis when the policy allows it and the report clearly separates inference from sourced facts.
+
+When source caution flags are present, pay closer attention to claims using flagged sources. `secondary_source`, `self_interested_source`, `undated`, `potentially_stale`, and `low_relevance` are not automatic issues, but the report should avoid overstating what those sources can support.
+
 ### 3. Secondary-source-only claims
 Key findings — claims the report's conclusions depend on — that rest entirely on secondary sources (blogs, review sites, affiliate content, news articles) without primary source verification. A "key finding" is one that, if wrong, would change the report's recommendations.
 
 **How to check:** For each major conclusion, trace backward to its supporting citations. Check source metadata for source type. Flag when load-bearing claims cite only secondary sources.
+
+Use `secondary_source` source caution flags when present; they are declared provenance from earlier agents and should guide which citations you inspect first.
 
 ### 4. Missing applicability context
 Findings stated as actionable without feasibility assessment. The report says "do X" or "X is the best option" without noting conditions under which X might not work, be unavailable, or have significant caveats.

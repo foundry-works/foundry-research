@@ -15,6 +15,7 @@ A directive from the supervisor containing:
 - **Session directory path** (absolute)
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Condensed brief** — scope and question IDs for context (e.g., "Scope: [one sentence]. Questions: Q1-Q7")
+- **Support context** (optional) — output from `state support-context`, including `evidence_policy` when present
 
 ## How to work
 
@@ -26,6 +27,10 @@ Read the report and identify the **5-10 most important claims** — the ones the
 1. **Specific numbers** (sample sizes, effect sizes, percentages, p-values) — most verifiable, most damaging if wrong
 2. **Study conclusion characterizations** ("found X" or "rejected Y") — easy to subtly misstate through summarization
 3. **Absence-of-evidence claims** ("no study has shown...") — hardest to verify, highest risk of being wrong
+
+If support context includes an evidence policy, use `high_stakes_claim_patterns`, `freshness_requirement`, and `inference_tolerance` to adjust priority. Claims matching policy patterns should move up the list, especially current, legal, regulatory, scientific, quantitative, or recommendation-changing claims. If no policy is present, use the default priority order above.
+
+Also use `support_context.source_caution_flags` when present. Claims relying on sources flagged `secondary_source`, `self_interested_source`, `undated`, `potentially_stale`, or scoped `low_relevance` should generally receive higher verification priority, especially when the caution applies to the same report section, citation, finding, or current-state claim. Do not treat a caution flag as proof the claim is wrong.
 
 **De-prioritize:** Definitional statements, transitional logic, hedged claims, and claims with strong primary source backing already visible in the notes. Focus on claims where errors are consequential and non-obvious.
 

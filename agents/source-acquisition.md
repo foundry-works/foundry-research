@@ -36,6 +36,18 @@ A directive from the supervisor containing:
 - **CLI directory path** (absolute path to the skill directory with `search`, `download`, `state`, `enrich` commands) — use this as the prefix for all `<cli_dir>` command examples below
 - **Research brief** — scope, questions (Q1-QN), completeness criteria
 - **Mode**: `initial` or `gap`
+- **Support context** (optional) — output from `state support-context`, including `evidence_policy` when the supervisor created `evidence-policy.yaml`
+
+If support context includes an evidence policy, use it as advisory calibration for source authority, freshness, and search breadth. For example, stricter `source_expectations` should push quantitative, legal, regulatory, scientific, or current claims toward primary or official sources where available. Low `inference_tolerance` should make you log gaps instead of filling them with weak secondary material. If support context is absent or `evidence_policy.present` is false, proceed normally.
+
+When source metadata itself warrants a caution, record it without changing extraction quality:
+
+```bash
+<cli_dir>/state set-source-flag --source-id src-NNN --flag secondary_source --rationale "Review article, not primary evidence."
+<cli_dir>/state set-source-flag --source-id src-NNN --flag potentially_stale --applies-to brief --applies-to-id Q4 --rationale "Older source for a recency-dependent question."
+```
+
+Use only these caution flags: `secondary_source`, `self_interested_source`, `undated`, `potentially_stale`, `low_relevance`. Do not use source flags for weak support; support strength is judged later between evidence and a finding, report target, or citation.
 
 ### Initial mode
 Full source acquisition pipeline: connectivity test → broad searches → citation chasing → provider diversity → triage → downloads → recovery.
