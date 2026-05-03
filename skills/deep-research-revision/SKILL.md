@@ -15,11 +15,19 @@ You are a revision orchestrator. You take an existing research session with a dr
 
 ---
 
+## Runtime Paths
+
+Set `cli_dir` to the absolute path of the deep-research CLI skill directory (`skills/deep-research`) before running commands. In Claude Code this is `${CLAUDE_PLUGIN_ROOT}/skills/deep-research`; in Codex or a local checkout, resolve it from the installed plugin/skill root (for example `<repo>/skills/deep-research`). Substitute the resolved path for `{cli_dir}` before execution; do not type the braces literally.
+
+Set `plugin_root` to the parent directory that contains `skills/` and `agents/`. Reviewer and reviser role prompts live in `{plugin_root}/agents/*.md`. If the harness supports named plugin subagents, launch those names directly. If it only supports generic subagents, read the relevant role prompt file and include it in the subagent directive.
+
+---
+
 ## Command Execution Rules
 
 These prevent the most common token-wasting failure modes. Follow them strictly.
 
-1. **Always launch subagents in the foreground.** Never set `run_in_background: true` on Agent calls. Foreground agents block until complete and return results directly. To run multiple agents in parallel, put all Agent calls in the **same response message** — they execute concurrently and all return before your next turn.
+1. **Always launch subagents in the foreground.** Never set `run_in_background: true` on subagent calls. Foreground agents block until complete and return results directly. When the harness supports parallel subagent dispatch, launch independent agents together so they execute concurrently and all return before your next turn.
 
 2. **Never sleep-poll.** Don't use `sleep N && ls` or `sleep N && cat` to check if agents finished. Foreground agents return their results directly.
 
@@ -95,8 +103,14 @@ In quick mode, skip to **Step 3** (accuracy revision) with only the user's struc
 1. Read `report.md` to confirm it exists and is non-empty
 2. Read the research brief from `journal.md` or `brief.json` in the session directory — the reviewers need this for context
 3. Run `{cli_dir}/state support-context --session-dir <session-dir>` and keep the result for all reviewer, verifier, and reviser launch prompts. If `evidence-policy.yaml` is absent, the command returns `evidence_policy.present: false`; this is normal and must not block revision.
-4. Check for an existing `revision/revision-manifest.json` from a prior run. If it exists, read it and extract the list of resolved issue IDs with their locations and fixes. Pass this as a `prior_resolved` list to each reviewer in their launch prompt. **Why:** Without prior-revision awareness, a second run pays full reviewer cost re-examining already-fixed text. Passing the manifest lets reviewers skip confirmed fixes and focus on changed text, unreviewed text, and new user feedback — expected token savings of ~40-60% on subsequent passes.
-5. Copy `report.md` to `report_draft.md` to preserve the original for diffing
+4. If `report-grounding.json` exists, prefer it over report reparsing:
+   - Run `{cli_dir}/state validate-report-grounding --session-dir <session-dir> --report <session-dir>/report.md`
+   - Run `{cli_dir}/state audit-report-support --session-dir <session-dir> --report <session-dir>/report.md`
+   - Run `{cli_dir}/state citation-audit-contexts --session-dir <session-dir> --report <session-dir>/report.md`
+   - Run `{cli_dir}/state review-issues --session-dir <session-dir> --report <session-dir>/report.md --grounding-manifest <session-dir>/report-grounding.json --status open`
+   Keep `report-grounding.json`, `revision/report-support-audit.json`, `revision/citation-audit-contexts.json`, and current open review issues for extractor, verifier, reviewer, and reviser prompts. If grounding is absent or incomplete, keep going; report parsing remains the fallback.
+5. Check for an existing `revision/revision-manifest.json` from a prior run. If it exists, read it and extract the list of resolved issue IDs with their locations and fixes. Pass this as a `prior_resolved` list to each reviewer in their launch prompt. **Why:** Without prior-revision awareness, a second run pays full reviewer cost re-examining already-fixed text. Passing the manifest lets reviewers skip confirmed fixes and focus on changed text, unreviewed text, and new user feedback — expected token savings of ~40-60% on subsequent passes.
+6. Copy `report.md` to `report_draft.md` to preserve the original for diffing
 
 ```bash
 cp <session-dir>/report.md <session-dir>/report_draft.md
@@ -114,10 +128,13 @@ Launch **`claim-extractor`** subagent (Sonnet, foreground) with:
 - Session directory path (absolute)
 - Path to `report.md` (relative from project root)
 - **Condensed brief** — the scope line and question IDs only (e.g., "Scope: [one sentence]. Questions: Q1-Q7"). Do NOT pass the full `brief.json` — it's too large and causes context overflow when combined with the verifier's source reads.
-- **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence units for claim cross-referencing
+- **State CLI path** (`{cli_dir}/state`) — needed to query evidence units for claim cross-referencing
 - **Support context** from `state support-context` — lets the extractor prioritize policy-defined high-stakes, freshness-sensitive, or low-tolerance claims
+- **Report grounding path** when present — the extractor should read grounded targets first and preserve target IDs, hashes, snippets, citations, source IDs, finding IDs, and evidence IDs in claim objects
+- **Report support audit path** when present — use it to prioritize weak, unsupported, citation-sensitive, source-warning-dependent, or unresolved targets before parsing prose
+- **Citation audit contexts path** when present — use it to preserve local citation context for downstream verifier checks
 
-The extractor reads the report, identifies 5-10 load-bearing claims, classifies their source types, and returns a structured claims manifest.
+The extractor starts from grounded targets when available, falls back to report parsing when grounding is absent or incomplete, identifies 5-10 load-bearing claims, classifies their source types, and returns a structured claims manifest.
 
 **After it returns**, parse the claims manifest JSON. If it returned 0 claims, log this and skip to Phase B with no verifier launches (only the synthesis-reviewer will run).
 
@@ -125,26 +142,58 @@ The extractor reads the report, identifies 5-10 load-bearing claims, classifies 
 
 Shard the extracted claims into 1 claim per shard. For example, 8 claims produces 8 shards: [1], [2], ..., [8]. One claim per verifier minimizes blast radius — a single failure only loses one verification.
 
-**Launch synthesis-reviewer + claim-verifier shards in parallel** (all Agent calls in the same response message):
+**Launch synthesis-reviewer + claim-verifier shards in parallel** (all subagent calls together when the harness supports parallel dispatch):
 
 - **`synthesis-reviewer`** subagent (Sonnet) with:
   - Session directory path (absolute)
   - Path to `report.md` (relative from project root)
   - Research brief
   - Support context from `state support-context`
+  - Report grounding/support audit paths when present, so reviewer issues can use `report_target` IDs, source IDs, evidence IDs, citation refs, hashes, and snippets
   - The reviewer audits for: internal contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity
 
 - **`claim-verifier`** subagent(s) (Sonnet, one per shard) with:
   - Session directory path (absolute)
   - Shard index (1, 2, 3, ...)
-  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `cited_source_id`, `source_id`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
-  - **State CLI path** (`${CLAUDE_PLUGIN_ROOT}/skills/deep-research/state`) — needed to query evidence provenance for targeted verification
+  - One claim, passed as inline JSON (the full claim object from the extractor's output — `claim_id`, `quoted_text`, `report_location`, `report_target_id`, `section`, `paragraph`, `text_hash`, `text_snippet`, `citation_refs`, `cited_source_id`, `source_id`, `source_ids`, `finding_ids`, `source_type`, `claim_category`, `verification_priority`, `matched_evidence_ids`, `evidence_strength`)
+  - **State CLI path** (`{cli_dir}/state`) — needed to query evidence provenance for targeted verification
   - Support context from `state support-context`
+  - Citation audit context when available — pass the matching object from `revision/citation-audit-contexts.json` by `cited_source_id`, `source_id`, report location, or citation ref
   - Each verifier checks its claim against evidence units (preferred) or local reader notes (fallback), no web search
 
 **Why two-phase instead of a monolithic verifier:** A single verifier that both reads the full report (~40KB+) and does web-search verification exceeds context limits during execution. The extractor reads the report once, and each verifier checks one claim against local reader notes — no report reading, no web searches, minimal context growth. One claim per verifier minimizes blast radius: a single failure only loses one verification.
 
-**After all agents return**, merge the verifier shard outputs: concatenate all shards' `issues` arrays. Re-number `verify-N` IDs sequentially across shards (e.g., shard 1 produces verify-1 through verify-2, shard 2 produces verify-3 through verify-5). Then apply verifier gating to decide how much of the merged verifier output to use:
+**After all agents return**, merge the verifier shard outputs: concatenate all shards' `issues` arrays. Re-number `verify-N` IDs sequentially across shards (e.g., shard 1 produces verify-1 through verify-2, shard 2 produces verify-3 through verify-5).
+
+Also collect every verifier's `citation_audit_checks` array and write a merged citation audit manifest to `revision/citation-audit.json`:
+
+```json
+{
+  "schema_version": "citation-audit-v1",
+  "status": "audited",
+  "path": "deep-research-topic/revision/citation-audit.json",
+  "checks": [
+    {
+      "check_id": "cite-001",
+      "target_type": "citation",
+      "target_id": "rp-001:[4]",
+      "report_target_id": "rp-001",
+      "local_target": "paragraph",
+      "section": "Executive Summary",
+      "paragraph": 2,
+      "text_hash": "sha256:...",
+      "text_snippet": "Local paragraph snippet...",
+      "citation_ref": "[4]",
+      "cited_source_ids": ["src-004"],
+      "support_classification": "weak_support",
+      "rationale": "The source is relevant but does not support the paragraph's specific quantitative wording.",
+      "recommended_action": "weaken_wording"
+    }
+  ]
+}
+```
+
+Write the citation audit before applying verifier gating. The citation audit is an audit trail of checked citations; gating only controls which verifier issues go to revision. Then apply verifier gating to decide how much of the merged verifier output to use:
 
 #### Verifier gating
 
@@ -178,6 +227,16 @@ Evaluate the synthesis-reviewer's results to determine how to use the verifier's
 **Why the orchestrator re-numbers verify IDs across shards:** Each shard produces its own `verify-1`, `verify-2`, etc. Without re-numbering, parallel shards would produce colliding IDs. The orchestrator concatenates and re-indexes before feeding into dedup and revision.
 
 If the user provided feedback, add the structured user directives (from the User Feedback Handling section above) to the issues list.
+
+For citation audit checks with `support_classification` other than `supported` or `recommended_action` other than `keep`, ensure there is an actionable issue in the accuracy issues list. If the verifier did not already create one, add a `cite-N` issue with severity `medium`, location from the citation check, `dimension: citation_support`, and a suggested fix based on `recommended_action`.
+
+After writing `revision/citation-audit.json`, run `{cli_dir}/state audit-report-support --session-dir <session-dir> --report <session-dir>/report.md` to refresh `revision/report-support-audit.json`. This feeds citation-audit outcomes into the revision audit surface before editing begins.
+
+When adding or forwarding reviewer/verifier/citation issues, use the compact review issue schema: `issue_id`, `dimension`, `severity`, `target_type`, `target_id`, `locator`, `text_hash`, `text_snippet`, `related_source_ids`, `related_evidence_ids`, `related_citation_refs`, `status`, `rationale`, and `resolution`. Preserve legacy `location` and `description` if present, but keep them consistent with `locator` and `rationale`. Preserve `report_target_id`, `citation_ref`, `cited_source_ids`, `finding_ids`, and `evidence_ids` too, so the reviser and post-edit validation can connect fixes back to grounded report targets.
+
+Track contradiction candidates as review issues first, not as a separate graph subsystem. For each contradiction issue, include `conflicting_target_ids`, plain-language `rationale`, `contradiction_type`, `status`, and `final_report_handling`. Allowed contradiction types are `direct_conflict`, `scope_difference`, `temporal_difference`, `method_difference`, `apparent_uncertainty`, and `source_quality_conflict`.
+
+Before deduplication, write the active accuracy issues to `revision/accuracy-issues.json` using `schema_version: "review-issues-v1"`. This file is the pre-revision audit trail; the later `revision/revision-manifest.json` records status transitions and resolutions.
 
 **If zero issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 4 (style review). Log that accuracy review found no issues.
 
@@ -233,7 +292,7 @@ The reviser makes surgical edits using the Edit tool and returns a manifest mapp
 **After the reviser returns:**
 - Check the manifest for unresolved issues — note these for delivery
 - Verify `report.md` was updated (the reviser edits it in place)
-- Write the reviser's manifest to `revision/revision-manifest.json` as structured JSON. Include for each issue: issue ID, status, location, and fix applied (the `action`, `old_text_snippet`, and `new_text_snippet` fields). **Why persist here, before validation:** The manifest captures intent — what the reviser tried to do. Validation confirms what actually landed. Both are useful for subsequent runs: the resolved list tells reviewers what was addressed, and validation status tells them whether it stuck.
+- Write the reviser's manifest to `revision/revision-manifest.json` as structured JSON. Include for each issue: issue ID, status (`resolved`, `partially_resolved`, `accepted_as_limitation`, `rejected_with_rationale`, or `open`), resolution, target type/ID, location, report target ID when present, target snippet/hash when present, fixed citation refs/source IDs when present, support status change when applicable, and fix applied (the `action`, `old_text_snippet`, and `new_text_snippet` fields). **Why persist here, before validation:** The manifest captures intent — what the reviser tried to do. Validation confirms what actually landed. Both are useful for subsequent runs: the resolved list tells reviewers what was addressed, and validation status tells them whether it stuck.
 - Run post-revision validation (Step 3b below)
 
 **If zero accuracy issues found** (no reviewer issues, no verifier issues after gating, no user feedback): skip directly to Step 4 (style review). Log that accuracy review found no issues.
@@ -247,7 +306,7 @@ The reviser's manifest claims edits were made, but claims aren't proof. Validate
 **Run validation:**
 
 ```bash
-{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --pass accuracy
+{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --grounding-manifest <session-dir>/report-grounding.json --pass accuracy
 ```
 
 The command checks each resolved edit's `old_text_snippet` and `new_text_snippet` against the report and returns:
@@ -261,6 +320,7 @@ After the retry (or if no retry was needed), record:
 - Count of edits that passed validation on first try (`results.summary.confirmed`)
 - Count of edits that required retry
 - Count of edits that failed after retry (escalate to unresolved)
+- Count and IDs of grounded targets in `results.grounding_refresh.targets_needing_refresh`. These targets must be treated as stale declared provenance until grounding is regenerated. If any exist, record them in the revision manifest/delivery summary and rerun `{cli_dir}/state audit-report-support --session-dir <session-dir> --report <session-dir>/report.md` so the audit surface shows the stale/changed grounding state.
 
 ### Step 4: Round 2 — Style review
 
@@ -277,6 +337,8 @@ No `skip_locations` needed — the style reviewer sees corrected text and can fl
 The style reviewer checks: passive voice, unexplained jargon, unfocused paragraphs, filler phrases, and list opportunities — without changing meaning or weakening scientific accuracy.
 
 **After it returns**, collect style issues from the style-reviewer's `issues` array — issues are already prefixed `style-N` by the reviewer.
+
+Before filtering or style revision, write the raw style issues to `revision/style-issues.json` using `schema_version: "review-issues-v1"`. Preserve `target_type`, `target_id`, `locator`, `text_hash`, `text_snippet`, `status`, `rationale`, and `resolution` so style findings remain auditable even if only a subset is edited.
 
 **Severity filtering:**
 
@@ -307,26 +369,34 @@ Spawn a **`report-reviser`** subagent (Opus, foreground) with:
 Same as Step 3b but for style edits:
 
 ```bash
-{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --pass style
+{cli_dir}/state validate-edits --manifest <session-dir>/revision/revision-manifest.json --report <session-dir>/report.md --grounding-manifest <session-dir>/report-grounding.json --pass style
 ```
 
 Same retry logic (one retry cap). After validation, record:
 - Count of style edits confirmed on first try (`results.summary.confirmed`)
 - Count that required retry
 - Count that failed after retry (escalate to unresolved)
+- Grounded targets needing refresh from `results.grounding_refresh.targets_needing_refresh`, if any
 
 ### Step 6: Delivery
 
-1. Read the final `report.md`
-2. Present a summary to the user with results from both rounds:
+1. When a compact queryable handoff is useful, run `{cli_dir}/state ingest-support-artifacts --session-dir <session-dir> --report <session-dir>/report.md --grounding-manifest <session-dir>/report-grounding.json` to mirror the final file artifacts into state.db. The file artifacts remain the source of truth. If `report-grounding.json` is absent, omit `--grounding-manifest`; citation and review issue ingestion can still proceed when their files exist.
+2. Run `{cli_dir}/state review-issues --session-dir <session-dir> --report <session-dir>/report.md --grounding-manifest <session-dir>/report-grounding.json --status open` and record the open issue list before final delivery. If `report-grounding.json` is absent, omit `--grounding-manifest` but still list open issues.
+3. Run `{cli_dir}/state support-handoff --session-dir <session-dir>` and keep its reflection metrics for delivery.
+4. Run `{cli_dir}/state delivery-audit --session-dir <session-dir>` and keep its success metrics and `agent_judgment_required` validation checklist. Do not present this as a pass/fail gate.
+5. Read the final `report.md`
+6. Present a summary to the user with results from both rounds:
    - **Round 1 (accuracy):** How many accuracy issues were found and fixed (count `review-N` + `verify-N` resolved edits), plus user feedback items (`user-N`)
    - **Round 2 (style):** How many style issues were found and fixed (count `style-N` resolved edits)
    - Verifier gating mode used (full, targeted, or skip) and why — so the user understands how verification results were applied. If targeted, note which claims were matched; if skip, note that prior verification exists
    - How many issues were merged during dedup (if any), so the user knows independent reviewers agreed
    - Post-revision validation results for each round: how many edits were confirmed on first try, how many required a retry, and how many failed validation entirely (if any). **Why report this:** Validation failures signal fragile edits — if retries are frequent, the issues list may have too many overlapping edits targeting the same passages, which is useful feedback for tuning the reviewers.
-   - Any unresolved issues from either round (with explanations from the reviser manifest, including any edits that failed validation after retry)
-3. Note that the original draft is preserved at `report_draft.md` for comparison
-4. If there are unresolved issues, suggest what the user could do (e.g., provide the missing source, clarify their intent, run another revision pass)
+   - Grounded report targets that now need grounding refresh, if any, using the IDs from `validate-edits` (`grounding_refresh.targets_needing_refresh`)
+   - Any open issues from `state review-issues` with issue ID, severity, target, and resolution/rationale, including any edits that failed validation after retry
+   - Reflection metrics from `support-handoff`: declared target coverage, weak citation checks, reviewer issues with target IDs, resolved issues, and unresolved issues before delivery
+   - Delivery audit success metrics: source warning counts, evidence-link coverage, report-target coverage, citations audited/weak, resolved reviewer issues, and unresolved contradictions or limitations
+7. Note that the original draft is preserved at `report_draft.md` for comparison
+8. If there are unresolved issues, suggest what the user could do (e.g., provide the missing source, clarify their intent, run another revision pass)
 
 ---
 
@@ -334,15 +404,15 @@ Same retry logic (one retry cap). After validation, record:
 
 You are the supervisor. You orchestrate reviewers and the reviser — you do not edit the report yourself.
 
-Use the **Agent tool** to spawn subagents:
+Use the harness's subagent mechanism to spawn subagents:
 
-- **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Pass support context when present. Returns structured issues list. Use `subagent_type: "synthesis-reviewer"`.
-- **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Pass support context when present. Returns structured claim list for verification. Use `subagent_type: "claim-extractor"`.
-- **`claim-verifier`** (Sonnet) — verifies a pre-extracted claim against local reader notes. One claim per verifier, no web search, no report reading. Pass support context when present. Returns verification report with verdict. Launch one per claim. Use `subagent_type: "claim-verifier"`.
-- **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Pass support context when present so style suggestions preserve calibrated hedging and freshness qualifiers. Returns structured issues list. Use `subagent_type: "style-reviewer"`.
-- **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Pass support context when present. Uses Edit tool only. Returns edit manifest. Launch via Agent tool with the `agents/report-reviser.md` prompt.
+- **`synthesis-reviewer`** (Sonnet) — audits for contradictions, unsupported claims, secondary-source-only claims, missing applicability context, citation integrity. Pass support context when present. Returns structured issues list. In Codex, launch a worker/default subagent with `agents/synthesis-reviewer.md`.
+- **`claim-extractor`** (Sonnet) — reads the report, identifies load-bearing claims, classifies source types. Pass support context when present. Returns structured claim list for verification. In Codex, launch a worker/default subagent with `agents/claim-extractor.md`.
+- **`claim-verifier`** (Sonnet) — verifies a pre-extracted claim against local reader notes. One claim per verifier, no web search, no report reading. Pass support context when present. Returns verification report with verdict. Launch one per claim. In Codex, launch worker/default subagents with `agents/claim-verifier.md`.
+- **`style-reviewer`** (Sonnet) — audits for plain-language clarity. Pass support context when present so style suggestions preserve calibrated hedging and freshness qualifiers. Returns structured issues list. In Codex, launch a worker/default subagent with `agents/style-reviewer.md`.
+- **`report-reviser`** (Opus) — makes surgical edits based on a structured issues list. Pass support context when present. Uses surgical edits only. Returns edit manifest. In Codex, launch a worker/default subagent with `agents/report-reviser.md`.
 
-**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, put all Agent calls in one response message. With 1 claim per verifier and notes-only verification, each verifier is lightweight.
+**All agents must be foreground** (rule 1). To parallelize the synthesis-reviewer and claim-verifier shards in Phase B, launch them together when the harness supports parallel dispatch. With 1 claim per verifier and notes-only verification, each verifier is lightweight.
 
 ---
 
@@ -357,7 +427,11 @@ All revision artifacts go in `{session}/revision/`, not `notes/` or the session 
 | synthesis-reviewer | `{session}/revision/review-report.md` |
 | claim-extractor | `{session}/revision/claims-manifest.json` |
 | claim-verifier | `{session}/revision/verification-report-{shard_index}.md` |
+| merged citation audit | `{session}/revision/citation-audit.json` |
+| accuracy issue manifest | `{session}/revision/accuracy-issues.json` |
 | style-reviewer | `{session}/revision/style-review.md` |
+| style issue manifest | `{session}/revision/style-issues.json` |
+| revision status manifest | `{session}/revision/revision-manifest.json` |
 
 **Do not override these paths** when launching agents. Let each agent write to its default location — the paths above match what the agent prompts specify. **Why no overrides:** Ad-hoc path overrides in agent launch prompts diverge from the agent's own conventions, causing outputs to land in unexpected locations. When the orchestrator and agent disagree on where files go, downstream steps that read those files break silently.
 

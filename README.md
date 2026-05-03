@@ -106,6 +106,12 @@ claude --plugin-dir .
 
 Use `/reload-plugins` in the session to pick up changes.
 
+### Codex
+
+This repo also ships a Codex plugin manifest at `.codex-plugin/plugin.json` and Codex skill UI metadata under `skills/*/agents/openai.yaml`. For Codex, install or reference the repo root as the plugin root so the skills can find the shared `agents/` role prompts and bundled CLI tools.
+
+The individual skill folders are valid Codex skills, but `deep-research` and `deep-research-revision` are designed to run with the full plugin layout because they delegate to the role prompts in `agents/`.
+
 ## Configure
 
 On first enable, you'll be prompted for a Tavily API key. Additional API keys can be set as environment variables — see [.env.example](.env.example) or [docs/configuration.md](docs/configuration.md) for the full reference.

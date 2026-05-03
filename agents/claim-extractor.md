@@ -16,17 +16,38 @@ A directive from the supervisor containing:
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Condensed brief** — scope and question IDs for context (e.g., "Scope: [one sentence]. Questions: Q1-Q7")
 - **Support context** (optional) — output from `state support-context`, including `evidence_policy` when present
+- **Report grounding** (optional) — `report-grounding.json` or validated grounded target objects with `target_id`, section/paragraph locator, text hash/snippet, citation refs, source IDs, finding IDs, and evidence IDs
+- **Report support audit** (optional) — `revision/report-support-audit.json`, especially weak support density, targets depending on warned sources, citation-audit outcomes, and unresolved review issues
 
 ## How to work
 
-### Step 1: Identify load-bearing claims
+### Step 1: Start from grounded targets when available
+
+If `report-grounding.json` exists, read it before parsing the report prose. Treat it as declared provenance, not verified support. Use grounded targets to identify claim candidates because they already preserve paragraph locators, hashes, citations, source IDs, finding IDs, and evidence IDs.
+
+For each promising grounded target, preserve these fields in the extracted claim object when available:
+- `report_target_id`
+- `section`
+- `paragraph`
+- `text_hash`
+- `text_snippet`
+- `citation_refs`
+- `source_ids`
+- `finding_ids`
+- `matched_evidence_ids` from `evidence_ids`
+
+If the grounding manifest is missing, invalid, or incomplete for an important part of the report, fall back to parsing the report prose directly. Do not block extraction just because grounding is absent.
+
+### Step 2: Identify load-bearing claims
 
 Read the report and identify the **5-10 most important claims** — the ones the report's conclusions and recommendations depend on. A claim is "load-bearing" if, were it false, the report's advice would change.
 
 **Prioritize in this order:**
-1. **Specific numbers** (sample sizes, effect sizes, percentages, p-values) — most verifiable, most damaging if wrong
-2. **Study conclusion characterizations** ("found X" or "rejected Y") — easy to subtly misstate through summarization
-3. **Absence-of-evidence claims** ("no study has shown...") — hardest to verify, highest risk of being wrong
+1. **Weak, unsupported, citation-sensitive, or unresolved grounded targets** from report support audit or prior citation audit outcomes
+2. **Specific numbers** (sample sizes, effect sizes, percentages, p-values) — most verifiable, most damaging if wrong
+3. **Current, high-stakes, legal/regulatory, scientific, or recommendation-changing claims** based on the evidence policy
+4. **Study conclusion characterizations** ("found X" or "rejected Y") — easy to subtly misstate through summarization
+5. **Absence-of-evidence claims** ("no study has shown...") — hardest to verify, highest risk of being wrong
 
 If support context includes an evidence policy, use `high_stakes_claim_patterns`, `freshness_requirement`, and `inference_tolerance` to adjust priority. Claims matching policy patterns should move up the list, especially current, legal, regulatory, scientific, quantitative, or recommendation-changing claims. If no policy is present, use the default priority order above.
 
@@ -34,7 +55,7 @@ Also use `support_context.source_caution_flags` when present. Claims relying on 
 
 **De-prioritize:** Definitional statements, transitional logic, hedged claims, and claims with strong primary source backing already visible in the notes. Focus on claims where errors are consequential and non-obvious.
 
-### Step 2: Classify source types
+### Step 3: Classify source types
 
 For each claim, check the cited source(s) via `notes/` and `sources/metadata/`:
 - **Primary** — original research, official documentation, authoritative dataset, government/regulatory filing
@@ -43,9 +64,9 @@ For each claim, check the cited source(s) via `notes/` and `sources/metadata/`:
 
 A quick metadata check is sufficient — you do not need to read full source documents. The goal is to flag which claims rely on secondary sources, since those are higher verification priority.
 
-### Step 3: Cross-reference evidence units
+### Step 4: Cross-reference evidence units
 
-For each extracted claim, check whether structured evidence exists that matches:
+For each extracted claim, first use `evidence_ids` from the grounded target when present. If grounding does not provide evidence IDs, check whether structured evidence exists that matches:
 
 ```bash
 {state_cli_path} evidence --source-id src-NNN
@@ -57,7 +78,7 @@ Resolve the report citation to a concrete `source_id` before emitting the claim 
 
 Claims with matching evidence units are easier for the verifier to check (provenance spans point to exact source passages). Claims without matches need broader note-reading by the verifier — flag these as higher verification priority.
 
-### Step 4: Write claims manifest
+### Step 5: Write claims manifest
 
 Write the claims manifest to `revision/claims-manifest.json` in the session directory using a relative path. Then return the same JSON inline.
 
@@ -71,8 +92,16 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
       "claim_id": "extract-1",
       "quoted_text": "A pooled analysis of 15 studies (Key et al., 2015; 11,239 cases) found OR 0.73 for advanced prostate cancer",
       "report_location": "Section 1, paragraph 4",
+      "report_target_id": "rp-004",
+      "section": "Section 1",
+      "paragraph": 4,
+      "text_hash": "sha256:...",
+      "text_snippet": "A pooled analysis of 15 studies...",
       "cited_source_id": "[4]",
+      "citation_refs": ["[4]"],
       "source_id": "src-004",
+      "source_ids": ["src-004"],
+      "finding_ids": ["finding-7"],
       "source_type": "secondary",
       "claim_category": "quantitative",
       "verification_priority": "High — specific OR value from secondary source, load-bearing for observational convergence",
@@ -87,8 +116,13 @@ Write the claims manifest to `revision/claims-manifest.json` in the session dire
 - `claim_id`: `extract-1`, `extract-2`, ... (sequential)
 - `quoted_text`: exact text from the report containing the claim
 - `report_location`: section and paragraph for downstream targeting
+- `report_target_id`: grounded report target ID when available
+- `section`, `paragraph`, `text_hash`, `text_snippet`: grounding locator fields when available
 - `cited_source_id`: the inline citation reference (e.g., `[4]`)
+- `citation_refs`: all citation refs attached to the grounded local target when available
 - `source_id`: the resolved `src-NNN` source identifier for the citation
+- `source_ids`: all source IDs attached to the grounded local target when available
+- `finding_ids`: grounded upstream finding IDs when available
 - `source_type`: `primary`, `secondary`, or `none`
 - `claim_category`: `quantitative` (specific numbers), `conclusion` (study finding characterization), or `absence_of_evidence` (no study has shown...)
 - `verification_priority`: one-sentence justification for why this claim matters

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Research"
+  short_description: "Evidence-backed literature synthesis"
+  default_prompt: "Use $deep-research to synthesize evidence for this research question."

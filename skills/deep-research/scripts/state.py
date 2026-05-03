@@ -173,6 +173,105 @@ CREATE TABLE IF NOT EXISTS source_flags (
 
 CREATE INDEX IF NOT EXISTS idx_source_flags_source ON source_flags(session_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_source_flags_scope ON source_flags(session_id, applies_to_type, applies_to_id);
+
+CREATE TABLE IF NOT EXISTS report_targets (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    report_path TEXT,
+    section TEXT,
+    paragraph INTEGER,
+    text_hash TEXT,
+    text_snippet TEXT,
+    citation_refs TEXT NOT NULL DEFAULT '[]',
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    warnings TEXT NOT NULL DEFAULT '[]',
+    grounding_status TEXT,
+    not_grounded_reason TEXT,
+    support_note TEXT,
+    support_level TEXT,
+    claim_type TEXT,
+    validation_status TEXT,
+    is_ungrounded INTEGER NOT NULL DEFAULT 0,
+    manifest_path TEXT,
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, target_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_targets_status ON report_targets(session_id, validation_status);
+CREATE INDEX IF NOT EXISTS idx_report_targets_section ON report_targets(session_id, section, paragraph);
+
+CREATE TABLE IF NOT EXISTS report_target_evidence (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'declared',
+    PRIMARY KEY (session_id, target_id, evidence_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS report_target_findings (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'declared',
+    PRIMARY KEY (session_id, target_id, finding_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS citation_audits (
+    session_id TEXT NOT NULL,
+    check_id TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    report_target_id TEXT,
+    local_target TEXT,
+    section TEXT,
+    paragraph INTEGER,
+    text_hash TEXT,
+    text_snippet TEXT,
+    citation_ref TEXT,
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    support_classification TEXT,
+    recommended_action TEXT,
+    rationale TEXT,
+    audit_path TEXT,
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, check_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_citation_audits_target ON citation_audits(session_id, report_target_id);
+CREATE INDEX IF NOT EXISTS idx_citation_audits_classification ON citation_audits(session_id, support_classification);
+
+CREATE TABLE IF NOT EXISTS review_issues (
+    session_id TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    dimension TEXT,
+    severity TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    locator TEXT,
+    text_hash TEXT,
+    text_snippet TEXT,
+    related_source_ids TEXT NOT NULL DEFAULT '[]',
+    related_evidence_ids TEXT NOT NULL DEFAULT '[]',
+    related_citation_refs TEXT NOT NULL DEFAULT '[]',
+    status TEXT,
+    rationale TEXT,
+    resolution TEXT,
+    contradiction_type TEXT,
+    conflicting_target_ids TEXT NOT NULL DEFAULT '[]',
+    final_report_handling TEXT,
+    source_path TEXT,
+    target_match TEXT NOT NULL DEFAULT '{}',
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, issue_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_issues_status ON review_issues(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_review_issues_target ON review_issues(session_id, target_type, target_id);
 """
 
 _ADDITIVE_SCHEMA = """
@@ -193,6 +292,105 @@ CREATE TABLE IF NOT EXISTS source_flags (
 
 CREATE INDEX IF NOT EXISTS idx_source_flags_source ON source_flags(session_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_source_flags_scope ON source_flags(session_id, applies_to_type, applies_to_id);
+
+CREATE TABLE IF NOT EXISTS report_targets (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    report_path TEXT,
+    section TEXT,
+    paragraph INTEGER,
+    text_hash TEXT,
+    text_snippet TEXT,
+    citation_refs TEXT NOT NULL DEFAULT '[]',
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    warnings TEXT NOT NULL DEFAULT '[]',
+    grounding_status TEXT,
+    not_grounded_reason TEXT,
+    support_note TEXT,
+    support_level TEXT,
+    claim_type TEXT,
+    validation_status TEXT,
+    is_ungrounded INTEGER NOT NULL DEFAULT 0,
+    manifest_path TEXT,
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, target_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_targets_status ON report_targets(session_id, validation_status);
+CREATE INDEX IF NOT EXISTS idx_report_targets_section ON report_targets(session_id, section, paragraph);
+
+CREATE TABLE IF NOT EXISTS report_target_evidence (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'declared',
+    PRIMARY KEY (session_id, target_id, evidence_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS report_target_findings (
+    session_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    finding_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'declared',
+    PRIMARY KEY (session_id, target_id, finding_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS citation_audits (
+    session_id TEXT NOT NULL,
+    check_id TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    report_target_id TEXT,
+    local_target TEXT,
+    section TEXT,
+    paragraph INTEGER,
+    text_hash TEXT,
+    text_snippet TEXT,
+    citation_ref TEXT,
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    support_classification TEXT,
+    recommended_action TEXT,
+    rationale TEXT,
+    audit_path TEXT,
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, check_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_citation_audits_target ON citation_audits(session_id, report_target_id);
+CREATE INDEX IF NOT EXISTS idx_citation_audits_classification ON citation_audits(session_id, support_classification);
+
+CREATE TABLE IF NOT EXISTS review_issues (
+    session_id TEXT NOT NULL,
+    issue_id TEXT NOT NULL,
+    dimension TEXT,
+    severity TEXT,
+    target_type TEXT,
+    target_id TEXT,
+    locator TEXT,
+    text_hash TEXT,
+    text_snippet TEXT,
+    related_source_ids TEXT NOT NULL DEFAULT '[]',
+    related_evidence_ids TEXT NOT NULL DEFAULT '[]',
+    related_citation_refs TEXT NOT NULL DEFAULT '[]',
+    status TEXT,
+    rationale TEXT,
+    resolution TEXT,
+    contradiction_type TEXT,
+    conflicting_target_ids TEXT NOT NULL DEFAULT '[]',
+    final_report_handling TEXT,
+    source_path TEXT,
+    target_match TEXT NOT NULL DEFAULT '{}',
+    ingested_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, issue_id),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_issues_status ON review_issues(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_review_issues_target ON review_issues(session_id, target_type, target_id);
 """
 
 
@@ -253,6 +451,13 @@ _SOURCE_CAUTION_FLAGS = (
 _SOURCE_FLAG_SCOPES = ("run", "brief", "finding", "report_target", "citation")
 _REPORT_GROUNDING_FILENAME = "report-grounding.json"
 _REPORT_GROUNDING_SCHEMA_VERSION = "report-grounding-v1"
+_REPORT_SUPPORT_AUDIT_SCHEMA_VERSION = "report-support-audit-v1"
+_REPORT_SUPPORT_AUDIT_FILENAME = "report-support-audit.json"
+_CITATION_AUDIT_FILENAME = "citation-audit.json"
+_CITATION_AUDIT_CONTEXTS_FILENAME = "citation-audit-contexts.json"
+_CITATION_AUDIT_SCHEMA_VERSION = "citation-audit-v1"
+_CITATION_AUDIT_CONTEXTS_SCHEMA_VERSION = "citation-audit-contexts-v1"
+_REVIEW_ISSUES_SCHEMA_VERSION = "review-issues-v1"
 _REPORT_GROUNDING_REQUIRED_FIELDS = (
     "target_id",
     "section",
@@ -273,6 +478,86 @@ _REPORT_GROUNDING_OPTIONAL_FIELDS = (
     "claim_type",
 )
 _NON_BODY_SECTIONS = {"references", "further reading"}
+_SOURCE_WARNING_QUALITIES = {"abstract_only", "degraded_extraction"}
+_SOURCE_ACCESS_WARNING_QUALITIES = {
+    "inaccessible",
+    "abstract_only",
+    "degraded_extraction",
+    "metadata_incomplete",
+    "title_content_mismatch",
+}
+_SOURCE_WARNING_FLAGS = {"potentially_stale", "secondary_source", "self_interested_source"}
+_CITATION_SUPPORT_CLASSIFICATIONS = (
+    "supported",
+    "weak_support",
+    "topically_related_only",
+    "overstated",
+    "missing_specific_fact",
+    "needs_additional_source",
+    "unresolved",
+)
+_CITATION_RECOMMENDED_ACTIONS = (
+    "keep",
+    "weaken_wording",
+    "split_claim",
+    "add_source",
+    "replace_source",
+    "mark_unresolved",
+)
+_REVIEW_ISSUE_TARGET_TYPES = (
+    "source",
+    "evidence_unit",
+    "finding",
+    "report_target",
+    "citation",
+)
+_REVIEW_ISSUE_STATUSES = (
+    "open",
+    "resolved",
+    "partially_resolved",
+    "accepted_as_limitation",
+    "rejected_with_rationale",
+)
+_CONTRADICTION_TYPES = (
+    "direct_conflict",
+    "scope_difference",
+    "temporal_difference",
+    "method_difference",
+    "apparent_uncertainty",
+    "source_quality_conflict",
+)
+_WEAK_SUPPORT_CLASSIFICATIONS = {
+    "weak",
+    "weak_support",
+    "unsupported",
+    "partially_supported",
+    "topically_related_only",
+    "overstated",
+    "missing_specific_fact",
+    "needs_additional_source",
+    "unresolved",
+    "unverifiable",
+}
+_CITATION_WEAKENED_ACTIONS = {
+    "weaken_wording",
+    "split_claim",
+    "add_source",
+    "replace_source",
+    "mark_unresolved",
+}
+_CLOSED_REVIEW_ISSUE_STATUSES = {
+    "resolved",
+    "accepted_as_limitation",
+    "rejected_with_rationale",
+}
+_REPORT_EDIT_STATUSES = {
+    "resolved",
+    "partially_resolved",
+    "accepted_as_limitation",
+}
+_REVIEW_ISSUE_STATUS_ALIASES = {
+    "unresolved": "open",
+}
 
 
 def _empty_policy_fields() -> dict[str, str | list[str] | None]:
@@ -545,6 +830,225 @@ def _load_report_grounding_manifest(path: str) -> tuple[dict | None, list[dict]]
     return data, []
 
 
+def _validate_report_grounding(session_dir: str, manifest_arg: str | None = None, report_arg: str | None = None) -> dict:
+    manifest_path = _resolve_session_file(session_dir, manifest_arg, _REPORT_GROUNDING_FILENAME)
+    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+    if manifest is None:
+        return {
+            "schema_version": "report-grounding-validation-v1",
+            "manifest_path": manifest_path,
+            "manifest_status": "missing_or_invalid",
+            "valid": False,
+            "issues": manifest_issues,
+            "summary": {"targets": 0, "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
+        }
+
+    report_value = report_arg or manifest.get("report_path") or "draft.md"
+    report_path = _resolve_session_file(session_dir, report_value, None)
+    issues: list[dict] = []
+    target_results: list[dict] = []
+
+    if manifest.get("schema_version") not in (None, _REPORT_GROUNDING_SCHEMA_VERSION):
+        issues.append({
+            "code": "schema_version_unknown",
+            "message": f"Unknown report grounding schema_version: {manifest.get('schema_version')}",
+        })
+
+    if not os.path.exists(report_path):
+        issues.append({"code": "report_missing", "message": f"Report path does not exist: {report_value}"})
+        return {
+            "schema_version": "report-grounding-validation-v1",
+            "manifest_path": os.path.relpath(manifest_path),
+            "manifest_status": "loaded",
+            "report_path": report_value,
+            "valid": False,
+            "issues": issues,
+            "targets": [],
+            "summary": {"targets": len(manifest.get("targets", [])) if isinstance(manifest.get("targets"), list) else 0,
+                        "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
+        }
+
+    with open(report_path, encoding="utf-8") as f:
+        report_text = f.read()
+    paragraphs = _parse_report_paragraphs(report_text)
+    body_paragraphs = _body_paragraphs(paragraphs)
+    by_locator = {(p["section"], p["paragraph"]): p for p in paragraphs}
+    by_hash: dict[str, list[dict]] = {}
+    for p in paragraphs:
+        by_hash.setdefault(p["text_hash"], []).append(p)
+
+    conn = _connect(session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    source_ids = {row["id"] for row in conn.execute("SELECT id FROM sources WHERE session_id = ?", (sid,)).fetchall()}
+    finding_ids = {row["id"] for row in conn.execute("SELECT id FROM findings WHERE session_id = ?", (sid,)).fetchall()}
+    evidence_ids = {row["id"] for row in conn.execute("SELECT id FROM evidence_units WHERE session_id = ?", (sid,)).fetchall()}
+    conn.close()
+
+    targets = manifest.get("targets", [])
+    if not isinstance(targets, list):
+        issues.append({"code": "targets_invalid", "message": "Manifest field 'targets' must be an array"})
+        targets = []
+
+    grounded_keys = set()
+    valid_targets = 0
+    stale_targets = 0
+    orphaned_targets = 0
+
+    for index, target in enumerate(targets):
+        target_id = target.get("target_id") if isinstance(target, dict) else None
+        target_ref = target_id or f"target[{index}]"
+        target_issues: list[dict] = []
+        status = "valid"
+        matched = None
+
+        if not isinstance(target, dict):
+            target_results.append({"target_id": target_ref, "status": "invalid", "issues": [{"code": "target_invalid", "message": "Target must be an object"}]})
+            continue
+
+        for field in _REPORT_GROUNDING_REQUIRED_FIELDS:
+            if field not in target:
+                target_issues.append({"code": "missing_required_field", "field": field})
+
+        locator = (target.get("section"), target.get("paragraph"))
+        if isinstance(locator[0], str) and isinstance(locator[1], int):
+            matched = by_locator.get(locator)
+
+        expected_hash = target.get("text_hash")
+        if matched and expected_hash == matched["text_hash"]:
+            grounded_keys.add((matched["section"], matched["paragraph"]))
+        elif expected_hash in by_hash:
+            relocated = by_hash[expected_hash][0]
+            target_issues.append({
+                "code": "stale_locator",
+                "message": "Target hash exists in report but section/paragraph locator changed",
+                "current_section": relocated["section"],
+                "current_paragraph": relocated["paragraph"],
+            })
+            status = "stale_locator"
+            matched = relocated
+            grounded_keys.add((relocated["section"], relocated["paragraph"]))
+        elif matched:
+            target_issues.append({
+                "code": "stale_hash",
+                "message": "Target locator exists but text_hash no longer matches current paragraph text",
+                "current_text_hash": matched["text_hash"],
+            })
+            status = "stale_hash"
+            grounded_keys.add((matched["section"], matched["paragraph"]))
+        else:
+            snippet = _normalize_grounding_text(str(target.get("text_snippet", "")))
+            if snippet:
+                for p in paragraphs:
+                    if snippet and snippet in p["text"]:
+                        matched = p
+                        target_issues.append({
+                            "code": "stale_hash",
+                            "message": "Target reconnected by snippet but text_hash/locator did not match",
+                            "current_section": p["section"],
+                            "current_paragraph": p["paragraph"],
+                            "current_text_hash": p["text_hash"],
+                        })
+                        status = "stale_hash"
+                        grounded_keys.add((p["section"], p["paragraph"]))
+                        break
+            if matched is None:
+                target_issues.append({"code": "orphaned_target", "message": "Target could not be matched by locator, hash, or snippet"})
+                status = "orphaned"
+
+        text_for_checks = matched["text"] if matched else ""
+        citation_refs = target.get("citation_refs", [])
+        if not isinstance(citation_refs, list):
+            target_issues.append({"code": "field_type", "field": "citation_refs", "message": "citation_refs must be an array"})
+            citation_refs = []
+        for ref in citation_refs:
+            if ref not in text_for_checks:
+                target_issues.append({"code": "citation_ref_missing", "citation_ref": ref, "message": "Listed citation_ref does not occur in target text"})
+
+        for field, existing_ids in (("source_ids", source_ids), ("finding_ids", finding_ids), ("evidence_ids", evidence_ids)):
+            values = target.get(field, [])
+            if not isinstance(values, list):
+                target_issues.append({"code": "field_type", "field": field, "message": f"{field} must be an array"})
+                continue
+            for value in values:
+                if value not in existing_ids:
+                    target_issues.append({"code": "missing_referenced_id", "field": field, "id": value})
+
+        finding_values = target.get("finding_ids", [])
+        evidence_values = target.get("evidence_ids", [])
+        if (isinstance(finding_values, list)
+                and isinstance(evidence_values, list)
+                and not finding_values
+                and not evidence_values
+                and not target.get("not_grounded_reason")):
+            target_issues.append({
+                "code": "missing_declared_grounding",
+                "message": "Target has no finding_ids, evidence_ids, or not_grounded_reason",
+            })
+
+        warnings_value = target.get("warnings", [])
+        if "warnings" in target and not isinstance(warnings_value, list):
+            target_issues.append({"code": "field_type", "field": "warnings", "message": "warnings must be an array"})
+
+        if status == "valid" and target_issues:
+            status = "invalid"
+        if status == "valid":
+            valid_targets += 1
+        elif status.startswith("stale"):
+            stale_targets += 1
+        elif status == "orphaned":
+            orphaned_targets += 1
+
+        target_results.append({
+            "target_id": target_ref,
+            "status": status,
+            "section": target.get("section"),
+            "paragraph": target.get("paragraph"),
+            "matched_section": matched["section"] if matched else None,
+            "matched_paragraph": matched["paragraph"] if matched else None,
+            "issues": target_issues,
+        })
+
+    ungrounded = []
+    for p in body_paragraphs:
+        key = (p["section"], p["paragraph"])
+        if key not in grounded_keys:
+            ungrounded.append({
+                "section": p["section"],
+                "paragraph": p["paragraph"],
+                "text_hash": p["text_hash"],
+                "text_snippet": p["text_snippet"],
+                "citation_refs": p["citation_refs"],
+            })
+
+    if ungrounded:
+        issues.append({
+            "code": "ungrounded_paragraphs",
+            "message": f"{len(ungrounded)} body paragraph(s) have no grounding target",
+        })
+
+    target_issue_count = sum(len(t["issues"]) for t in target_results)
+    valid = not issues and target_issue_count == 0
+    return {
+        "schema_version": "report-grounding-validation-v1",
+        "manifest_path": os.path.relpath(manifest_path),
+        "manifest_status": "loaded",
+        "report_path": report_value,
+        "valid": valid,
+        "issues": issues,
+        "targets": target_results,
+        "ungrounded_paragraphs": ungrounded,
+        "summary": {
+            "targets": len(target_results),
+            "valid_targets": valid_targets,
+            "stale_targets": stale_targets,
+            "orphaned_targets": orphaned_targets,
+            "target_issue_count": target_issue_count,
+            "ungrounded_paragraphs": len(ungrounded),
+            "report_body_paragraphs": len(body_paragraphs),
+        },
+    }
+
+
 def _load_evidence_policy(session_dir: str) -> dict:
     path = os.path.join(session_dir, _POLICY_FILENAME)
     result = {
@@ -585,6 +1089,9 @@ def _build_support_context(
         source_flags = _source_flag_summary(conn, session_id, include_rows=True)
     grounding_path = os.path.join(session_dir, _REPORT_GROUNDING_FILENAME)
     grounding_present = os.path.exists(grounding_path)
+    citation_audit_path = os.path.join(session_dir, "revision", _CITATION_AUDIT_FILENAME)
+    citation_audit_present = os.path.exists(citation_audit_path)
+    review_issues = _load_review_issues(session_dir)
     return {
         "schema_version": "support-context-v1",
         "session_dir": session_dir,
@@ -593,8 +1100,8 @@ def _build_support_context(
             "source_quality": source_quality is not None,
             "source_caution_flags": bool(source_flags and source_flags["total"] > 0),
             "report_grounding": grounding_present,
-            "citation_audit": False,
-            "review_issues": False,
+            "citation_audit": citation_audit_present,
+            "review_issues": review_issues["present"],
         },
         "evidence_policy": policy,
         "source_quality": source_quality,
@@ -603,6 +1110,17 @@ def _build_support_context(
             "present": grounding_present,
             "path": _REPORT_GROUNDING_FILENAME,
             "status": "declared_provenance_not_verified" if grounding_present else "missing",
+        },
+        "citation_audit": {
+            "present": citation_audit_present,
+            "path": os.path.join("revision", _CITATION_AUDIT_FILENAME),
+            "status": "agent_authored_support_judgments" if citation_audit_present else "missing",
+        },
+        "review_issues": {
+            "present": review_issues["present"],
+            "paths": review_issues["paths"],
+            "summary": review_issues["summary"],
+            "status": "agent_authored_review_findings" if review_issues["present"] else "missing",
         },
         "notes": [
             "Evidence policy is optional run-local calibration, not a required workflow phase.",
@@ -645,6 +1163,12 @@ def _support_context_markdown(context: dict) -> str:
             lines.append(f"- `{flag}`: {count}")
     else:
         lines.extend(["", "Source caution flags: none recorded."])
+
+    citation_audit = context.get("citation_audit", {})
+    if citation_audit.get("present"):
+        lines.extend(["", f"Citation audit: present at `{citation_audit['path']}`."])
+    else:
+        lines.extend(["", "Citation audit: not present."])
 
     lines.extend([
         "",
@@ -1842,6 +2366,7 @@ def cmd_summary(args):
     source_quality_summary = _source_quality_counts(conn, sid)
     source_caution_summary = _source_flag_summary(conn, sid, include_rows=True)
     support_context = _build_support_context(args.session_dir, conn, sid)
+    reflection_metrics = _reflection_metrics_from_state(conn, sid)
     conn.close()
 
     full_result = {
@@ -1861,6 +2386,7 @@ def cmd_summary(args):
         "evidence_units_by_type": evidence_by_type,
         "evidence_units_by_question": evidence_by_question,
         "findings_without_evidence": findings_without_evidence,
+        "reflection_metrics": reflection_metrics,
     }
 
     # --write-handoff: write full summary to file, return only path + counts
@@ -1895,14 +2421,15 @@ def cmd_summary(args):
         for r in source_rows:
             sid_val = r["id"]
             q = r["quality"] or ""
+            access_quality = _canonical_source_quality(q)
             has_note = os.path.exists(os.path.join(notes_dir, f"{sid_val}.md"))
-            if q == "mismatched":
+            if access_quality == "title_content_mismatch":
                 quality_counts["mismatched"] += 1
             elif q == "reader_validated":
                 quality_counts["reader_validated"] += 1
-            elif q == "abstract_only":
+            elif access_quality == "abstract_only":
                 quality_counts["abstract_only_relevant"] += 1
-            elif q == "degraded" and not has_note:
+            elif access_quality == "degraded_extraction" and not has_note:
                 quality_counts["degraded_unread"] += 1
             elif has_note:
                 quality_counts["on_topic_with_evidence"] += 1
@@ -1971,6 +2498,7 @@ def cmd_summary(args):
             "evidence_units_count": evidence_count,
             "evidence_units_by_type": evidence_by_type,
             "evidence_units_by_question": evidence_by_question,
+            "reflection_metrics": reflection_metrics,
         })
         return
 
@@ -2248,31 +2776,10 @@ def cmd_mark_read(args):
         conn.close()
         error_response([f"Source {args.id} not found"])
 
-    # Auto-upgrade degraded → reader_validated if a note file exists.
-    # A reader that successfully extracted content and wrote a note is strong
-    # evidence that the source is usable despite initial quality concerns
-    # (e.g., PDF raw-text fallback that's actually readable).
-    quality_upgraded = False
-    row = conn.execute(
-        "SELECT quality FROM sources WHERE id = ? AND session_id = ?",
-        (args.id, sid)
-    ).fetchone()
-    if row and row["quality"] == "degraded":
-        note_path = os.path.join(args.session_dir, "notes", f"{args.id}.md")
-        if os.path.exists(note_path):
-            conn.execute(
-                "UPDATE sources SET quality = 'reader_validated' WHERE id = ? AND session_id = ?",
-                (args.id, sid)
-            )
-            quality_upgraded = True
-
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    result = {"id": args.id, "is_read": True}
-    if quality_upgraded:
-        result["quality_upgraded"] = "degraded → reader_validated"
-    success_response(result)
+    success_response({"id": args.id, "is_read": True})
 
 
 def cmd_set_status(args):
@@ -2353,9 +2860,10 @@ def cmd_set_quality(args):
         allowed = sorted(_SOURCE_QUALITY_ACCEPTED)
         error_response([f"Invalid quality: {args.quality}. Allowed: {', '.join(allowed)}"])
 
+    canonical_quality = _canonical_source_quality(args.quality)
     cur = conn.execute(
         "UPDATE sources SET quality = ? WHERE id = ? AND session_id = ?",
-        (args.quality, args.id, sid)
+        (canonical_quality, args.id, sid)
     )
     if cur.rowcount == 0:
         conn.close()
@@ -2363,7 +2871,12 @@ def cmd_set_quality(args):
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
     conn.close()
-    success_response({"id": args.id, "quality": args.quality, "access_quality": _canonical_source_quality(args.quality)})
+    success_response({
+        "id": args.id,
+        "quality": canonical_quality,
+        "requested_quality": args.quality,
+        "access_quality": canonical_quality,
+    })
 
 
 def cmd_set_source_flag(args):
@@ -4445,6 +4958,144 @@ def cmd_enrich_metadata(args):
 # validate-edits — post-revision validation
 # ---------------------------------------------------------------------------
 
+def _revision_manifest_entries(manifest: object) -> list[dict]:
+    if isinstance(manifest, list):
+        return [entry for entry in manifest if isinstance(entry, dict)]
+    if not isinstance(manifest, dict):
+        return []
+    for key in ("edits", "entries", "issues"):
+        value = manifest.get(key)
+        if isinstance(value, list):
+            return [entry for entry in value if isinstance(entry, dict)]
+
+    entries: list[dict] = []
+    passes = manifest.get("passes")
+    if isinstance(passes, list):
+        for pass_item in passes:
+            if not isinstance(pass_item, dict):
+                continue
+            pass_name = pass_item.get("pass")
+            pass_entries = pass_item.get("edits", pass_item.get("issues", []))
+            if not isinstance(pass_entries, list):
+                continue
+            for entry in pass_entries:
+                if isinstance(entry, dict):
+                    copied = dict(entry)
+                    copied.setdefault("pass", pass_name)
+                    entries.append(copied)
+    return entries
+
+
+def _entry_report_target_ids(entry: dict) -> list[str]:
+    ids: list[str] = []
+    for key in ("report_target_id", "target_id"):
+        value = entry.get(key)
+        if value:
+            ids.append(str(value))
+    for key in ("report_target_ids", "target_ids", "related_report_target_ids"):
+        value = entry.get(key)
+        if isinstance(value, list):
+            ids.extend(str(item) for item in value if item)
+        elif isinstance(value, str) and value:
+            ids.append(value)
+    return list(dict.fromkeys(ids))
+
+
+def _grounding_refresh_from_edits(report_path: str, grounding_manifest_path: str, entries: list[dict]) -> dict:
+    manifest, issues = _load_report_grounding_manifest(grounding_manifest_path)
+    if manifest is None:
+        return {
+            "present": False,
+            "manifest_path": os.path.relpath(grounding_manifest_path),
+            "targets_needing_refresh": [],
+            "issues": issues,
+            "summary": {"targets_needing_refresh": 0},
+        }
+
+    if not os.path.exists(report_path):
+        return {
+            "present": True,
+            "manifest_path": os.path.relpath(grounding_manifest_path),
+            "targets_needing_refresh": [],
+            "issues": [{"code": "report_missing", "message": f"Report not found: {report_path}"}],
+            "summary": {"targets_needing_refresh": 0},
+        }
+
+    with open(report_path, encoding="utf-8") as f:
+        paragraphs = _parse_report_paragraphs(f.read())
+    current_by_locator = {(p["section"], p["paragraph"]): p for p in paragraphs}
+
+    targets = manifest.get("targets", []) if isinstance(manifest.get("targets"), list) else []
+    targets_by_id = {
+        str(target.get("target_id")): target
+        for target in targets
+        if isinstance(target, dict) and target.get("target_id")
+    }
+    targets_by_locator: dict[tuple[str, int], list[dict]] = {}
+    for target in targets_by_id.values():
+        locator = (target.get("section"), target.get("paragraph"))
+        if isinstance(locator[0], str) and isinstance(locator[1], int):
+            targets_by_locator.setdefault(locator, []).append(target)
+
+    touched: dict[str, dict] = {}
+
+    def mark(target: dict, entry: dict, reason: str) -> None:
+        target_id = str(target.get("target_id") or "")
+        if not target_id:
+            return
+        locator = (target.get("section"), target.get("paragraph"))
+        current = current_by_locator.get(locator) if isinstance(locator[0], str) and isinstance(locator[1], int) else None
+        existing = touched.setdefault(target_id, {
+            "target_id": target_id,
+            "status": "needs_refresh",
+            "section": target.get("section"),
+            "paragraph": target.get("paragraph"),
+            "text_hash": target.get("text_hash"),
+            "current_text_hash": current.get("text_hash") if current else None,
+            "current_text_snippet": current.get("text_snippet") if current else None,
+            "citation_refs": _string_list(target.get("citation_refs", [])),
+            "source_ids": _string_list(target.get("source_ids", [])),
+            "finding_ids": _string_list(target.get("finding_ids", [])),
+            "evidence_ids": _string_list(target.get("evidence_ids", [])),
+            "issue_ids": [],
+            "reasons": [],
+        })
+        issue_id = entry.get("issue_id")
+        if issue_id and issue_id not in existing["issue_ids"]:
+            existing["issue_ids"].append(issue_id)
+        if reason not in existing["reasons"]:
+            existing["reasons"].append(reason)
+
+    for entry in entries:
+        if _canonical_review_issue_status(entry.get("status")) not in _REPORT_EDIT_STATUSES:
+            continue
+        target_ids = _entry_report_target_ids(entry)
+        for target_id in target_ids:
+            target = targets_by_id.get(target_id)
+            if target:
+                mark(target, entry, "manifest_entry_report_target_id")
+
+        if target_ids:
+            continue
+
+        new_snip = entry.get("new_text_snippet") or ""
+        if new_snip:
+            normalized_snip = _normalize_grounding_text(new_snip)
+            for paragraph in paragraphs:
+                if normalized_snip and normalized_snip in paragraph["text"]:
+                    for target in targets_by_locator.get((paragraph["section"], paragraph["paragraph"]), []):
+                        mark(target, entry, "manifest_entry_new_text_snippet")
+
+    targets_needing_refresh = sorted(touched.values(), key=lambda item: item["target_id"])
+    return {
+        "present": True,
+        "manifest_path": os.path.relpath(grounding_manifest_path),
+        "targets_needing_refresh": targets_needing_refresh,
+        "issues": issues,
+        "summary": {"targets_needing_refresh": len(targets_needing_refresh)},
+    }
+
+
 def cmd_validate_edits(args):
     """Check whether reviser edits actually landed in the report.
 
@@ -4473,7 +5124,7 @@ def cmd_validate_edits(args):
     pass_type = getattr(args, "pass_type", None)
 
     # Extract resolved edits from manifest
-    entries = manifest if isinstance(manifest, list) else manifest.get("edits", manifest.get("entries", []))
+    entries = _revision_manifest_entries(manifest)
     if not isinstance(entries, list):
         error_response(["Manifest must be a JSON array or object with 'edits'/'entries' array"])
 
@@ -4483,8 +5134,8 @@ def cmd_validate_edits(args):
     warnings = []
 
     for entry in entries:
-        status = entry.get("status", "")
-        if status != "resolved":
+        status = _canonical_review_issue_status(entry.get("status"))
+        if status not in _REPORT_EDIT_STATUSES:
             continue
 
         issue_id = entry.get("issue_id", "unknown")
@@ -4532,7 +5183,13 @@ def cmd_validate_edits(args):
     if pass_type:
         result["pass"] = pass_type
 
-        success_response(result)
+    grounding_manifest = getattr(args, "grounding_manifest", None)
+    if grounding_manifest is None:
+        grounding_manifest = os.path.join(os.path.dirname(report_path), _REPORT_GROUNDING_FILENAME)
+    if grounding_manifest:
+        result["grounding_refresh"] = _grounding_refresh_from_edits(report_path, grounding_manifest, entries)
+
+    success_response(result)
 
 
 # ---------------------------------------------------------------------------
@@ -4564,223 +5221,1835 @@ def cmd_report_paragraphs(args):
 
 
 def cmd_validate_report_grounding(args):
-    manifest_path = _resolve_session_file(args.session_dir, args.manifest, _REPORT_GROUNDING_FILENAME)
-    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
-    if manifest is None:
-        success_response({
-            "schema_version": "report-grounding-validation-v1",
-            "manifest_path": manifest_path,
-            "manifest_status": "missing_or_invalid",
-            "valid": False,
-            "issues": manifest_issues,
-            "summary": {"targets": 0, "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
-        })
-        return
+    success_response(_validate_report_grounding(args.session_dir, args.manifest, args.report))
 
-    report_value = args.report or manifest.get("report_path") or "draft.md"
-    report_path = _resolve_session_file(args.session_dir, report_value, None)
+
+# ---------------------------------------------------------------------------
+# report support audit — deterministic declared-grounding aggregation
+# ---------------------------------------------------------------------------
+
+def _resolve_session_output_file(session_dir: str, path: str | None, default_relative: str) -> str:
+    if path is None:
+        return os.path.join(session_dir, default_relative)
+    if os.path.isabs(path):
+        return path
+    return os.path.join(session_dir, path)
+
+
+def _load_json_artifact(path: str) -> tuple[object | None, list[dict]]:
+    if not os.path.exists(path):
+        return None, [{"code": "artifact_missing", "path": os.path.relpath(path)}]
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f), []
+    except json.JSONDecodeError as exc:
+        return None, [{"code": "artifact_invalid_json", "path": os.path.relpath(path), "message": str(exc)}]
+    except OSError as exc:
+        return None, [{"code": "artifact_unreadable", "path": os.path.relpath(path), "message": str(exc)}]
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if isinstance(value, str) and value:
+        return [value]
+    return []
+
+
+def _normalized_label(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _canonical_review_issue_status(value: object) -> str:
+    status = _normalized_label(value) or "open"
+    return _REVIEW_ISSUE_STATUS_ALIASES.get(status, status)
+
+
+def _compact_target(target: dict, validation_by_id: dict[str, dict]) -> dict:
+    target_id = str(target.get("target_id") or "")
+    validation = validation_by_id.get(target_id, {})
+    return {
+        "target_id": target_id,
+        "section": target.get("section"),
+        "paragraph": target.get("paragraph"),
+        "validation_status": validation.get("status", "not_validated"),
+        "citation_refs": _string_list(target.get("citation_refs", [])),
+        "source_ids": _string_list(target.get("source_ids", [])),
+        "finding_ids": _string_list(target.get("finding_ids", [])),
+        "evidence_ids": _string_list(target.get("evidence_ids", [])),
+        "support_level": target.get("support_level"),
+        "grounding_status": target.get("grounding_status"),
+    }
+
+
+def _source_flag_applies_to_target(flag: dict, target: dict) -> bool:
+    scope = flag.get("applies_to_type")
+    applies_to_id = flag.get("applies_to_id") or ""
+    if scope in ("run", "brief"):
+        return True
+    if scope == "report_target":
+        return applies_to_id == target.get("target_id")
+    if scope == "finding":
+        return applies_to_id in _string_list(target.get("finding_ids", []))
+    if scope == "citation":
+        return applies_to_id in _string_list(target.get("citation_refs", []))
+    return False
+
+
+def _extract_issues_from_json(data: object) -> list[dict]:
+    if isinstance(data, list):
+        return [dict(item) for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    if isinstance(data.get("issues"), list):
+        return [dict(item) for item in data["issues"] if isinstance(item, dict)]
     issues: list[dict] = []
-    target_results: list[dict] = []
+    if isinstance(data.get("passes"), list):
+        for pass_item in data["passes"]:
+            if not isinstance(pass_item, dict) or not isinstance(pass_item.get("issues"), list):
+                continue
+            for issue in pass_item["issues"]:
+                if isinstance(issue, dict):
+                    copied = dict(issue)
+                    copied.setdefault("pass", pass_item.get("pass"))
+                    issues.append(copied)
+    return issues
 
-    if manifest.get("schema_version") not in (None, _REPORT_GROUNDING_SCHEMA_VERSION):
-        issues.append({
-            "code": "schema_version_unknown",
-            "message": f"Unknown report grounding schema_version: {manifest.get('schema_version')}",
+
+def _infer_review_target_type(issue: dict, target_id: str) -> str:
+    target_type = issue.get("target_type")
+    if target_type:
+        return _normalized_label(target_type)
+    if issue.get("report_target_id") or target_id.startswith("rp-"):
+        return "report_target"
+    if issue.get("source_id") or target_id.startswith("src-"):
+        return "source"
+    if issue.get("evidence_id") or target_id.startswith("ev-"):
+        return "evidence_unit"
+    if issue.get("finding_id") or target_id.startswith("finding-"):
+        return "finding"
+    if issue.get("citation_ref") or issue.get("citation_refs") or target_id.startswith("["):
+        return "citation"
+    return "report_target"
+
+
+def _issue_locator(issue: dict) -> str | None:
+    locator = issue.get("locator") or issue.get("location")
+    if locator:
+        return str(locator)
+    section = issue.get("section")
+    paragraph = issue.get("paragraph")
+    if section and paragraph:
+        return f"{section}, paragraph {paragraph}"
+    if section:
+        return str(section)
+    return None
+
+
+def _normalize_review_issue(issue: dict, source_path: str | None = None, status_overrides: dict[str, object] | None = None) -> tuple[dict, list[dict]]:
+    issue_id = str(issue.get("issue_id") or issue.get("id") or "")
+    raw_status = issue.get("status") or "open"
+    override = (status_overrides or {}).get(issue_id)
+    override_resolution = None
+    if isinstance(override, dict):
+        raw_status = override.get("status") or raw_status
+        override_resolution = override.get("resolution")
+    elif override:
+        raw_status = override
+    status = _canonical_review_issue_status(raw_status)
+    target_id = (
+        issue.get("target_id")
+        or issue.get("report_target_id")
+        or issue.get("source_id")
+        or issue.get("evidence_id")
+        or issue.get("finding_id")
+        or issue.get("citation_ref")
+        or ""
+    )
+    target_id = str(target_id)
+    target_type = _infer_review_target_type(issue, target_id)
+
+    related_source_ids = _string_list(issue.get("related_source_ids", issue.get("source_ids", issue.get("cited_source_ids", []))))
+    related_evidence_ids = _string_list(issue.get("related_evidence_ids", issue.get("evidence_ids", issue.get("matched_evidence_ids", []))))
+    related_citation_refs = _string_list(issue.get("related_citation_refs", issue.get("citation_refs", [])))
+    if not related_citation_refs and issue.get("citation_ref"):
+        related_citation_refs = [str(issue["citation_ref"])]
+
+    normalized = {
+        "issue_id": issue_id,
+        "dimension": issue.get("dimension"),
+        "severity": issue.get("severity"),
+        "target_type": target_type,
+        "target_id": target_id,
+        "locator": _issue_locator(issue),
+        "text_hash": issue.get("text_hash") or issue.get("target_text_hash"),
+        "text_snippet": issue.get("text_snippet") or issue.get("target_text_snippet") or issue.get("text"),
+        "related_source_ids": related_source_ids,
+        "related_evidence_ids": related_evidence_ids,
+        "related_citation_refs": related_citation_refs,
+        "status": status,
+        "rationale": issue.get("rationale") or issue.get("description"),
+        "resolution": override_resolution or issue.get("resolution") or issue.get("action"),
+        "suggested_fix": issue.get("suggested_fix"),
+    }
+    if issue.get("section"):
+        normalized["section"] = issue.get("section")
+    if issue.get("paragraph"):
+        normalized["paragraph"] = issue.get("paragraph")
+    if isinstance(override, dict):
+        normalized["status_source"] = "revision-manifest"
+        normalized["original_status"] = _canonical_review_issue_status(issue.get("status") or "open")
+    if source_path:
+        normalized["source_path"] = os.path.relpath(source_path)
+
+    contradiction_type = _normalized_label(issue.get("contradiction_type")) if issue.get("contradiction_type") else None
+    conflicting_target_ids = _string_list(issue.get("conflicting_target_ids", []))
+    if contradiction_type or conflicting_target_ids or normalized["dimension"] == "internal_contradiction":
+        normalized["contradiction_candidate"] = {
+            "conflicting_target_ids": conflicting_target_ids,
+            "description": issue.get("description") or issue.get("rationale"),
+            "contradiction_type": contradiction_type,
+            "status": status,
+            "final_report_handling": issue.get("final_report_handling"),
+        }
+
+    artifact_issues: list[dict] = []
+    if not issue_id:
+        artifact_issues.append({"code": "review_issue_missing_id", "field": "issue_id"})
+    if target_type not in _REVIEW_ISSUE_TARGET_TYPES:
+        artifact_issues.append({
+            "code": "review_issue_invalid_target_type",
+            "issue_id": issue_id,
+            "value": target_type,
+            "allowed": list(_REVIEW_ISSUE_TARGET_TYPES),
         })
+    if status not in _REVIEW_ISSUE_STATUSES:
+        artifact_issues.append({
+            "code": "review_issue_invalid_status",
+            "issue_id": issue_id,
+            "value": raw_status,
+            "allowed": list(_REVIEW_ISSUE_STATUSES),
+        })
+    if contradiction_type and contradiction_type not in _CONTRADICTION_TYPES:
+        artifact_issues.append({
+            "code": "review_issue_invalid_contradiction_type",
+            "issue_id": issue_id,
+            "value": contradiction_type,
+            "allowed": list(_CONTRADICTION_TYPES),
+        })
+    return normalized, artifact_issues
 
+
+def _revision_manifest_statuses(revision_dir: str) -> dict[str, dict[str, object]]:
+    path = os.path.join(revision_dir, "revision-manifest.json")
+    data, _ = _load_json_artifact(path)
+    statuses: dict[str, dict[str, object]] = {}
+    entries = _revision_manifest_entries(data)
+    if isinstance(data, dict):
+        for key in ("unresolved", "open_issues"):
+            value = data.get(key)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        copied = dict(item)
+                        copied.setdefault("status", "open")
+                        entries.append(copied)
+
+    for issue in entries:
+        issue_id = issue.get("issue_id")
+        status = issue.get("status")
+        if issue_id and status:
+            statuses[str(issue_id)] = {
+                "status": str(status),
+                "resolution": issue.get("resolution") or issue.get("action") or issue.get("reason"),
+                "pass": issue.get("pass") or issue.get("pass_type"),
+                "grounding_refresh_status": issue.get("grounding_refresh_status"),
+            }
+    return statuses
+
+
+def _load_review_issues(session_dir: str, explicit_paths: list[str] | None = None) -> dict:
+    revision_dir = os.path.join(session_dir, "revision")
+    status_overrides = _revision_manifest_statuses(revision_dir)
+    candidate_paths: list[str] = []
+
+    if explicit_paths:
+        candidate_paths = [
+            path if os.path.isabs(path) else os.path.join(session_dir, path)
+            for path in explicit_paths
+        ]
+    elif os.path.isdir(revision_dir):
+        for entry in os.scandir(revision_dir):
+            if entry.is_file() and entry.name.endswith("-issues.json"):
+                candidate_paths.append(entry.path)
+        review_issues = os.path.join(revision_dir, "review-issues.json")
+        if os.path.exists(review_issues) and review_issues not in candidate_paths:
+            candidate_paths.append(review_issues)
+
+    issues: list[dict] = []
+    artifact_issues: list[dict] = []
+    for path in sorted(candidate_paths):
+        data, load_issues = _load_json_artifact(path)
+        artifact_issues.extend(load_issues)
+        if data is None:
+            continue
+        for issue in _extract_issues_from_json(data):
+            compact, normalize_issues = _normalize_review_issue(issue, source_path=path, status_overrides=status_overrides)
+            artifact_issues.extend(normalize_issues)
+            issues.append(compact)
+
+    unresolved = [
+        issue for issue in issues
+        if _normalized_label(issue.get("status")) not in _CLOSED_REVIEW_ISSUE_STATUSES
+    ]
+    return {
+        "present": bool(candidate_paths),
+        "paths": [os.path.relpath(path) for path in sorted(candidate_paths)],
+        "artifact_issues": artifact_issues,
+        "issues": issues,
+        "unresolved_issues": unresolved,
+        "summary": {
+            "issues": len(issues),
+            "unresolved_issues": len(unresolved),
+        },
+    }
+
+
+def _issue_status_counts(issues: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for issue in issues:
+        status = _canonical_review_issue_status(issue.get("status"))
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _paragraph_match(status: str, paragraph: dict | None = None, target: dict | None = None, reason: str | None = None) -> dict:
+    match = {"status": status}
+    if reason:
+        match["reason"] = reason
+    if target is not None:
+        match["manifest_section"] = target.get("section")
+        match["manifest_paragraph"] = target.get("paragraph")
+        match["manifest_text_hash"] = target.get("text_hash")
+        match["manifest_text_snippet"] = target.get("text_snippet")
+    if paragraph is not None:
+        match["current_section"] = paragraph.get("section")
+        match["current_paragraph"] = paragraph.get("paragraph")
+        match["current_text_hash"] = paragraph.get("text_hash")
+        match["current_text_snippet"] = paragraph.get("text_snippet")
+    return match
+
+
+def _match_issue_by_report_text(issue: dict, paragraphs: list[dict]) -> dict | None:
+    text_hash = issue.get("text_hash")
+    if text_hash:
+        for paragraph in paragraphs:
+            if paragraph.get("text_hash") == text_hash:
+                return _paragraph_match("matched_by_text_hash", paragraph)
+
+    snippet = _normalize_grounding_text(str(issue.get("text_snippet") or ""))
+    if snippet:
+        for paragraph in paragraphs:
+            if snippet in paragraph.get("text", ""):
+                return _paragraph_match("matched_by_snippet", paragraph)
+    return None
+
+
+def _match_report_target_issue(issue: dict, targets_by_id: dict[str, dict], paragraphs: list[dict]) -> dict:
+    target_id = str(issue.get("target_id") or "")
+    by_locator = {(p.get("section"), p.get("paragraph")): p for p in paragraphs}
+    by_hash: dict[str, list[dict]] = {}
+    for paragraph in paragraphs:
+        by_hash.setdefault(str(paragraph.get("text_hash") or ""), []).append(paragraph)
+
+    target = targets_by_id.get(target_id)
+    if target is not None:
+        locator = (target.get("section"), target.get("paragraph"))
+        matched = by_locator.get(locator)
+        expected_hash = target.get("text_hash")
+        if matched and expected_hash == matched.get("text_hash"):
+            return _paragraph_match("matched_by_target_id", matched, target)
+        if expected_hash and expected_hash in by_hash:
+            return _paragraph_match("stale_locator", by_hash[expected_hash][0], target)
+        if matched:
+            return _paragraph_match("stale_hash", matched, target)
+
+        snippet = _normalize_grounding_text(str(target.get("text_snippet") or issue.get("text_snippet") or ""))
+        if snippet:
+            for paragraph in paragraphs:
+                if snippet in paragraph.get("text", ""):
+                    return _paragraph_match("matched_by_snippet", paragraph, target)
+        return _paragraph_match("orphaned", None, target, "target_id found in manifest but could not be matched in report text")
+
+    fallback = _match_issue_by_report_text(issue, paragraphs)
+    if fallback:
+        fallback["reason"] = "target_id not found in manifest; matched by issue locator metadata"
+        return fallback
+    if target_id:
+        return _paragraph_match("target_id_not_found", reason="target_id was not present in report-grounding.json")
+    return _paragraph_match("unmatched", reason="issue has no target_id, text_hash, or matching text_snippet")
+
+
+def _annotate_review_issue_targets(
+    session_dir: str,
+    issues: list[dict],
+    manifest_arg: str | None = None,
+    report_arg: str | None = None,
+) -> list[dict]:
+    report_target_issues = [issue for issue in issues if issue.get("target_type") == "report_target"]
+    if not report_target_issues:
+        return []
+
+    manifest_path = _resolve_session_file(session_dir, manifest_arg, _REPORT_GROUNDING_FILENAME)
+    manifest_exists = os.path.exists(manifest_path)
+    manifest = None
+    artifact_issues: list[dict] = []
+    if manifest_exists or manifest_arg:
+        manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+        artifact_issues.extend(manifest_issues)
+
+    report_value = report_arg
+    if report_value is None and isinstance(manifest, dict):
+        report_value = manifest.get("report_path")
+    if report_value is None:
+        report_value = "draft.md"
+    report_path = _resolve_session_file(session_dir, report_value, None)
     if not os.path.exists(report_path):
-        issues.append({"code": "report_missing", "message": f"Report path does not exist: {report_value}"})
-        success_response({
-            "schema_version": "report-grounding-validation-v1",
-            "manifest_path": os.path.relpath(manifest_path),
-            "manifest_status": "loaded",
-            "report_path": report_value,
-            "valid": False,
-            "issues": issues,
-            "targets": [],
-            "summary": {"targets": len(manifest.get("targets", [])) if isinstance(manifest.get("targets"), list) else 0,
-                        "valid_targets": 0, "stale_targets": 0, "orphaned_targets": 0, "ungrounded_paragraphs": 0},
-        })
-        return
+        for issue in report_target_issues:
+            issue["target_match"] = _paragraph_match("not_checked", reason=f"report not found: {report_value}")
+        if report_arg:
+            artifact_issues.append({"code": "review_issue_report_missing", "path": os.path.relpath(report_path)})
+        return artifact_issues
 
     with open(report_path, encoding="utf-8") as f:
-        report_text = f.read()
-    paragraphs = _parse_report_paragraphs(report_text)
-    body_paragraphs = _body_paragraphs(paragraphs)
-    by_locator = {(p["section"], p["paragraph"]): p for p in paragraphs}
-    by_hash: dict[str, list[dict]] = {}
-    for p in paragraphs:
-        by_hash.setdefault(p["text_hash"], []).append(p)
+        paragraphs = _parse_report_paragraphs(f.read())
+
+    targets = manifest.get("targets", []) if isinstance(manifest, dict) and isinstance(manifest.get("targets"), list) else []
+    targets_by_id = {
+        str(target.get("target_id")): target
+        for target in targets
+        if isinstance(target, dict) and target.get("target_id")
+    }
+
+    for issue in report_target_issues:
+        issue["target_match"] = _match_report_target_issue(issue, targets_by_id, paragraphs)
+    return artifact_issues
+
+
+def _filter_review_issues_by_status(issues: list[dict], status_filter: str) -> list[dict]:
+    if status_filter == "all":
+        return issues
+    if status_filter == "open":
+        return [
+            issue for issue in issues
+            if _canonical_review_issue_status(issue.get("status")) not in _CLOSED_REVIEW_ISSUE_STATUSES
+        ]
+    return [
+        issue for issue in issues
+        if _canonical_review_issue_status(issue.get("status")) == status_filter
+    ]
+
+
+def cmd_review_issues(args):
+    review_issues = _load_review_issues(args.session_dir, args.issues)
+    target_artifact_issues = _annotate_review_issue_targets(
+        args.session_dir,
+        review_issues["issues"],
+        args.grounding_manifest,
+        args.report,
+    )
+    artifact_issues = [*review_issues["artifact_issues"], *target_artifact_issues]
+    issues = review_issues["issues"]
+    listed = _filter_review_issues_by_status(issues, args.status)
+    open_issues = _filter_review_issues_by_status(issues, "open")
+    success_response({
+        "schema_version": _REVIEW_ISSUES_SCHEMA_VERSION,
+        "status": "listed",
+        "paths": review_issues["paths"],
+        "allowed_target_types": list(_REVIEW_ISSUE_TARGET_TYPES),
+        "allowed_issue_statuses": list(_REVIEW_ISSUE_STATUSES),
+        "allowed_contradiction_types": list(_CONTRADICTION_TYPES),
+        "status_filter": args.status,
+        "issues": listed,
+        "open_issues": open_issues,
+        "artifact_issues": artifact_issues,
+        "summary": {
+            "issues": len(issues),
+            "listed_issues": len(listed),
+            "open_issues": len(open_issues),
+            "status_counts": _issue_status_counts(issues),
+            "issues_with_target_ids": sum(1 for issue in issues if issue.get("target_id")),
+            "report_target_issues": sum(1 for issue in issues if issue.get("target_type") == "report_target"),
+            "matched_report_target_issues": sum(
+                1 for issue in issues
+                if issue.get("target_type") == "report_target"
+                and issue.get("target_match", {}).get("status") not in {None, "unmatched", "orphaned", "target_id_not_found", "not_checked"}
+            ),
+            "contradiction_candidates": sum(1 for issue in issues if issue.get("contradiction_candidate")),
+            "artifact_issues": len(artifact_issues),
+        },
+    })
+
+
+def _candidate_citation_audit_items(data: object) -> list[dict]:
+    if isinstance(data, list):
+        return [dict(item) for item in data if isinstance(item, dict)]
+    if not isinstance(data, dict):
+        return []
+    for key in ("checks", "citations", "citation_checks", "results"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [dict(item) for item in value if isinstance(item, dict)]
+    items: list[dict] = []
+    targets = data.get("targets")
+    if isinstance(targets, list):
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            target_checks = target.get("checks") or target.get("citations") or []
+            if not isinstance(target_checks, list):
+                continue
+            for check in target_checks:
+                if isinstance(check, dict):
+                    item = dict(check)
+                    item.setdefault("report_target_id", target.get("target_id"))
+                    item.setdefault("section", target.get("section"))
+                    item.setdefault("paragraph", target.get("paragraph"))
+                    items.append(item)
+    return items
+
+
+def _validate_citation_audit_check(item: dict, index: int) -> list[dict]:
+    issues: list[dict] = []
+    target_id = item.get("report_target_id") or item.get("report_target") or item.get("target_id")
+    if not target_id:
+        issues.append({"code": "citation_audit_missing_target", "index": index, "field": "report_target_id"})
+
+    citation_refs = _string_list(item.get("citation_refs", []))
+    if not citation_refs and item.get("citation_ref"):
+        citation_refs = [str(item.get("citation_ref"))]
+    if not citation_refs:
+        issues.append({"code": "citation_audit_missing_citation_ref", "index": index, "field": "citation_ref"})
+
+    source_ids = _string_list(item.get("cited_source_ids", item.get("source_ids", [])))
+    if not source_ids:
+        issues.append({"code": "citation_audit_missing_source_ids", "index": index, "field": "cited_source_ids"})
+
+    classification = item.get("support_classification") or item.get("classification")
+    if _normalized_label(classification) not in _CITATION_SUPPORT_CLASSIFICATIONS:
+        issues.append({
+            "code": "citation_audit_invalid_support_classification",
+            "index": index,
+            "field": "support_classification",
+            "value": classification,
+            "allowed": list(_CITATION_SUPPORT_CLASSIFICATIONS),
+        })
+
+    action = item.get("recommended_action") or item.get("action")
+    if _normalized_label(action) not in _CITATION_RECOMMENDED_ACTIONS:
+        issues.append({
+            "code": "citation_audit_invalid_recommended_action",
+            "index": index,
+            "field": "recommended_action",
+            "value": action,
+            "allowed": list(_CITATION_RECOMMENDED_ACTIONS),
+        })
+
+    if not item.get("rationale"):
+        issues.append({"code": "citation_audit_missing_rationale", "index": index, "field": "rationale"})
+    return issues
+
+
+def _load_citation_audit(session_dir: str, citation_audit_arg: str | None = None) -> dict:
+    default_path = os.path.join(session_dir, "revision", _CITATION_AUDIT_FILENAME)
+    path = citation_audit_arg if citation_audit_arg and os.path.isabs(citation_audit_arg) else (
+        os.path.join(session_dir, citation_audit_arg) if citation_audit_arg else default_path
+    )
+    data, artifact_issues = _load_json_artifact(path)
+    if data is None:
+        return {
+            "present": False,
+            "path": os.path.relpath(path),
+            "artifact_issues": artifact_issues if citation_audit_arg else [],
+            "checked_citations": [],
+            "rejected_or_weakened_citations": [],
+            "summary": {"checked_citations": 0, "rejected_or_weakened_citations": 0},
+        }
+
+    checked = []
+    weakened = []
+    for index, item in enumerate(_candidate_citation_audit_items(data)):
+        artifact_issues.extend(_validate_citation_audit_check(item, index))
+        citation_refs = _string_list(item.get("citation_refs", []))
+        if not citation_refs and item.get("citation_ref"):
+            citation_refs = [str(item.get("citation_ref"))]
+        support_classification = (
+            item.get("support_classification")
+            or item.get("classification")
+            or item.get("verdict")
+            or item.get("status")
+        )
+        recommended_action = item.get("recommended_action") or item.get("action")
+        compact = {
+            "target_type": "citation",
+            "target_id": f"{item.get('report_target_id') or item.get('report_target') or item.get('target_id') or 'unknown'}:{','.join(citation_refs) or 'citation'}",
+            "report_target_id": item.get("report_target_id") or item.get("report_target") or item.get("target_id"),
+            "local_target": item.get("local_target"),
+            "section": item.get("section"),
+            "paragraph": item.get("paragraph"),
+            "text_hash": item.get("text_hash"),
+            "text_snippet": item.get("text_snippet"),
+            "citation_refs": citation_refs,
+            "source_ids": _string_list(item.get("cited_source_ids", item.get("source_ids", []))),
+            "support_classification": support_classification,
+            "recommended_action": recommended_action,
+            "rationale": item.get("rationale"),
+        }
+        checked.append(compact)
+        if (_normalized_label(support_classification) in _WEAK_SUPPORT_CLASSIFICATIONS
+                or _normalized_label(recommended_action) in _CITATION_WEAKENED_ACTIONS):
+            weakened.append(compact)
+
+    return {
+        "present": True,
+        "path": os.path.relpath(path),
+        "artifact_issues": artifact_issues,
+        "checked_citations": checked,
+        "rejected_or_weakened_citations": weakened,
+        "summary": {
+            "checked_citations": len(checked),
+            "rejected_or_weakened_citations": len(weakened),
+        },
+    }
+
+
+def _citation_contexts_from_grounding(session_dir: str, manifest_arg: str | None, report_arg: str | None) -> dict:
+    validation = _validate_report_grounding(session_dir, manifest_arg, report_arg)
+    manifest_path = _resolve_session_file(session_dir, manifest_arg, _REPORT_GROUNDING_FILENAME)
+    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+    contexts: list[dict] = []
+
+    if isinstance(manifest, dict) and isinstance(manifest.get("targets"), list):
+        validation_by_id = {
+            target["target_id"]: target
+            for target in validation.get("targets", [])
+            if target.get("target_id")
+        }
+        for target in manifest["targets"]:
+            if not isinstance(target, dict):
+                continue
+            target_id = str(target.get("target_id") or "")
+            validation_result = validation_by_id.get(target_id, {})
+            for ref in _string_list(target.get("citation_refs", [])):
+                contexts.append({
+                    "check_id": f"cite-{len(contexts) + 1:03d}",
+                    "target_type": "citation",
+                    "target_id": f"{target_id}:{ref}",
+                    "local_target": "paragraph",
+                    "report_target_id": target_id,
+                    "section": target.get("section"),
+                    "paragraph": target.get("paragraph"),
+                    "text_hash": target.get("text_hash"),
+                    "text_snippet": target.get("text_snippet"),
+                    "citation_ref": ref,
+                    "cited_source_ids": _string_list(target.get("source_ids", [])),
+                    "finding_ids": _string_list(target.get("finding_ids", [])),
+                    "evidence_ids": _string_list(target.get("evidence_ids", [])),
+                    "validation_status": validation_result.get("status", "not_validated"),
+                    "validation_issues": validation_result.get("issues", []),
+                    "support_classification": None,
+                    "rationale": None,
+                    "recommended_action": None,
+                })
+    elif report_arg:
+        report_path = _resolve_session_file(session_dir, report_arg, None)
+        if os.path.exists(report_path):
+            with open(report_path, encoding="utf-8") as f:
+                paragraphs = _body_paragraphs(_parse_report_paragraphs(f.read()))
+            for paragraph in paragraphs:
+                for ref in paragraph.get("citation_refs", []):
+                    contexts.append({
+                        "check_id": f"cite-{len(contexts) + 1:03d}",
+                        "target_type": "citation",
+                        "target_id": f"unmatched:{ref}",
+                        "local_target": "paragraph_without_grounding",
+                        "report_target_id": None,
+                        "section": paragraph.get("section"),
+                        "paragraph": paragraph.get("paragraph"),
+                        "text_hash": paragraph.get("text_hash"),
+                        "text_snippet": paragraph.get("text_snippet"),
+                        "citation_ref": ref,
+                        "cited_source_ids": [],
+                        "finding_ids": [],
+                        "evidence_ids": [],
+                        "validation_status": "no_grounding_manifest",
+                        "validation_issues": manifest_issues,
+                        "support_classification": None,
+                        "rationale": None,
+                        "recommended_action": None,
+                    })
+
+    return {
+        "schema_version": _CITATION_AUDIT_CONTEXTS_SCHEMA_VERSION,
+        "status": "contexts_generated",
+        "generated_at": _now(),
+        "manifest_path": validation.get("manifest_path"),
+        "report_path": validation.get("report_path") or report_arg,
+        "allowed_support_classifications": list(_CITATION_SUPPORT_CLASSIFICATIONS),
+        "allowed_recommended_actions": list(_CITATION_RECOMMENDED_ACTIONS),
+        "contexts": contexts,
+        "validation": validation,
+        "artifact_issues": {
+            "manifest": manifest_issues,
+        },
+        "notes": [
+            "These are citation contexts for agent review, not citation support judgments.",
+            "Fill support_classification, rationale, and recommended_action only after checking the cited source against the local target.",
+            f"Write completed citation audit results to revision/{_CITATION_AUDIT_FILENAME} using schema_version {_CITATION_AUDIT_SCHEMA_VERSION}.",
+        ],
+        "summary": {
+            "citation_contexts": len(contexts),
+            "targets": len(manifest.get("targets", [])) if isinstance(manifest, dict) and isinstance(manifest.get("targets"), list) else 0,
+            "grounding_validation_valid": validation.get("valid", False),
+            "grounding_validation_issues": len(validation.get("issues", [])) + validation.get("summary", {}).get("target_issue_count", 0),
+        },
+    }
+
+
+def cmd_citation_audit_contexts(args):
+    contexts = _citation_contexts_from_grounding(args.session_dir, args.manifest, args.report)
+    output_path = _resolve_session_output_file(
+        args.session_dir,
+        args.output,
+        os.path.join("revision", _CITATION_AUDIT_CONTEXTS_FILENAME),
+    )
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    contexts["path"] = os.path.relpath(output_path)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(contexts, f, indent=2, ensure_ascii=False)
+    success_response({
+        "path": os.path.relpath(output_path),
+        "summary": contexts["summary"],
+        "allowed_support_classifications": contexts["allowed_support_classifications"],
+        "allowed_recommended_actions": contexts["allowed_recommended_actions"],
+    })
+
+
+# ---------------------------------------------------------------------------
+# support artifact ingestion — file manifests promoted into queryable state
+# ---------------------------------------------------------------------------
+
+_QUANTITATIVE_OR_FRAGILE_CLAIM_TYPES = {
+    "quantitative",
+    "fragile",
+    "current",
+    "high_stakes",
+    "citation_sensitive",
+}
+
+
+def _json_compact(value: object) -> str:
+    return json.dumps(value if value is not None else [], ensure_ascii=False, separators=(",", ":"))
+
+
+def _json_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [value] if value else []
+        return _string_list(parsed)
+    return _string_list(value)
+
+
+def _json_object(value: object) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _relative_artifact_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    try:
+        return os.path.relpath(path)
+    except ValueError:
+        return path
+
+
+def _ungrounded_target_id(paragraph: dict) -> str:
+    key = f"{paragraph.get('section')}:{paragraph.get('paragraph')}:{paragraph.get('text_hash')}"
+    return "ungrounded-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def _insert_report_target(
+    conn: sqlite3.Connection,
+    sid: str,
+    target: dict,
+    *,
+    report_path: str | None,
+    manifest_path: str | None,
+    validation_status: str,
+    is_ungrounded: bool = False,
+    ingested_at: str,
+) -> None:
+    target_id = str(target.get("target_id") or "")
+    conn.execute(
+        """INSERT OR REPLACE INTO report_targets
+           (session_id, target_id, report_path, section, paragraph, text_hash, text_snippet,
+            citation_refs, source_ids, warnings, grounding_status, not_grounded_reason,
+            support_note, support_level, claim_type, validation_status, is_ungrounded,
+            manifest_path, ingested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            sid,
+            target_id,
+            report_path,
+            target.get("section"),
+            target.get("paragraph"),
+            target.get("text_hash"),
+            target.get("text_snippet"),
+            _json_compact(_string_list(target.get("citation_refs", []))),
+            _json_compact(_string_list(target.get("source_ids", []))),
+            _json_compact(target.get("warnings", [])),
+            target.get("grounding_status"),
+            target.get("not_grounded_reason"),
+            target.get("support_note"),
+            target.get("support_level"),
+            target.get("claim_type"),
+            validation_status,
+            1 if is_ungrounded else 0,
+            manifest_path,
+            ingested_at,
+        ),
+    )
+    if is_ungrounded:
+        return
+    for evidence_id in _string_list(target.get("evidence_ids", [])):
+        conn.execute(
+            """INSERT OR REPLACE INTO report_target_evidence
+               (session_id, target_id, evidence_id, role) VALUES (?, ?, ?, 'declared')""",
+            (sid, target_id, evidence_id),
+        )
+    for finding_id in _string_list(target.get("finding_ids", [])):
+        conn.execute(
+            """INSERT OR REPLACE INTO report_target_findings
+               (session_id, target_id, finding_id, role) VALUES (?, ?, ?, 'declared')""",
+            (sid, target_id, finding_id),
+        )
+
+
+def _ingest_report_grounding(
+    conn: sqlite3.Connection,
+    sid: str,
+    session_dir: str,
+    manifest_arg: str | None = None,
+    report_arg: str | None = None,
+    *,
+    allow_missing: bool = False,
+) -> dict:
+    manifest_path = _resolve_session_file(session_dir, manifest_arg, _REPORT_GROUNDING_FILENAME)
+    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+    if manifest is None:
+        if allow_missing:
+            conn.execute("DELETE FROM report_target_evidence WHERE session_id = ?", (sid,))
+            conn.execute("DELETE FROM report_target_findings WHERE session_id = ?", (sid,))
+            conn.execute("DELETE FROM report_targets WHERE session_id = ?", (sid,))
+            return {
+                "present": False,
+                "path": _relative_artifact_path(manifest_path),
+                "ingested": 0,
+                "cleared": True,
+                "artifact_issues": manifest_issues,
+            }
+        error_response([issue.get("message", "Report grounding manifest missing or invalid") for issue in manifest_issues])
+
+    validation = _validate_report_grounding(session_dir, manifest_arg, report_arg)
+    validation_by_id = {
+        str(item.get("target_id")): item
+        for item in validation.get("targets", [])
+        if item.get("target_id")
+    }
+
+    report_value = report_arg or manifest.get("report_path") or "draft.md"
+    report_path = _resolve_session_file(session_dir, report_value, None)
+    report_path_value = _relative_artifact_path(report_path)
+    manifest_path_value = _relative_artifact_path(manifest_path)
+
+    conn.execute("DELETE FROM report_target_evidence WHERE session_id = ?", (sid,))
+    conn.execute("DELETE FROM report_target_findings WHERE session_id = ?", (sid,))
+    conn.execute("DELETE FROM report_targets WHERE session_id = ?", (sid,))
+
+    ingested_at = _now()
+    targets = [target for target in manifest.get("targets", []) if isinstance(target, dict)]
+    for index, target in enumerate(targets):
+        target_id = str(target.get("target_id") or f"target-{index + 1:03d}")
+        target = dict(target)
+        target["target_id"] = target_id
+        validation_status = validation_by_id.get(target_id, {}).get("status", "not_validated")
+        _insert_report_target(
+            conn,
+            sid,
+            target,
+            report_path=report_path_value,
+            manifest_path=manifest_path_value,
+            validation_status=validation_status,
+            ingested_at=ingested_at,
+        )
+
+    ungrounded = validation.get("ungrounded_paragraphs", [])
+    for paragraph in ungrounded:
+        if not isinstance(paragraph, dict):
+            continue
+        target = {
+            "target_id": _ungrounded_target_id(paragraph),
+            "section": paragraph.get("section"),
+            "paragraph": paragraph.get("paragraph"),
+            "text_hash": paragraph.get("text_hash"),
+            "text_snippet": paragraph.get("text_snippet"),
+            "citation_refs": paragraph.get("citation_refs", []),
+            "source_ids": [],
+            "warnings": [],
+            "grounding_status": "missing_declared_grounding",
+            "not_grounded_reason": "No report-grounding target matched this body paragraph.",
+        }
+        _insert_report_target(
+            conn,
+            sid,
+            target,
+            report_path=report_path_value,
+            manifest_path=manifest_path_value,
+            validation_status="ungrounded",
+            is_ungrounded=True,
+            ingested_at=ingested_at,
+        )
+
+    return {
+        "present": True,
+        "path": manifest_path_value,
+        "ingested": len(targets) + len(ungrounded),
+        "declared_targets": len(targets),
+        "ungrounded_targets": len(ungrounded),
+        "validation_summary": validation.get("summary", {}),
+        "artifact_issues": manifest_issues,
+    }
+
+
+def _citation_audit_records(session_dir: str, citation_audit_arg: str | None = None, *, allow_missing: bool = False) -> tuple[list[dict], dict]:
+    default_path = os.path.join(session_dir, "revision", _CITATION_AUDIT_FILENAME)
+    path = citation_audit_arg if citation_audit_arg and os.path.isabs(citation_audit_arg) else (
+        os.path.join(session_dir, citation_audit_arg) if citation_audit_arg else default_path
+    )
+    data, artifact_issues = _load_json_artifact(path)
+    if data is None:
+        if allow_missing:
+            return [], {
+                "present": False,
+                "path": _relative_artifact_path(path),
+                "cleared": True,
+                "artifact_issues": artifact_issues if citation_audit_arg else [],
+            }
+        error_response([f"Citation audit not found or invalid: {_relative_artifact_path(path)}"])
+
+    records: list[dict] = []
+    for index, item in enumerate(_candidate_citation_audit_items(data)):
+        artifact_issues.extend(_validate_citation_audit_check(item, index))
+        citation_refs = _string_list(item.get("citation_refs", []))
+        if not citation_refs and item.get("citation_ref"):
+            citation_refs = [str(item.get("citation_ref"))]
+        source_ids = _string_list(item.get("cited_source_ids", item.get("source_ids", [])))
+        report_target_id = item.get("report_target_id") or item.get("report_target") or item.get("target_id")
+        check_id = str(item.get("check_id") or item.get("id") or f"cite-{index + 1:03d}")
+        support_classification = item.get("support_classification") or item.get("classification") or item.get("verdict") or item.get("status")
+        recommended_action = item.get("recommended_action") or item.get("action")
+        records.append({
+            "check_id": check_id,
+            "target_type": item.get("target_type") or "citation",
+            "target_id": item.get("target_id") or f"{report_target_id or 'unknown'}:{','.join(citation_refs) or 'citation'}",
+            "report_target_id": report_target_id,
+            "local_target": item.get("local_target"),
+            "section": item.get("section"),
+            "paragraph": item.get("paragraph"),
+            "text_hash": item.get("text_hash"),
+            "text_snippet": item.get("text_snippet"),
+            "citation_ref": citation_refs[0] if citation_refs else item.get("citation_ref"),
+            "source_ids": source_ids,
+            "support_classification": support_classification,
+            "recommended_action": recommended_action,
+            "rationale": item.get("rationale"),
+        })
+
+    meta = {
+        "present": True,
+        "path": _relative_artifact_path(path),
+        "artifact_issues": artifact_issues,
+    }
+    return records, meta
+
+
+def _ingest_citation_audit(
+    conn: sqlite3.Connection,
+    sid: str,
+    session_dir: str,
+    citation_audit_arg: str | None = None,
+    *,
+    allow_missing: bool = False,
+) -> dict:
+    records, meta = _citation_audit_records(session_dir, citation_audit_arg, allow_missing=allow_missing)
+    if not meta["present"]:
+        if meta.get("cleared"):
+            conn.execute("DELETE FROM citation_audits WHERE session_id = ?", (sid,))
+        return {**meta, "ingested": 0}
+
+    conn.execute("DELETE FROM citation_audits WHERE session_id = ?", (sid,))
+    ingested_at = _now()
+    for record in records:
+        conn.execute(
+            """INSERT OR REPLACE INTO citation_audits
+               (session_id, check_id, target_type, target_id, report_target_id, local_target,
+                section, paragraph, text_hash, text_snippet, citation_ref, source_ids,
+                support_classification, recommended_action, rationale, audit_path, ingested_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sid,
+                record["check_id"],
+                record.get("target_type"),
+                record.get("target_id"),
+                record.get("report_target_id"),
+                record.get("local_target"),
+                record.get("section"),
+                record.get("paragraph"),
+                record.get("text_hash"),
+                record.get("text_snippet"),
+                record.get("citation_ref"),
+                _json_compact(record.get("source_ids", [])),
+                record.get("support_classification"),
+                record.get("recommended_action"),
+                record.get("rationale"),
+                meta["path"],
+                ingested_at,
+            ),
+        )
+    weakened = [
+        record for record in records
+        if (_normalized_label(record.get("support_classification")) in _WEAK_SUPPORT_CLASSIFICATIONS
+                or _normalized_label(record.get("recommended_action")) in _CITATION_WEAKENED_ACTIONS)
+    ]
+    return {**meta, "ingested": len(records), "weakened_or_rejected": len(weakened)}
+
+
+def _ingest_review_issues(
+    conn: sqlite3.Connection,
+    sid: str,
+    session_dir: str,
+    explicit_paths: list[str] | None = None,
+    manifest_arg: str | None = None,
+    report_arg: str | None = None,
+) -> dict:
+    review_issues = _load_review_issues(session_dir, explicit_paths)
+    target_artifact_issues = _annotate_review_issue_targets(
+        session_dir,
+        review_issues["issues"],
+        manifest_arg,
+        report_arg,
+    )
+    artifact_issues = [*review_issues["artifact_issues"], *target_artifact_issues]
+
+    conn.execute("DELETE FROM review_issues WHERE session_id = ?", (sid,))
+    ingested_at = _now()
+    for issue in review_issues["issues"]:
+        contradiction = issue.get("contradiction_candidate") if isinstance(issue.get("contradiction_candidate"), dict) else {}
+        conn.execute(
+            """INSERT OR REPLACE INTO review_issues
+               (session_id, issue_id, dimension, severity, target_type, target_id, locator,
+                text_hash, text_snippet, related_source_ids, related_evidence_ids,
+                related_citation_refs, status, rationale, resolution, contradiction_type,
+                conflicting_target_ids, final_report_handling, source_path, target_match, ingested_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sid,
+                issue.get("issue_id"),
+                issue.get("dimension"),
+                issue.get("severity"),
+                issue.get("target_type"),
+                issue.get("target_id"),
+                issue.get("locator"),
+                issue.get("text_hash"),
+                issue.get("text_snippet"),
+                _json_compact(issue.get("related_source_ids", [])),
+                _json_compact(issue.get("related_evidence_ids", [])),
+                _json_compact(issue.get("related_citation_refs", [])),
+                _canonical_review_issue_status(issue.get("status")),
+                issue.get("rationale"),
+                issue.get("resolution"),
+                contradiction.get("contradiction_type"),
+                _json_compact(contradiction.get("conflicting_target_ids", [])),
+                contradiction.get("final_report_handling"),
+                issue.get("source_path"),
+                _json_compact(issue.get("target_match", {})),
+                ingested_at,
+            ),
+        )
+
+    return {
+        "present": review_issues["present"],
+        "paths": review_issues["paths"],
+        "ingested": len(review_issues["issues"]),
+        "open_issues": len(_filter_review_issues_by_status(review_issues["issues"], "open")),
+        "artifact_issues": artifact_issues,
+    }
+
+
+def _report_target_flagged_count(conn: sqlite3.Connection, sid: str) -> int:
+    targets = [dict(row) for row in conn.execute(
+        "SELECT target_id, citation_refs, source_ids FROM report_targets WHERE session_id = ?",
+        (sid,),
+    ).fetchall()]
+    if not targets:
+        return 0
+
+    finding_links: dict[str, set[str]] = {}
+    for row in conn.execute("SELECT target_id, finding_id FROM report_target_findings WHERE session_id = ?", (sid,)).fetchall():
+        finding_links.setdefault(row["target_id"], set()).add(row["finding_id"])
+
+    flags_by_source: dict[str, list[dict]] = {}
+    for row in conn.execute("SELECT * FROM source_flags WHERE session_id = ?", (sid,)).fetchall():
+        flags_by_source.setdefault(row["source_id"], []).append(dict(row))
+
+    flagged_targets: set[str] = set()
+    for target in targets:
+        target_id = target["target_id"]
+        citation_refs = set(_json_list(target.get("citation_refs")))
+        target_findings = finding_links.get(target_id, set())
+        for source_id in _json_list(target.get("source_ids")):
+            for flag in flags_by_source.get(source_id, []):
+                scope = flag.get("applies_to_type")
+                applies_to_id = flag.get("applies_to_id") or ""
+                if scope in ("run", "brief"):
+                    flagged_targets.add(target_id)
+                elif scope == "report_target" and applies_to_id == target_id:
+                    flagged_targets.add(target_id)
+                elif scope == "finding" and applies_to_id in target_findings:
+                    flagged_targets.add(target_id)
+                elif scope == "citation" and applies_to_id in citation_refs:
+                    flagged_targets.add(target_id)
+    return len(flagged_targets)
+
+
+def _reflection_metrics_from_state(conn: sqlite3.Connection, sid: str) -> dict:
+    report_targets_total = conn.execute(
+        "SELECT COUNT(*) AS c FROM report_targets WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+    target_evidence = conn.execute(
+        "SELECT COUNT(DISTINCT target_id) AS c FROM report_target_evidence WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+    target_findings = conn.execute(
+        "SELECT COUNT(DISTINCT target_id) AS c FROM report_target_findings WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+    without_grounding = conn.execute(
+        """SELECT COUNT(*) AS c FROM report_targets rt
+           WHERE rt.session_id = ?
+             AND (rt.is_ungrounded = 1 OR (
+                 COALESCE(rt.not_grounded_reason, '') = ''
+                 AND NOT EXISTS (
+                     SELECT 1 FROM report_target_evidence rte
+                     WHERE rte.session_id = rt.session_id AND rte.target_id = rt.target_id
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM report_target_findings rtf
+                     WHERE rtf.session_id = rt.session_id AND rtf.target_id = rt.target_id
+                 )
+             ))""",
+        (sid,),
+    ).fetchone()["c"]
+
+    fragile_without_evidence = 0
+    for row in conn.execute(
+        "SELECT target_id, claim_type FROM report_targets WHERE session_id = ?", (sid,)
+    ).fetchall():
+        if _normalized_label(row["claim_type"]) not in _QUANTITATIVE_OR_FRAGILE_CLAIM_TYPES:
+            continue
+        linked = conn.execute(
+            "SELECT 1 FROM report_target_evidence WHERE session_id = ? AND target_id = ? LIMIT 1",
+            (sid, row["target_id"]),
+        ).fetchone()
+        if not linked:
+            fragile_without_evidence += 1
+
+    citations_audited = conn.execute(
+        "SELECT COUNT(*) AS c FROM citation_audits WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+    citations_weakened = 0
+    for row in conn.execute(
+        "SELECT support_classification, recommended_action FROM citation_audits WHERE session_id = ?", (sid,)
+    ).fetchall():
+        if (_normalized_label(row["support_classification"]) in _WEAK_SUPPORT_CLASSIFICATIONS
+                or _normalized_label(row["recommended_action"]) in _CITATION_WEAKENED_ACTIONS):
+            citations_weakened += 1
+
+    reviewer_issues_with_target_ids = conn.execute(
+        "SELECT COUNT(*) AS c FROM review_issues WHERE session_id = ? AND COALESCE(target_id, '') != ''",
+        (sid,),
+    ).fetchone()["c"]
+    placeholders = ",".join("?" for _ in _CLOSED_REVIEW_ISSUE_STATUSES)
+    closed_args = [sid, *_CLOSED_REVIEW_ISSUE_STATUSES]
+    reviewer_issues_resolved = conn.execute(
+        f"SELECT COUNT(*) AS c FROM review_issues WHERE session_id = ? AND status IN ({placeholders})",
+        closed_args,
+    ).fetchone()["c"]
+    unresolved_issues = conn.execute(
+        f"SELECT COUNT(*) AS c FROM review_issues WHERE session_id = ? AND (status IS NULL OR status NOT IN ({placeholders}))",
+        closed_args,
+    ).fetchone()["c"]
+
+    return {
+        "report_targets_total": report_targets_total,
+        "report_targets_with_declared_finding_links": target_findings,
+        "report_targets_with_declared_evidence_links": target_evidence,
+        "report_targets_without_grounding": without_grounding,
+        "quantitative_or_fragile_targets_without_structured_evidence": fragile_without_evidence,
+        "report_targets_depending_on_flagged_sources": _report_target_flagged_count(conn, sid),
+        "citations_audited": citations_audited,
+        "citations_weakened_or_rejected": citations_weakened,
+        "reviewer_issues_with_target_ids": reviewer_issues_with_target_ids,
+        "reviewer_issues_resolved_before_delivery": reviewer_issues_resolved,
+        "unresolved_issues_before_delivery": unresolved_issues,
+    }
+
+
+def _finding_evidence_link_counts(conn: sqlite3.Connection, sid: str) -> dict:
+    findings_total = conn.execute(
+        "SELECT COUNT(*) AS c FROM findings WHERE session_id = ?", (sid,)
+    ).fetchone()["c"]
+    if findings_total == 0:
+        return {"findings_with_evidence_links": 0, "findings_without_evidence_links": 0}
+    findings_with = conn.execute(
+        """SELECT COUNT(DISTINCT f.id) AS c
+           FROM findings f
+           INNER JOIN finding_evidence fe
+             ON fe.finding_id = f.id AND fe.session_id = f.session_id
+           WHERE f.session_id = ?""",
+        (sid,),
+    ).fetchone()["c"]
+    return {
+        "findings_with_evidence_links": findings_with,
+        "findings_without_evidence_links": findings_total - findings_with,
+    }
+
+
+def _source_warning_metrics(conn: sqlite3.Connection, sid: str) -> dict:
+    sources_with_warnings = 0
+    for row in conn.execute("SELECT quality FROM sources WHERE session_id = ?", (sid,)).fetchall():
+        if _canonical_source_quality(row["quality"]) in _SOURCE_ACCESS_WARNING_QUALITIES:
+            sources_with_warnings += 1
+    source_flags = _source_flag_summary(conn, sid)
+    return {
+        "sources_with_extraction_access_quality_warnings": sources_with_warnings,
+        "sources_with_caution_flags": source_flags["sources_with_flags"],
+        "source_caution_flags_total": source_flags["total"],
+    }
+
+
+def _citation_classification_metrics(conn: sqlite3.Connection, sid: str) -> dict:
+    classifications = {
+        "weak_support",
+        "overstated",
+        "topically_related_only",
+    }
+    count = 0
+    for row in conn.execute(
+        "SELECT support_classification FROM citation_audits WHERE session_id = ?", (sid,)
+    ).fetchall():
+        if _normalized_label(row["support_classification"]) in classifications:
+            count += 1
+    return {"citations_classified_weak_overstated_or_topically_related_only": count}
+
+
+def _unresolved_contradictions_or_limitations(conn: sqlite3.Connection, sid: str) -> list[dict]:
+    rows = conn.execute(
+        """SELECT issue_id, dimension, severity, target_type, target_id, locator,
+                  status, rationale, resolution, contradiction_type,
+                  conflicting_target_ids, final_report_handling
+           FROM review_issues
+           WHERE session_id = ?
+             AND (
+               COALESCE(contradiction_type, '') != ''
+               OR dimension IN ('internal_contradiction', 'limitation', 'missing_context')
+               OR status = 'accepted_as_limitation'
+             )
+           ORDER BY issue_id""",
+        (sid,),
+    ).fetchall()
+    items: list[dict] = []
+    for row in rows:
+        status = _canonical_review_issue_status(row["status"])
+        if status == "resolved" or status == "rejected_with_rationale":
+            continue
+        item = dict(row)
+        item["status"] = status
+        item["conflicting_target_ids"] = _json_list(item.get("conflicting_target_ids"))
+        item["disclosure_status"] = "disclosed_or_accepted" if status == "accepted_as_limitation" else "needs_agent_review"
+        items.append(item)
+    return items
+
+
+def _success_metrics_from_state(conn: sqlite3.Connection, sid: str) -> dict:
+    metrics = {}
+    metrics.update(_source_warning_metrics(conn, sid))
+    metrics.update(_finding_evidence_link_counts(conn, sid))
+    metrics.update(_reflection_metrics_from_state(conn, sid))
+    metrics.update(_citation_classification_metrics(conn, sid))
+    metrics["unresolved_contradictions_or_limitations_disclosed"] = len([
+        item for item in _unresolved_contradictions_or_limitations(conn, sid)
+        if item["disclosure_status"] == "disclosed_or_accepted"
+    ])
+    metrics["unresolved_contradictions_or_limitations_needing_review"] = len([
+        item for item in _unresolved_contradictions_or_limitations(conn, sid)
+        if item["disclosure_status"] == "needs_agent_review"
+    ])
+    return metrics
+
+
+def _delivery_validation_items(metrics: dict) -> list[dict]:
+    return [
+        {
+            "check": "Validate completed slices against recent sessions",
+            "status": "agent_judgment_required",
+            "signals": [
+                "Run this audit on completed sessions and compare success_metrics over time.",
+                "Metrics are comparable across sessions after ingest-support-artifacts.",
+            ],
+        },
+        {
+            "check": "Confirm hidden failures are visible",
+            "status": "agent_judgment_required",
+            "signals": [
+                f"report_targets_without_grounding={metrics.get('report_targets_without_grounding', 0)}",
+                f"citations_weakened_or_rejected={metrics.get('citations_weakened_or_rejected', 0)}",
+                f"unresolved_issues_before_delivery={metrics.get('unresolved_issues_before_delivery', 0)}",
+            ],
+        },
+        {
+            "check": "Confirm verifier or reviser ambiguity is reduced",
+            "status": "agent_judgment_required",
+            "signals": [
+                f"reviewer_issues_with_target_ids={metrics.get('reviewer_issues_with_target_ids', 0)}",
+                f"report_targets_with_declared_evidence_links={metrics.get('report_targets_with_declared_evidence_links', 0)}",
+                f"report_targets_with_declared_finding_links={metrics.get('report_targets_with_declared_finding_links', 0)}",
+            ],
+        },
+        {
+            "check": "Confirm token savings or repeated-work reduction",
+            "status": "agent_judgment_required",
+            "signals": [
+                "support-handoff summarizes grounded targets, citation issues, and open issues without rereading full artifacts.",
+                f"reviewer_issues_resolved_before_delivery={metrics.get('reviewer_issues_resolved_before_delivery', 0)}",
+            ],
+        },
+        {
+            "check": "Confirm agent judgment is preserved",
+            "status": "agent_judgment_required",
+            "signals": [
+                "No automatic pass/fail readiness score is emitted.",
+                "Open issues and weak support are audit facts; delivery remains a human/agent decision.",
+            ],
+        },
+        {
+            "check": "Confirm output is understandable without reading internal code",
+            "status": "agent_judgment_required",
+            "signals": [
+                "success_metrics uses explicit names from plan-checklist.md.",
+                "support-handoff lists target IDs, issue IDs, rationale, and source/citation links.",
+            ],
+        },
+        {
+            "check": "Confirm final report becomes more auditable without a rigid workflow",
+            "status": "agent_judgment_required",
+            "signals": [
+                f"report_targets_total={metrics.get('report_targets_total', 0)}",
+                f"citations_audited={metrics.get('citations_audited', 0)}",
+                f"unresolved_contradictions_or_limitations_needing_review={metrics.get('unresolved_contradictions_or_limitations_needing_review', 0)}",
+            ],
+        },
+    ]
+
+
+def cmd_delivery_audit(args):
+    if args.ingest:
+        conn = _connect(args.session_dir)
+        sid = _get_session_id(conn)
+        _ingest_report_grounding(
+            conn,
+            sid,
+            args.session_dir,
+            args.grounding_manifest,
+            args.report,
+            allow_missing=True,
+        )
+        _ingest_citation_audit(
+            conn,
+            sid,
+            args.session_dir,
+            args.citation_audit,
+            allow_missing=True,
+        )
+        _ingest_review_issues(
+            conn,
+            sid,
+            args.session_dir,
+            args.issues,
+            args.grounding_manifest,
+            args.report,
+        )
+        conn.commit()
+    else:
+        conn = _connect(args.session_dir, readonly=True)
+        sid = _get_session_id(conn)
+
+    success_metrics = _success_metrics_from_state(conn, sid)
+    open_issues = _db_review_issue_rows(conn, sid, open_only=True, limit=args.limit)
+    contradictions_or_limitations = _unresolved_contradictions_or_limitations(conn, sid)[:args.limit]
+    conn.close()
+    success_response({
+        "schema_version": "delivery-audit-v1",
+        "provenance_boundary": {
+            "deterministic_scope": "Reports structural facts, counts, known flags, and unresolved issue status only.",
+            "agent_judgment": "This is not a readiness score or delivery gate; the agent decides whether to revise, disclose limitations, or deliver.",
+        },
+        "success_metrics": success_metrics,
+        "validation_checklist": _delivery_validation_items(success_metrics),
+        "open_issues": {
+            "summary": {
+                "listed": len(open_issues),
+                "total": success_metrics["unresolved_issues_before_delivery"],
+            },
+            "issues": open_issues,
+        },
+        "unresolved_contradictions_or_limitations": {
+            "summary": {
+                "listed": len(contradictions_or_limitations),
+                "disclosed_or_accepted": success_metrics["unresolved_contradictions_or_limitations_disclosed"],
+                "needs_agent_review": success_metrics["unresolved_contradictions_or_limitations_needing_review"],
+            },
+            "issues": contradictions_or_limitations,
+        },
+        "notes": [
+            "Use --ingest to refresh queryable state from current file artifacts before auditing.",
+            "A zero count is not proof of quality; it can also mean the relevant artifact was not produced or ingested.",
+        ],
+    })
+
+
+def _db_review_issue_rows(conn: sqlite3.Connection, sid: str, *, open_only: bool, limit: int) -> list[dict]:
+    closed = tuple(_CLOSED_REVIEW_ISSUE_STATUSES)
+    if open_only:
+        placeholders = ",".join("?" for _ in closed)
+        rows = conn.execute(
+            f"""SELECT * FROM review_issues
+                WHERE session_id = ? AND (status IS NULL OR status NOT IN ({placeholders}))
+                ORDER BY severity DESC, issue_id LIMIT ?""",
+            [sid, *closed, limit],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM review_issues WHERE session_id = ? ORDER BY issue_id LIMIT ?",
+            (sid, limit),
+        ).fetchall()
+    results = []
+    for row in rows:
+        item = dict(row)
+        for key in ("related_source_ids", "related_evidence_ids", "related_citation_refs", "conflicting_target_ids"):
+            item[key] = _json_list(item.get(key))
+        item["target_match"] = _json_object(item.get("target_match"))
+        results.append(item)
+    return results
+
+
+def cmd_ingest_report_grounding(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    result = _ingest_report_grounding(conn, sid, args.session_dir, args.manifest, args.report)
+    conn.commit()
+    conn.close()
+    success_response({"schema_version": "support-artifact-ingestion-v1", "report_grounding": result})
+
+
+def cmd_ingest_citation_audit(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    result = _ingest_citation_audit(conn, sid, args.session_dir, args.citation_audit)
+    conn.commit()
+    conn.close()
+    success_response({"schema_version": "support-artifact-ingestion-v1", "citation_audit": result})
+
+
+def cmd_ingest_review_issues(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    result = _ingest_review_issues(
+        conn,
+        sid,
+        args.session_dir,
+        args.issues,
+        args.grounding_manifest,
+        args.report,
+    )
+    conn.commit()
+    conn.close()
+    success_response({"schema_version": "support-artifact-ingestion-v1", "review_issues": result})
+
+
+def cmd_ingest_support_artifacts(args):
+    conn = _connect(args.session_dir)
+    sid = _get_session_id(conn)
+    report_grounding = _ingest_report_grounding(
+        conn,
+        sid,
+        args.session_dir,
+        args.grounding_manifest,
+        args.report,
+        allow_missing=True,
+    )
+    citation_audit = _ingest_citation_audit(
+        conn,
+        sid,
+        args.session_dir,
+        args.citation_audit,
+        allow_missing=True,
+    )
+    review_issues = _ingest_review_issues(
+        conn,
+        sid,
+        args.session_dir,
+        args.issues,
+        args.grounding_manifest,
+        args.report,
+    )
+    metrics = _success_metrics_from_state(conn, sid)
+    conn.commit()
+    conn.close()
+    success_response({
+        "schema_version": "support-artifact-ingestion-v1",
+        "report_grounding": report_grounding,
+        "citation_audit": citation_audit,
+        "review_issues": review_issues,
+        "reflection_metrics": metrics,
+        "success_metrics": metrics,
+        "summary": {
+            "report_targets": report_grounding.get("ingested", 0),
+            "citation_audits": citation_audit.get("ingested", 0),
+            "review_issues": review_issues.get("ingested", 0),
+            "open_issues": review_issues.get("open_issues", 0),
+        },
+    })
+
+
+def cmd_reflection_metrics(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    metrics = _success_metrics_from_state(conn, sid)
+    conn.close()
+    success_response({"schema_version": "reflection-metrics-v1", "metrics": metrics})
+
+
+def cmd_support_handoff(args):
+    conn = _connect(args.session_dir, readonly=True)
+    sid = _get_session_id(conn)
+    limit = args.limit
+    target_rows = conn.execute(
+        """SELECT target_id, section, paragraph, validation_status, grounding_status,
+                  support_level, claim_type, text_snippet, citation_refs, source_ids, is_ungrounded
+           FROM report_targets
+           WHERE session_id = ?
+           ORDER BY is_ungrounded, section, paragraph, target_id
+           LIMIT ?""",
+        (sid, limit),
+    ).fetchall()
+    targets = []
+    for row in target_rows:
+        item = dict(row)
+        item["citation_refs"] = _json_list(item.get("citation_refs"))
+        item["source_ids"] = _json_list(item.get("source_ids"))
+        item["is_ungrounded"] = bool(item["is_ungrounded"])
+        targets.append(item)
+
+    weak_citation_rows = conn.execute(
+        "SELECT * FROM citation_audits WHERE session_id = ? ORDER BY check_id",
+        (sid,),
+    ).fetchall()
+    weak_citations = []
+    for row in weak_citation_rows:
+        item = dict(row)
+        if (_normalized_label(item.get("support_classification")) not in _WEAK_SUPPORT_CLASSIFICATIONS
+                and _normalized_label(item.get("recommended_action")) not in _CITATION_WEAKENED_ACTIONS):
+            continue
+        item["source_ids"] = _json_list(item.get("source_ids"))
+        weak_citations.append(item)
+        if len(weak_citations) >= limit:
+            break
+
+    open_issues = _db_review_issue_rows(conn, sid, open_only=True, limit=limit)
+    metrics = _success_metrics_from_state(conn, sid)
+    conn.close()
+    success_response({
+        "schema_version": "support-handoff-v1",
+        "report_targets": {
+            "summary": {
+                "listed": len(targets),
+                "total": metrics["report_targets_total"],
+                "without_grounding": metrics["report_targets_without_grounding"],
+                "with_declared_evidence_links": metrics["report_targets_with_declared_evidence_links"],
+                "with_declared_finding_links": metrics["report_targets_with_declared_finding_links"],
+            },
+            "targets": targets,
+        },
+        "open_support_issues": {
+            "summary": {"listed": len(open_issues), "total": metrics["unresolved_issues_before_delivery"]},
+            "issues": open_issues,
+        },
+        "citation_support_issues": {
+            "summary": {"listed": len(weak_citations), "total": metrics["citations_weakened_or_rejected"]},
+            "citations": weak_citations,
+        },
+        "reflection_metrics": metrics,
+        "notes": [
+            "This handoff is generated from ingested file artifacts, not inferred from report prose.",
+            "Run ingest-support-artifacts after regenerating report-grounding, citation-audit, or review issue files.",
+        ],
+    })
+
+
+def _weak_support_density(targets: list[dict], citation_audit: dict) -> list[dict]:
+    by_target: dict[str, list[str]] = {}
+    for item in citation_audit.get("rejected_or_weakened_citations", []):
+        target_id = item.get("report_target_id")
+        if target_id:
+            classification = item.get("support_classification") or item.get("recommended_action") or "citation_audit_flag"
+            by_target.setdefault(str(target_id), []).append(str(classification))
+
+    sections: dict[str, dict] = {}
+    for target in targets:
+        section = str(target.get("section") or "Document")
+        section_entry = sections.setdefault(section, {"section": section, "target_count": 0, "weak_count": 0, "weak_targets": []})
+        section_entry["target_count"] += 1
+        target_id = str(target.get("target_id") or "")
+        classifications = []
+        for field in ("support_level", "grounding_status"):
+            value = target.get(field)
+            if _normalized_label(value) in _WEAK_SUPPORT_CLASSIFICATIONS:
+                classifications.append(f"{field}:{value}")
+        classifications.extend([f"citation_audit:{value}" for value in by_target.get(target_id, [])])
+        if classifications:
+            section_entry["weak_count"] += 1
+            section_entry["weak_targets"].append({
+                "target_id": target_id,
+                "classifications": classifications,
+            })
+
+    results = []
+    for entry in sections.values():
+        target_count = entry["target_count"]
+        weak_count = entry["weak_count"]
+        ratio = weak_count / target_count if target_count else 0
+        entry["weak_ratio"] = round(ratio, 3)
+        entry["high_weak_support_density"] = weak_count >= 2 and ratio >= 0.5
+        results.append(entry)
+    results.sort(key=lambda item: (-item["weak_ratio"], -item["weak_count"], item["section"]))
+    return results
+
+
+def _report_body_as_ungrounded(session_dir: str, report_arg: str | None) -> tuple[list[dict], int]:
+    report_value = report_arg or "draft.md"
+    report_path = _resolve_session_file(session_dir, report_value, None)
+    if not os.path.exists(report_path):
+        return [], 0
+    with open(report_path, encoding="utf-8") as f:
+        paragraphs = _parse_report_paragraphs(f.read())
+    body = _body_paragraphs(paragraphs)
+    ungrounded = [
+        {
+            "section": p["section"],
+            "paragraph": p["paragraph"],
+            "text_hash": p["text_hash"],
+            "text_snippet": p["text_snippet"],
+            "citation_refs": p["citation_refs"],
+        }
+        for p in body
+    ]
+    return ungrounded, len(body)
+
+
+def cmd_audit_report_support(args):
+    validation = _validate_report_grounding(args.session_dir, args.manifest, args.report)
+    if validation.get("manifest_status") == "missing_or_invalid":
+        ungrounded, body_count = _report_body_as_ungrounded(args.session_dir, args.report)
+        if ungrounded:
+            validation["ungrounded_paragraphs"] = ungrounded
+            validation.setdefault("issues", []).append({
+                "code": "ungrounded_paragraphs",
+                "message": f"{len(ungrounded)} body paragraph(s) have no grounding target because no usable manifest was loaded",
+            })
+            validation.setdefault("summary", {})["ungrounded_paragraphs"] = len(ungrounded)
+            validation.setdefault("summary", {})["report_body_paragraphs"] = body_count
+    manifest_path = _resolve_session_file(args.session_dir, args.manifest, _REPORT_GROUNDING_FILENAME)
+    manifest, manifest_issues = _load_report_grounding_manifest(manifest_path)
+    manifest_targets = manifest.get("targets", []) if isinstance(manifest, dict) and isinstance(manifest.get("targets"), list) else []
+    targets = [target for target in manifest_targets if isinstance(target, dict)]
+    validation_by_id = {target["target_id"]: target for target in validation.get("targets", []) if target.get("target_id")}
 
     conn = _connect(args.session_dir, readonly=True)
     sid = _get_session_id(conn)
-    source_ids = {row["id"] for row in conn.execute("SELECT id FROM sources WHERE session_id = ?", (sid,)).fetchall()}
-    finding_ids = {row["id"] for row in conn.execute("SELECT id FROM findings WHERE session_id = ?", (sid,)).fetchall()}
-    evidence_ids = {row["id"] for row in conn.execute("SELECT id FROM evidence_units WHERE session_id = ?", (sid,)).fetchall()}
+    sources_by_id: dict[str, dict] = {}
+    for row in conn.execute("SELECT id, title, quality FROM sources WHERE session_id = ? ORDER BY id", (sid,)).fetchall():
+        source = dict(row)
+        source["access_quality"] = _canonical_source_quality(source.get("quality"))
+        sources_by_id[source["id"]] = source
+
+    source_flags = _source_flag_rows(conn, sid)
+    flags_by_source: dict[str, list[dict]] = {}
+    for flag in source_flags:
+        flags_by_source.setdefault(flag["source_id"], []).append(flag)
+
+    finding_rows = conn.execute("SELECT id, text, sources FROM findings WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
+    evidence_links: dict[str, list[str]] = {}
+    for row in conn.execute("SELECT finding_id, evidence_id FROM finding_evidence WHERE session_id = ? ORDER BY finding_id, evidence_id", (sid,)).fetchall():
+        evidence_links.setdefault(row["finding_id"], []).append(row["evidence_id"])
+    findings_with_evidence = []
+    findings_without_evidence = []
+    for row in finding_rows:
+        links = evidence_links.get(row["id"], [])
+        item = {"finding_id": row["id"], "evidence_ids": links}
+        if links:
+            findings_with_evidence.append(item)
+        else:
+            findings_without_evidence.append({"finding_id": row["id"]})
+
+    evidence_count = conn.execute(
+        "SELECT COUNT(*) as c FROM evidence_units WHERE session_id = ? AND status = 'active'", (sid,)
+    ).fetchone()["c"]
+    source_quality_summary = _source_quality_counts(conn, sid)
+    source_caution_summary = _source_flag_summary(conn, sid, include_rows=True)
     conn.close()
 
-    targets = manifest.get("targets", [])
-    if not isinstance(targets, list):
-        issues.append({"code": "targets_invalid", "message": "Manifest field 'targets' must be an array"})
-        targets = []
+    compact_targets = [_compact_target(target, validation_by_id) for target in targets]
+    targets_with_declared_evidence = [target for target in compact_targets if target["evidence_ids"]]
+    targets_only_finding_level = [
+        target for target in compact_targets
+        if not target["evidence_ids"] and target["finding_ids"]
+    ]
+    targets_without_declared_links = [
+        target for target in compact_targets
+        if not target["evidence_ids"] and not target["finding_ids"] and not next(
+            (raw.get("not_grounded_reason") for raw in targets if raw.get("target_id") == target["target_id"]),
+            None,
+        )
+    ]
 
-    grounded_keys = set()
-    valid_targets = 0
-    stale_targets = 0
-    orphaned_targets = 0
+    targets_with_source_warnings = []
+    for target in targets:
+        reasons = []
+        for source_id in _string_list(target.get("source_ids", [])):
+            source = sources_by_id.get(source_id)
+            if source and source["access_quality"] in _SOURCE_WARNING_QUALITIES:
+                reasons.append({
+                    "source_id": source_id,
+                    "kind": "source_quality",
+                    "value": source["access_quality"],
+                })
+            for flag in flags_by_source.get(source_id, []):
+                if flag.get("flag") in _SOURCE_WARNING_FLAGS and _source_flag_applies_to_target(flag, target):
+                    reasons.append({
+                        "source_id": source_id,
+                        "kind": "source_caution_flag",
+                        "value": flag.get("flag"),
+                        "applies_to_type": flag.get("applies_to_type"),
+                        "applies_to_id": flag.get("applies_to_id"),
+                        "rationale": flag.get("rationale"),
+                    })
+        if reasons:
+            compact = _compact_target(target, validation_by_id)
+            compact["warnings"] = reasons
+            targets_with_source_warnings.append(compact)
 
-    for index, target in enumerate(targets):
-        target_id = target.get("target_id") if isinstance(target, dict) else None
-        target_ref = target_id or f"target[{index}]"
-        target_issues: list[dict] = []
-        status = "valid"
-        matched = None
+    citation_audit = _load_citation_audit(args.session_dir, args.citation_audit)
+    review_issues = _load_review_issues(args.session_dir, args.review_issues)
+    weak_density = _weak_support_density(targets, citation_audit)
 
-        if not isinstance(target, dict):
-            target_results.append({"target_id": target_ref, "status": "invalid", "issues": [{"code": "target_invalid", "message": "Target must be an object"}]})
-            continue
+    output_path = _resolve_session_output_file(args.session_dir, args.output, os.path.join("revision", _REPORT_SUPPORT_AUDIT_FILENAME))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        for field in _REPORT_GROUNDING_REQUIRED_FIELDS:
-            if field not in target:
-                target_issues.append({"code": "missing_required_field", "field": field})
-
-        locator = (target.get("section"), target.get("paragraph"))
-        if isinstance(locator[0], str) and isinstance(locator[1], int):
-            matched = by_locator.get(locator)
-
-        expected_hash = target.get("text_hash")
-        if matched and expected_hash == matched["text_hash"]:
-            grounded_keys.add((matched["section"], matched["paragraph"]))
-        elif expected_hash in by_hash:
-            relocated = by_hash[expected_hash][0]
-            target_issues.append({
-                "code": "stale_locator",
-                "message": "Target hash exists in report but section/paragraph locator changed",
-                "current_section": relocated["section"],
-                "current_paragraph": relocated["paragraph"],
-            })
-            status = "stale_locator"
-            matched = relocated
-            grounded_keys.add((relocated["section"], relocated["paragraph"]))
-        elif matched:
-            target_issues.append({
-                "code": "stale_hash",
-                "message": "Target locator exists but text_hash no longer matches current paragraph text",
-                "current_text_hash": matched["text_hash"],
-            })
-            status = "stale_hash"
-            grounded_keys.add((matched["section"], matched["paragraph"]))
-        else:
-            snippet = _normalize_grounding_text(str(target.get("text_snippet", "")))
-            if snippet:
-                for p in paragraphs:
-                    if snippet and snippet in p["text"]:
-                        matched = p
-                        target_issues.append({
-                            "code": "stale_hash",
-                            "message": "Target reconnected by snippet but text_hash/locator did not match",
-                            "current_section": p["section"],
-                            "current_paragraph": p["paragraph"],
-                            "current_text_hash": p["text_hash"],
-                        })
-                        status = "stale_hash"
-                        grounded_keys.add((p["section"], p["paragraph"]))
-                        break
-            if matched is None:
-                target_issues.append({"code": "orphaned_target", "message": "Target could not be matched by locator, hash, or snippet"})
-                status = "orphaned"
-
-        text_for_checks = matched["text"] if matched else ""
-        citation_refs = target.get("citation_refs", [])
-        if not isinstance(citation_refs, list):
-            target_issues.append({"code": "field_type", "field": "citation_refs", "message": "citation_refs must be an array"})
-            citation_refs = []
-        for ref in citation_refs:
-            if ref not in text_for_checks:
-                target_issues.append({"code": "citation_ref_missing", "citation_ref": ref, "message": "Listed citation_ref does not occur in target text"})
-
-        for field, existing_ids in (("source_ids", source_ids), ("finding_ids", finding_ids), ("evidence_ids", evidence_ids)):
-            values = target.get(field, [])
-            if not isinstance(values, list):
-                target_issues.append({"code": "field_type", "field": field, "message": f"{field} must be an array"})
-                continue
-            for value in values:
-                if value not in existing_ids:
-                    target_issues.append({"code": "missing_referenced_id", "field": field, "id": value})
-
-        finding_values = target.get("finding_ids", [])
-        evidence_values = target.get("evidence_ids", [])
-        if (isinstance(finding_values, list)
-                and isinstance(evidence_values, list)
-                and not finding_values
-                and not evidence_values
-                and not target.get("not_grounded_reason")):
-            target_issues.append({
-                "code": "missing_declared_grounding",
-                "message": "Target has no finding_ids, evidence_ids, or not_grounded_reason",
-            })
-
-        warnings_value = target.get("warnings", [])
-        if "warnings" in target and not isinstance(warnings_value, list):
-            target_issues.append({"code": "field_type", "field": "warnings", "message": "warnings must be an array"})
-
-        if status == "valid" and target_issues:
-            status = "invalid"
-        if status == "valid":
-            valid_targets += 1
-        elif status.startswith("stale"):
-            stale_targets += 1
-        elif status == "orphaned":
-            orphaned_targets += 1
-
-        target_results.append({
-            "target_id": target_ref,
-            "status": status,
-            "section": target.get("section"),
-            "paragraph": target.get("paragraph"),
-            "matched_section": matched["section"] if matched else None,
-            "matched_paragraph": matched["paragraph"] if matched else None,
-            "issues": target_issues,
-        })
-
-    ungrounded = []
-    for p in body_paragraphs:
-        key = (p["section"], p["paragraph"])
-        if key not in grounded_keys:
-            ungrounded.append({
-                "section": p["section"],
-                "paragraph": p["paragraph"],
-                "text_hash": p["text_hash"],
-                "text_snippet": p["text_snippet"],
-                "citation_refs": p["citation_refs"],
-            })
-
-    if ungrounded:
-        issues.append({
-            "code": "ungrounded_paragraphs",
-            "message": f"{len(ungrounded)} body paragraph(s) have no grounding target",
-        })
-
-    target_issue_count = sum(len(t["issues"]) for t in target_results)
-    valid = not issues and target_issue_count == 0
-    success_response({
-        "schema_version": "report-grounding-validation-v1",
-        "manifest_path": os.path.relpath(manifest_path),
-        "manifest_status": "loaded",
-        "report_path": report_value,
-        "valid": valid,
-        "issues": issues,
-        "targets": target_results,
-        "ungrounded_paragraphs": ungrounded,
-        "summary": {
-            "targets": len(target_results),
-            "valid_targets": valid_targets,
-            "stale_targets": stale_targets,
-            "orphaned_targets": orphaned_targets,
-            "target_issue_count": target_issue_count,
-            "ungrounded_paragraphs": len(ungrounded),
-            "report_body_paragraphs": len(body_paragraphs),
+    audit = {
+        "schema_version": _REPORT_SUPPORT_AUDIT_SCHEMA_VERSION,
+        "generated_at": _now(),
+        "session_dir": args.session_dir,
+        "manifest_path": validation.get("manifest_path"),
+        "report_path": validation.get("report_path"),
+        "output_path": os.path.relpath(output_path),
+        "provenance_boundary": {
+            "declared_grounding": "report-grounding.json is writer-declared provenance, not verified semantic support.",
+            "deterministic_scope": "This audit aggregates structure, links, known source warnings, and agent-authored classifications; it does not infer support from report prose.",
+            "agent_verified_support": "Citation and review outcomes are included only when an agent-authored artifact is present.",
         },
+        "validation": validation,
+        "declared_grounding": {
+            "paragraphs_with_declared_grounding": compact_targets,
+            "paragraphs_without_grounding": validation.get("ungrounded_paragraphs", []),
+            "targets_with_declared_evidence_links": targets_with_declared_evidence,
+            "targets_with_only_declared_finding_level_links": targets_only_finding_level,
+            "targets_without_declared_links": targets_without_declared_links,
+        },
+        "finding_evidence": {
+            "findings_with_evidence_links": findings_with_evidence,
+            "findings_without_evidence_links": findings_without_evidence,
+        },
+        "source_warnings": {
+            "source_quality": source_quality_summary,
+            "source_caution_flags": source_caution_summary,
+            "targets_depending_on_warned_sources": targets_with_source_warnings,
+        },
+        "agent_verified_support": {
+            "citation_audit": citation_audit,
+            "review_issues": review_issues,
+            "weak_support_density_by_section": weak_density,
+        },
+        "artifact_issues": {
+            "manifest": manifest_issues,
+            "citation_audit": citation_audit.get("artifact_issues", []),
+            "review_issues": review_issues.get("artifact_issues", []),
+        },
+        "summary": {
+            "report_body_paragraphs": validation.get("summary", {}).get("report_body_paragraphs", 0),
+            "paragraphs_with_declared_grounding": len(compact_targets),
+            "paragraphs_without_grounding": len(validation.get("ungrounded_paragraphs", [])),
+            "grounding_validation_valid": validation.get("valid", False),
+            "grounding_validation_issues": len(validation.get("issues", [])) + validation.get("summary", {}).get("target_issue_count", 0),
+            "findings": len(finding_rows),
+            "findings_with_evidence_links": len(findings_with_evidence),
+            "findings_without_evidence_links": len(findings_without_evidence),
+            "evidence_units": evidence_count,
+            "targets_with_declared_evidence_links": len(targets_with_declared_evidence),
+            "targets_with_only_declared_finding_level_links": len(targets_only_finding_level),
+            "targets_depending_on_warned_sources": len(targets_with_source_warnings),
+            "citations_checked_by_audit": citation_audit["summary"]["checked_citations"],
+            "citations_rejected_or_weakened_by_audit": citation_audit["summary"]["rejected_or_weakened_citations"],
+            "unresolved_review_issues": review_issues["summary"]["unresolved_issues"],
+            "sections_with_high_weak_support_density": sum(1 for item in weak_density if item["high_weak_support_density"]),
+        },
+    }
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2, ensure_ascii=False)
+
+    success_response({
+        "path": os.path.relpath(output_path),
+        "summary": audit["summary"],
+        "provenance_boundary": audit["provenance_boundary"],
     })
 
 
@@ -5535,6 +7804,8 @@ def main():
     p.add_argument("--report", required=True, help="Path to report.md")
     p.add_argument("--pass", dest="pass_type", default=None, choices=["accuracy", "style"],
                    help="Filter to edits from a specific pass (default: check all)")
+    p.add_argument("--grounding-manifest", default=None,
+                   help="Optional report-grounding.json path for stale grounding refresh report (default: beside report)")
 
     # report grounding
     p = sub.add_parser("report-paragraphs", help="List report paragraphs with stable text hashes")
@@ -5544,6 +7815,66 @@ def main():
     p = sub.add_parser("validate-report-grounding", help="Validate report-grounding.json against report text and state IDs")
     p.add_argument("--manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
     p.add_argument("--report", default=None, help="Override report path from manifest")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("audit-report-support", help="Write deterministic declared-grounding support audit under revision/")
+    p.add_argument("--manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
+    p.add_argument("--report", default=None, help="Override report path from manifest")
+    p.add_argument("--citation-audit", default=None, help="Optional citation-audit.json path (default: session/revision/citation-audit.json)")
+    p.add_argument("--review-issues", action="append", default=None, help="Optional review issue JSON path; can be repeated (default: revision/*-issues.json)")
+    p.add_argument("--output", default=None, help="Output path relative to session dir (default: revision/report-support-audit.json)")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("citation-audit-contexts", help="Write citation contexts for agent-authored citation audit")
+    p.add_argument("--manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
+    p.add_argument("--report", default=None, help="Override report path from manifest or fallback report for ungrounded contexts")
+    p.add_argument("--output", default=None, help="Output path relative to session dir (default: revision/citation-audit-contexts.json)")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("review-issues", help="List normalized review issues and open revision blockers")
+    p.add_argument("--issues", action="append", default=None, help="Optional review issue JSON path; can be repeated (default: revision/*-issues.json)")
+    p.add_argument("--status", default="open", choices=["all", *_REVIEW_ISSUE_STATUSES],
+                   help="Which issues to list (default: open, including partially_resolved)")
+    p.add_argument("--grounding-manifest", default=None, help="Path to report-grounding.json for report_target matching")
+    p.add_argument("--report", default=None, help="Override report path from manifest for report_target matching")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("ingest-report-grounding", help="Ingest report-grounding.json into queryable state tables")
+    p.add_argument("--manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
+    p.add_argument("--report", default=None, help="Override report path from manifest")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("ingest-citation-audit", help="Ingest revision/citation-audit.json into queryable state tables")
+    p.add_argument("--citation-audit", default=None, help="Path to citation-audit.json (default: session/revision/citation-audit.json)")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("ingest-review-issues", help="Ingest revision/*-issues.json into queryable state tables")
+    p.add_argument("--issues", action="append", default=None, help="Optional review issue JSON path; can be repeated (default: revision/*-issues.json)")
+    p.add_argument("--grounding-manifest", default=None, help="Path to report-grounding.json for report_target matching")
+    p.add_argument("--report", default=None, help="Override report path from manifest for report_target matching")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("ingest-support-artifacts", help="Ingest report grounding, citation audit, and review issue artifacts")
+    p.add_argument("--grounding-manifest", default=None, help="Path to report-grounding.json (default: session/report-grounding.json)")
+    p.add_argument("--report", default=None, help="Override report path from manifest")
+    p.add_argument("--citation-audit", default=None, help="Path to citation-audit.json (default: session/revision/citation-audit.json)")
+    p.add_argument("--issues", action="append", default=None, help="Optional review issue JSON path; can be repeated (default: revision/*-issues.json)")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("reflection-metrics", help="Return reflection metrics from ingested support artifacts")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("support-handoff", help="Compact handoff of grounded targets and open support issues")
+    p.add_argument("--limit", type=int, default=25, help="Maximum targets/issues/citations to list (default: 25)")
+    p.add_argument("--session-dir", **_sd)
+
+    p = sub.add_parser("delivery-audit", help="Success metrics and non-gating delivery validation checklist")
+    p.add_argument("--ingest", action="store_true", help="Refresh support artifact tables before auditing")
+    p.add_argument("--grounding-manifest", default=None, help="Path to report-grounding.json when using --ingest")
+    p.add_argument("--report", default=None, help="Override report path when using --ingest")
+    p.add_argument("--citation-audit", default=None, help="Path to citation-audit.json when using --ingest")
+    p.add_argument("--issues", action="append", default=None, help="Optional review issue JSON path; can be repeated")
+    p.add_argument("--limit", type=int, default=25, help="Maximum open issues/limitations to list (default: 25)")
     p.add_argument("--session-dir", **_sd)
 
     # validate-content
@@ -5618,6 +7949,16 @@ def main():
         "validate-edits": cmd_validate_edits,
         "report-paragraphs": cmd_report_paragraphs,
         "validate-report-grounding": cmd_validate_report_grounding,
+        "audit-report-support": cmd_audit_report_support,
+        "citation-audit-contexts": cmd_citation_audit_contexts,
+        "review-issues": cmd_review_issues,
+        "ingest-report-grounding": cmd_ingest_report_grounding,
+        "ingest-citation-audit": cmd_ingest_citation_audit,
+        "ingest-review-issues": cmd_ingest_review_issues,
+        "ingest-support-artifacts": cmd_ingest_support_artifacts,
+        "reflection-metrics": cmd_reflection_metrics,
+        "support-handoff": cmd_support_handoff,
+        "delivery-audit": cmd_delivery_audit,
         "validate-content": cmd_validate_content,
     }
 

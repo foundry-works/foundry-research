@@ -1,0 +1,41 @@
+{
+  "name": "foundry-research",
+  "version": "1.2.1",
+  "description": "Deep research agent with academic database search, structured source management, and multi-agent synthesis. Produces evidence-backed research reports.",
+  "author": {
+    "name": "Tyler Burleigh",
+    "url": "https://github.com/foundry-works"
+  },
+  "homepage": "https://github.com/foundry-works/foundry-research",
+  "repository": "https://github.com/foundry-works/foundry-research",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "academic",
+    "literature-review",
+    "deep-research",
+    "synthesis"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Foundry Research",
+    "shortDescription": "Evidence-backed deep research with academic search and synthesis",
+    "longDescription": "Use Foundry Research to run rigorous, multi-source research workflows with academic and web provider search, source downloading, structured evidence tracking, synthesis, verification, revision, reflection, and pipeline improvement skills.",
+    "developerName": "Tyler Burleigh",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/foundry-works/foundry-research",
+    "termsOfServiceURL": "https://github.com/foundry-works/foundry-research/blob/main/LICENSE",
+    "defaultPrompt": [
+      "Use Foundry Research to synthesize evidence for this research question.",
+      "Review and revise this completed deep research report.",
+      "Evaluate this completed research session and suggest improvements."
+    ],
+    "brandColor": "#3B3A30",
+    "screenshots": []
+  }
+}

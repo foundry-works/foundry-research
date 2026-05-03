@@ -244,3 +244,112 @@ class TestSourceFlagMetrics:
         assert m["source_caution_flags_by_flag"] == {"undated": 1}
         assert m["source_caution_flags_by_scope"] == {"run": 1}
         assert m["sources_with_caution_flags"] == 1
+
+
+class TestSupportArtifactMetrics:
+    def test_ingested_support_artifact_metrics(self, tmp_path):
+        """Reflection metrics include ingested report grounding, citation audits, and review issues."""
+        session_dir = _setup_session_with_source(tmp_path)
+        _add_evidence(tmp_path, session_dir, "src-001", [
+            {
+                "claim_text": "Evidence supports the report target.",
+                "claim_type": "result",
+                "provenance_type": "content_span",
+                "primary_question_id": "Q1",
+            }
+        ])
+        _run_state(
+            "log-finding", "--session-dir", session_dir,
+            "--text", "Finding with linked evidence.",
+            "--sources", "src-001",
+            "--evidence-ids", "ev-0001",
+        )
+
+        report_path = os.path.join(session_dir, "draft.md")
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Grounded paragraph with a citation [1].\n\n"
+                "## References\n\n"
+                "[1] Test Source.\n"
+            )
+        _, paragraphs_data = _run_state("report-paragraphs", "--session-dir", session_dir, "--report", report_path)
+        paragraph = next(p for p in paragraphs_data["results"]["paragraphs"] if p["section"] == "Executive Summary")
+        grounding_path = os.path.join(session_dir, "report-grounding.json")
+        with open(grounding_path, "w") as f:
+            json.dump({
+                "schema_version": "report-grounding-v1",
+                "report_path": report_path,
+                "targets": [
+                    {
+                        "target_id": "rp-001",
+                        "section": paragraph["section"],
+                        "paragraph": paragraph["paragraph"],
+                        "text_hash": paragraph["text_hash"],
+                        "text_snippet": paragraph["text_snippet"],
+                        "citation_refs": ["[1]"],
+                        "source_ids": ["src-001"],
+                        "finding_ids": ["finding-1"],
+                        "evidence_ids": ["ev-0001"],
+                        "warnings": [],
+                        "grounding_status": "declared_grounded",
+                        "claim_type": "quantitative",
+                    }
+                ],
+            }, f)
+
+        revision_dir = os.path.join(session_dir, "revision")
+        os.makedirs(revision_dir, exist_ok=True)
+        with open(os.path.join(revision_dir, "citation-audit.json"), "w") as f:
+            json.dump({
+                "schema_version": "citation-audit-v1",
+                "checks": [
+                    {
+                        "check_id": "cite-001",
+                        "report_target_id": "rp-001",
+                        "citation_ref": "[1]",
+                        "cited_source_ids": ["src-001"],
+                        "support_classification": "weak_support",
+                        "recommended_action": "weaken_wording",
+                        "rationale": "Citation supports the topic but not the exact wording.",
+                    }
+                ],
+            }, f)
+        with open(os.path.join(revision_dir, "accuracy-issues.json"), "w") as f:
+            json.dump({
+                "schema_version": "review-issues-v1",
+                "issues": [
+                    {
+                        "issue_id": "review-1",
+                        "dimension": "citation_support",
+                        "severity": "medium",
+                        "target_type": "report_target",
+                        "target_id": "rp-001",
+                        "locator": "Executive Summary, paragraph 1",
+                        "text_hash": paragraph["text_hash"],
+                        "text_snippet": paragraph["text_snippet"],
+                        "status": "open",
+                        "rationale": "Citation should be weakened.",
+                    }
+                ],
+            }, f)
+        _run_state("ingest-support-artifacts", "--session-dir", session_dir, "--grounding-manifest", grounding_path)
+
+        result, data = _run_metrics(session_dir)
+        assert result.returncode == 0
+        m = data["metrics"]
+        assert m["report_targets_total"] == 1
+        assert m["report_targets_with_declared_finding_links"] == 1
+        assert m["report_targets_with_declared_evidence_links"] == 1
+        assert m["report_targets_without_grounding"] == 0
+        assert m["quantitative_or_fragile_targets_without_structured_evidence"] == 0
+        assert m["citations_audited"] == 1
+        assert m["citations_weakened_or_rejected"] == 1
+        assert m["citations_classified_weak_overstated_or_topically_related_only"] == 1
+        assert m["reviewer_issues_with_target_ids"] == 1
+        assert m["reviewer_issues_resolved_before_delivery"] == 0
+        assert m["unresolved_issues_before_delivery"] == 1
+        assert m["sources_with_extraction_access_quality_warnings"] == 0
+        assert m["unresolved_contradictions_or_limitations_disclosed"] == 0
+        assert m["unresolved_contradictions_or_limitations_needing_review"] == 0

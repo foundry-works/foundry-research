@@ -9,6 +9,9 @@ dist/
 build/
 .eggs/
 
+# Node
+node_modules/
+
 # Virtual environments
 .venv/
 venv/
@@ -41,6 +44,7 @@ PLAN.md
 PLAN-CHECKLIST.md
 .ruff_cache
 .claude/
+.codex
 .cache/
 .pytest_cache
 settings.json

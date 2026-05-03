@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Improvement"
+  short_description: "Plan improvements from reflections"
+  default_prompt: "Use $improve to plan pipeline improvements from these reflection files."

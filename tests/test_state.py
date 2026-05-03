@@ -27,7 +27,11 @@ class TestSchemaInit:
         ).fetchall()}
         conn.close()
 
-        expected = {"sessions", "brief", "searches", "sources", "findings", "gaps", "metrics", "source_flags"}
+        expected = {
+            "sessions", "brief", "searches", "sources", "findings", "gaps", "metrics",
+            "source_flags", "report_targets", "report_target_evidence",
+            "report_target_findings", "citation_audits", "review_issues",
+        }
         assert expected.issubset(tables)
 
     def test_init_creates_indexes(self, tmp_path):
@@ -423,7 +427,7 @@ class TestSourceFlags:
 
         result, data = _run_state("source-quality-summary", "--session-dir", session_dir)
         assert result.returncode == 0
-        assert data["results"]["raw_counts"]["mismatched"] == 1
+        assert data["results"]["raw_counts"]["title_content_mismatch"] == 1
         assert data["results"]["access_quality_counts"]["title_content_mismatch"] == 1
         assert data["results"]["source_caution_flags"]["total"] == 1
 
@@ -444,6 +448,24 @@ class TestSourceFlags:
         flags = data["results"]["source_caution_flags"]
         assert flags["total"] == 1
         assert flags["by_flag"] == {"self_interested_source": 1}
+
+    def test_mark_read_does_not_write_reader_validated_quality(self, tmp_path):
+        """Reading a source should not overload access quality with reader validation state."""
+        session_dir = self._setup_session_with_source(tmp_path)
+        _run_state(
+            "set-quality", "--session-dir", session_dir,
+            "--id", "src-001", "--quality", "degraded",
+        )
+        with open(os.path.join(session_dir, "notes", "src-001.md"), "w") as f:
+            f.write("# Reader note\n\nThe reader successfully extracted useful notes.")
+
+        result, data = _run_state("mark-read", "--session-dir", session_dir, "--id", "src-001")
+
+        assert result.returncode == 0
+        assert "quality_upgraded" not in data["results"]
+        _, summary = _run_state("source-quality-summary", "--session-dir", session_dir)
+        assert summary["results"]["raw_counts"]["degraded_extraction"] == 1
+        assert "reader_validated" not in summary["results"]["raw_counts"]
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +627,679 @@ class TestReportGrounding:
         assert data["results"]["valid"] is False
         assert data["results"]["summary"]["ungrounded_paragraphs"] == 1
         assert data["results"]["issues"][0]["code"] == "ungrounded_paragraphs"
+
+
+class TestReportSupportAudit:
+    def _setup_support_audit_fixture(self, tmp_path):
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        for name in ("Primary Source", "Secondary Source"):
+            source_file = _write_json_file(tmp_path, {
+                "title": name,
+                "provider": "test",
+            }, f"{name.lower().replace(' ', '_')}.json")
+            result, _ = _run_state("add-source", "--session-dir", session_dir, "--from-json", source_file)
+            assert result.returncode == 0
+
+        _run_state("set-quality", "--session-dir", session_dir, "--id", "src-002", "--quality", "abstract_only")
+        _run_state(
+            "set-source-flag", "--session-dir", session_dir,
+            "--source-id", "src-002",
+            "--flag", "secondary_source",
+            "--rationale", "Review article used for a local citation.",
+        )
+
+        evidence_file = _write_json_file(tmp_path, {
+            "source_id": "src-001",
+            "units": [
+                {
+                    "claim_text": "Primary evidence supports the first target.",
+                    "claim_type": "result",
+                    "provenance_type": "content_span",
+                    "primary_question_id": "Q1",
+                }
+            ],
+        }, "audit_evidence.json")
+        result, _ = _run_state("add-evidence", "--session-dir", session_dir, "--from-json", evidence_file)
+        assert result.returncode == 0
+
+        _run_state(
+            "log-finding", "--session-dir", session_dir,
+            "--text", "Finding with direct evidence.",
+            "--sources", "src-001",
+            "--evidence-ids", "ev-0001",
+        )
+        _run_state(
+            "log-finding", "--session-dir", session_dir,
+            "--text", "Finding without direct evidence.",
+            "--sources", "src-002",
+        )
+
+        report_path = os.path.join(session_dir, "draft.md")
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "First grounded paragraph with direct evidence [1].\n\n"
+                "Second paragraph with finding-level grounding only [2].\n\n"
+                "Third paragraph has no declared grounding.\n\n"
+                "## References\n\n"
+                "[1] Primary Source.\n"
+                "[2] Secondary Source.\n"
+            )
+
+        result, data = _run_state("report-paragraphs", "--session-dir", session_dir, "--report", report_path)
+        assert result.returncode == 0
+        exec_paragraphs = [p for p in data["results"]["paragraphs"] if p["section"] == "Executive Summary"]
+        manifest = {
+            "schema_version": "report-grounding-v1",
+            "report_path": report_path,
+            "targets": [
+                {
+                    "target_id": "rp-001",
+                    "section": exec_paragraphs[0]["section"],
+                    "paragraph": exec_paragraphs[0]["paragraph"],
+                    "text_hash": exec_paragraphs[0]["text_hash"],
+                    "text_snippet": exec_paragraphs[0]["text_snippet"],
+                    "citation_refs": ["[1]"],
+                    "source_ids": ["src-001"],
+                    "finding_ids": ["finding-1"],
+                    "evidence_ids": ["ev-0001"],
+                    "warnings": [],
+                    "support_level": "strong",
+                    "grounding_status": "declared_grounded",
+                },
+                {
+                    "target_id": "rp-002",
+                    "section": exec_paragraphs[1]["section"],
+                    "paragraph": exec_paragraphs[1]["paragraph"],
+                    "text_hash": exec_paragraphs[1]["text_hash"],
+                    "text_snippet": exec_paragraphs[1]["text_snippet"],
+                    "citation_refs": ["[2]"],
+                    "source_ids": ["src-002"],
+                    "finding_ids": ["finding-2"],
+                    "evidence_ids": [],
+                    "warnings": [],
+                    "support_level": "weak",
+                    "grounding_status": "declared_grounded",
+                },
+            ],
+        }
+        manifest_path = os.path.join(session_dir, "report-grounding.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        revision_dir = os.path.join(session_dir, "revision")
+        os.makedirs(revision_dir, exist_ok=True)
+        with open(os.path.join(revision_dir, "citation-audit.json"), "w") as f:
+            json.dump({
+                "schema_version": "citation-audit-v1",
+                "checks": [
+                    {
+                        "report_target_id": "rp-002",
+                        "section": "Executive Summary",
+                        "paragraph": 2,
+                        "citation_ref": "[2]",
+                        "source_ids": ["src-002"],
+                        "support_classification": "weak_support",
+                        "recommended_action": "weaken_wording",
+                        "rationale": "The citation is topically related but does not fully support the paragraph wording.",
+                    }
+                ],
+            }, f)
+        with open(os.path.join(revision_dir, "accuracy-issues.json"), "w") as f:
+            json.dump({
+                "issues": [
+                    {
+                        "issue_id": "review-1",
+                        "severity": "medium",
+                        "dimension": "unsupported_claim",
+                        "location": "Executive Summary, paragraph 2",
+                        "description": "Needs stronger source support.",
+                    }
+                ],
+            }, f)
+        return session_dir, manifest_path, manifest
+
+    def test_audit_report_support_aggregates_declared_grounding_and_agent_judgments(self, tmp_path):
+        """audit-report-support writes compact declared-grounding and support coverage output."""
+        session_dir, _, _ = self._setup_support_audit_fixture(tmp_path)
+
+        result, data = _run_state("audit-report-support", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        summary = data["results"]["summary"]
+        assert summary["paragraphs_with_declared_grounding"] == 2
+        assert summary["paragraphs_without_grounding"] == 1
+        assert summary["targets_with_declared_evidence_links"] == 1
+        assert summary["targets_with_only_declared_finding_level_links"] == 1
+        assert summary["findings_without_evidence_links"] == 1
+        assert summary["targets_depending_on_warned_sources"] == 1
+        assert summary["citations_checked_by_audit"] == 1
+        assert summary["citations_rejected_or_weakened_by_audit"] == 1
+        assert summary["unresolved_review_issues"] == 1
+        assert "declared provenance" in data["results"]["provenance_boundary"]["declared_grounding"]
+
+        audit_path = os.path.join(session_dir, "revision", "report-support-audit.json")
+        assert os.path.exists(audit_path)
+        with open(audit_path) as f:
+            audit = json.load(f)
+        warned = audit["source_warnings"]["targets_depending_on_warned_sources"]
+        assert warned[0]["target_id"] == "rp-002"
+        assert {reason["value"] for reason in warned[0]["warnings"]} == {"abstract_only", "secondary_source"}
+        assert audit["agent_verified_support"]["weak_support_density_by_section"][0]["weak_count"] == 1
+
+    def test_audit_report_support_surfaces_manifest_validation_failures(self, tmp_path):
+        """The support audit carries report-grounding validation failures into its output."""
+        session_dir, manifest_path, manifest = self._setup_support_audit_fixture(tmp_path)
+        manifest["targets"][0]["citation_refs"] = ["[9]"]
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        result, _ = _run_state("audit-report-support", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        with open(os.path.join(session_dir, "revision", "report-support-audit.json")) as f:
+            audit = json.load(f)
+        codes = [issue["code"] for issue in audit["validation"]["targets"][0]["issues"]]
+        assert audit["validation"]["valid"] is False
+        assert "citation_ref_missing" in codes
+
+    def test_citation_audit_contexts_from_report_grounding(self, tmp_path):
+        """citation-audit-contexts enumerates local citation contexts from declared grounding."""
+        session_dir, _, _ = self._setup_support_audit_fixture(tmp_path)
+
+        result, data = _run_state("citation-audit-contexts", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        assert data["results"]["summary"]["citation_contexts"] == 2
+        context_path = os.path.join(session_dir, "revision", "citation-audit-contexts.json")
+        assert os.path.exists(context_path)
+        with open(context_path) as f:
+            contexts = json.load(f)
+
+        first = contexts["contexts"][0]
+        second = contexts["contexts"][1]
+        assert contexts["schema_version"] == "citation-audit-contexts-v1"
+        assert "supported" in contexts["allowed_support_classifications"]
+        assert "replace_source" in contexts["allowed_recommended_actions"]
+        assert first["report_target_id"] == "rp-001"
+        assert first["citation_ref"] == "[1]"
+        assert first["cited_source_ids"] == ["src-001"]
+        assert first["text_hash"].startswith("sha256:")
+        assert second["report_target_id"] == "rp-002"
+        assert second["finding_ids"] == ["finding-2"]
+        assert second["support_classification"] is None
+        assert "not citation support judgments" in contexts["notes"][0]
+
+    def test_audit_report_support_reports_malformed_citation_audit_checks(self, tmp_path):
+        """Support audit surfaces malformed citation-audit check records."""
+        session_dir, _, _ = self._setup_support_audit_fixture(tmp_path)
+        citation_path = os.path.join(session_dir, "revision", "citation-audit.json")
+        with open(citation_path, "w") as f:
+            json.dump({
+                "schema_version": "citation-audit-v1",
+                "checks": [
+                    {
+                        "report_target_id": "rp-001",
+                        "citation_ref": "[1]",
+                        "cited_source_ids": ["src-001"],
+                        "support_classification": "not_a_valid_class",
+                        "recommended_action": "keep",
+                    }
+                ],
+            }, f)
+
+        result, _ = _run_state("audit-report-support", "--session-dir", session_dir)
+
+        assert result.returncode == 0
+        with open(os.path.join(session_dir, "revision", "report-support-audit.json")) as f:
+            audit = json.load(f)
+        issue_codes = {issue["code"] for issue in audit["artifact_issues"]["citation_audit"]}
+        assert "citation_audit_invalid_support_classification" in issue_codes
+        assert "citation_audit_missing_rationale" in issue_codes
+
+
+class TestRevisionGroundingIntegration:
+    def test_validate_edits_marks_grounded_target_for_refresh(self, tmp_path):
+        """Post-revision validation reports grounded targets that need manifest refresh."""
+        session_dir, report_path, grounding_path, _ = TestReportGrounding()._setup_grounded_report(tmp_path)
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Grounded revised paragraph with a citation [1].\n\n"
+                "## References\n\n"
+                "[1] Grounding Source.\n"
+            )
+
+        revision_dir = os.path.join(session_dir, "revision")
+        os.makedirs(revision_dir, exist_ok=True)
+        revision_manifest = os.path.join(revision_dir, "revision-manifest.json")
+        with open(revision_manifest, "w") as f:
+            json.dump({
+                "passes": [
+                    {
+                        "pass": "accuracy",
+                        "issues": [
+                            {
+                                "issue_id": "verify-1",
+                                "status": "resolved",
+                                "report_target_id": "rp-001",
+                                "location": "Executive Summary, paragraph 1",
+                                "old_text_snippet": "Grounded paragraph with a citation [1].",
+                                "new_text_snippet": "Grounded revised paragraph with a citation [1].",
+                            }
+                        ],
+                    }
+                ]
+            }, f)
+
+        result, data = _run_state(
+            "validate-edits",
+            "--manifest", revision_manifest,
+            "--report", report_path,
+            "--grounding-manifest", grounding_path,
+            "--pass", "accuracy",
+        )
+
+        assert result.returncode == 0
+        assert data["results"]["confirmed"] == ["verify-1"]
+        refresh = data["results"]["grounding_refresh"]
+        assert refresh["summary"]["targets_needing_refresh"] == 1
+        target = refresh["targets_needing_refresh"][0]
+        assert target["target_id"] == "rp-001"
+        assert target["status"] == "needs_refresh"
+        assert target["issue_ids"] == ["verify-1"]
+        assert target["current_text_hash"] != target["text_hash"]
+        assert "manifest_entry_report_target_id" in target["reasons"]
+
+    def test_validate_edits_checks_partial_and_limitation_statuses(self, tmp_path):
+        """Validation covers edited non-resolved statuses that still change report text."""
+        session_dir, report_path, grounding_path, _ = TestReportGrounding()._setup_grounded_report(tmp_path)
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Grounded revised paragraph with a citation [1].\n\n"
+                "## References\n\n"
+                "[1] Grounding Source.\n"
+            )
+
+        revision_dir = os.path.join(session_dir, "revision")
+        os.makedirs(revision_dir, exist_ok=True)
+        revision_manifest = os.path.join(revision_dir, "revision-manifest.json")
+        with open(revision_manifest, "w") as f:
+            json.dump({
+                "passes": [
+                    {
+                        "pass": "accuracy",
+                        "issues": [
+                            {
+                                "issue_id": "verify-1",
+                                "status": "partially_resolved",
+                                "report_target_id": "rp-001",
+                                "old_text_snippet": "Grounded paragraph with a citation [1].",
+                                "new_text_snippet": "Grounded revised paragraph with a citation [1].",
+                            },
+                            {
+                                "issue_id": "review-1",
+                                "status": "accepted_as_limitation",
+                                "report_target_id": "rp-001",
+                                "old_text_snippet": "Grounded paragraph with a citation [1].",
+                                "new_text_snippet": "Grounded revised paragraph with a citation [1].",
+                            },
+                        ],
+                    }
+                ]
+            }, f)
+
+        result, data = _run_state(
+            "validate-edits",
+            "--manifest", revision_manifest,
+            "--report", report_path,
+            "--grounding-manifest", grounding_path,
+            "--pass", "accuracy",
+        )
+
+        assert result.returncode == 0
+        assert data["results"]["confirmed"] == ["verify-1", "review-1"]
+        refresh_target = data["results"]["grounding_refresh"]["targets_needing_refresh"][0]
+        assert refresh_target["target_id"] == "rp-001"
+        assert refresh_target["issue_ids"] == ["verify-1", "review-1"]
+
+
+class TestReviewIssueTraceability:
+    def _setup_review_issue_fixture(self, tmp_path):
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+        report_path = os.path.join(session_dir, "report.md")
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Original target paragraph with a citation [1].\n\n"
+                "Stable hash fallback paragraph [1].\n\n"
+                "Original snippet survives in this paragraph [1].\n\n"
+                "## References\n\n"
+                "[1] Source.\n"
+            )
+
+        result, data = _run_state("report-paragraphs", "--session-dir", session_dir, "--report", report_path)
+        assert result.returncode == 0
+        paragraphs = [p for p in data["results"]["paragraphs"] if p["section"] == "Executive Summary"]
+        manifest = {
+            "schema_version": "report-grounding-v1",
+            "report_path": report_path,
+            "targets": [
+                {
+                    "target_id": "rp-001",
+                    "section": paragraphs[0]["section"],
+                    "paragraph": paragraphs[0]["paragraph"],
+                    "text_hash": paragraphs[0]["text_hash"],
+                    "text_snippet": paragraphs[0]["text_snippet"],
+                    "citation_refs": ["[1]"],
+                    "source_ids": [],
+                    "finding_ids": [],
+                    "evidence_ids": [],
+                    "warnings": [],
+                    "not_grounded_reason": "test fixture",
+                }
+            ],
+        }
+        grounding_path = os.path.join(session_dir, "report-grounding.json")
+        with open(grounding_path, "w") as f:
+            json.dump(manifest, f)
+
+        with open(report_path, "w") as f:
+            f.write(
+                "# Test Report\n\n"
+                "## Executive Summary\n\n"
+                "Revised target paragraph with a citation [1].\n\n"
+                "Stable hash fallback paragraph [1].\n\n"
+                "Updated paragraph where snippet survives after revision [1].\n\n"
+                "## References\n\n"
+                "[1] Source.\n"
+            )
+
+        revision_dir = os.path.join(session_dir, "revision")
+        os.makedirs(revision_dir, exist_ok=True)
+        issues_path = os.path.join(revision_dir, "accuracy-issues.json")
+        with open(issues_path, "w") as f:
+            json.dump({
+                "schema_version": "review-issues-v1",
+                "issues": [
+                    {
+                        "issue_id": "review-1",
+                        "dimension": "unsupported_claim",
+                        "severity": "medium",
+                        "target_type": "report_target",
+                        "target_id": "rp-001",
+                        "locator": "Executive Summary, paragraph 1",
+                        "text_hash": paragraphs[0]["text_hash"],
+                        "text_snippet": paragraphs[0]["text_snippet"],
+                        "related_source_ids": ["src-001"],
+                        "related_evidence_ids": ["ev-0001"],
+                        "related_citation_refs": ["[1]"],
+                        "status": "open",
+                        "rationale": "Target needs a stronger source.",
+                        "resolution": None,
+                    },
+                    {
+                        "issue_id": "review-2",
+                        "dimension": "missing_context",
+                        "severity": "low",
+                        "target_type": "report_target",
+                        "target_id": "",
+                        "locator": "Executive Summary, paragraph 2",
+                        "text_hash": paragraphs[1]["text_hash"],
+                        "text_snippet": paragraphs[1]["text_snippet"],
+                        "status": "open",
+                        "rationale": "Hash fallback issue.",
+                    },
+                    {
+                        "issue_id": "review-3",
+                        "dimension": "citation_integrity",
+                        "severity": "medium",
+                        "target_type": "report_target",
+                        "target_id": "",
+                        "locator": "Executive Summary, paragraph 3",
+                        "text_hash": paragraphs[2]["text_hash"],
+                        "text_snippet": "snippet survives",
+                        "status": "open",
+                        "rationale": "Snippet fallback issue.",
+                    },
+                    {
+                        "issue_id": "review-4",
+                        "dimension": "internal_contradiction",
+                        "severity": "high",
+                        "target_type": "report_target",
+                        "target_id": "rp-001",
+                        "locator": "Executive Summary, paragraph 1",
+                        "text_hash": paragraphs[0]["text_hash"],
+                        "text_snippet": paragraphs[0]["text_snippet"],
+                        "conflicting_target_ids": ["rp-001", "rp-009"],
+                        "contradiction_type": "direct_conflict",
+                        "final_report_handling": "Resolve in report text or disclose uncertainty.",
+                        "status": "open",
+                        "rationale": "Two report targets cannot both be true.",
+                    },
+                ],
+            }, f)
+        return session_dir, report_path, grounding_path
+
+    def test_review_issues_reconnect_by_target_id_hash_and_snippet(self, tmp_path):
+        """review-issues keeps report-target issue identity after report text changes."""
+        session_dir, report_path, grounding_path = self._setup_review_issue_fixture(tmp_path)
+
+        result, data = _run_state(
+            "review-issues",
+            "--session-dir", session_dir,
+            "--status", "all",
+            "--report", report_path,
+            "--grounding-manifest", grounding_path,
+        )
+
+        assert result.returncode == 0
+        issues = {issue["issue_id"]: issue for issue in data["results"]["issues"]}
+        assert data["results"]["schema_version"] == "review-issues-v1"
+        assert issues["review-1"]["target_match"]["status"] == "stale_hash"
+        assert issues["review-1"]["target_match"]["current_text_hash"] != issues["review-1"]["text_hash"]
+        assert issues["review-2"]["target_match"]["status"] == "matched_by_text_hash"
+        assert issues["review-3"]["target_match"]["status"] == "matched_by_snippet"
+        contradiction = issues["review-4"]["contradiction_candidate"]
+        assert contradiction["conflicting_target_ids"] == ["rp-001", "rp-009"]
+        assert contradiction["contradiction_type"] == "direct_conflict"
+        assert data["results"]["summary"]["contradiction_candidates"] == 1
+        assert data["results"]["summary"]["matched_report_target_issues"] == 4
+
+    def test_review_issues_applies_revision_manifest_status_overrides(self, tmp_path):
+        """Revision manifest status transitions determine which issues remain open."""
+        session_dir, report_path, grounding_path = self._setup_review_issue_fixture(tmp_path)
+        manifest_path = os.path.join(session_dir, "revision", "revision-manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump({
+                "passes": [
+                    {
+                        "pass": "accuracy",
+                        "issues": [
+                            {
+                                "issue_id": "review-1",
+                                "status": "resolved",
+                                "action": "Qualified the target paragraph.",
+                                "report_target_id": "rp-001",
+                            }
+                        ],
+                    }
+                ]
+            }, f)
+
+        result, data = _run_state(
+            "review-issues",
+            "--session-dir", session_dir,
+            "--status", "open",
+            "--report", report_path,
+            "--grounding-manifest", grounding_path,
+        )
+
+        assert result.returncode == 0
+        assert "review-1" not in {issue["issue_id"] for issue in data["results"]["issues"]}
+        assert data["results"]["summary"]["status_counts"]["resolved"] == 1
+
+        _, all_data = _run_state(
+            "review-issues",
+            "--session-dir", session_dir,
+            "--status", "all",
+            "--report", report_path,
+            "--grounding-manifest", grounding_path,
+        )
+        review_1 = next(issue for issue in all_data["results"]["issues"] if issue["issue_id"] == "review-1")
+        assert review_1["status"] == "resolved"
+        assert review_1["status_source"] == "revision-manifest"
+        assert review_1["resolution"] == "Qualified the target paragraph."
+
+
+class TestSupportArtifactIngestion:
+    def test_ingest_support_artifacts_tracks_quality_dimensions_and_handoff(self, tmp_path):
+        """Support artifacts become queryable state without needing a graph subsystem."""
+        session_dir, manifest_path, manifest = TestReportSupportAudit()._setup_support_audit_fixture(tmp_path)
+        manifest["targets"][1]["claim_type"] = "quantitative"
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f)
+
+        revision_dir = os.path.join(session_dir, "revision")
+        with open(os.path.join(revision_dir, "accuracy-issues.json"), "w") as f:
+            json.dump({
+                "schema_version": "review-issues-v1",
+                "issues": [
+                    {
+                        "issue_id": "review-1",
+                        "dimension": "citation_support",
+                        "severity": "medium",
+                        "target_type": "report_target",
+                        "target_id": "rp-002",
+                        "locator": "Executive Summary, paragraph 2",
+                        "text_hash": manifest["targets"][1]["text_hash"],
+                        "text_snippet": manifest["targets"][1]["text_snippet"],
+                        "related_source_ids": ["src-002"],
+                        "related_citation_refs": ["[2]"],
+                        "status": "open",
+                        "rationale": "Citation is weak for the quantitative wording.",
+                    },
+                    {
+                        "issue_id": "review-2",
+                        "dimension": "missing_context",
+                        "severity": "low",
+                        "target_type": "report_target",
+                        "target_id": "rp-001",
+                        "locator": "Executive Summary, paragraph 1",
+                        "text_hash": manifest["targets"][0]["text_hash"],
+                        "text_snippet": manifest["targets"][0]["text_snippet"],
+                        "status": "open",
+                        "rationale": "Needs a limitation statement.",
+                    },
+                ],
+            }, f)
+        with open(os.path.join(revision_dir, "revision-manifest.json"), "w") as f:
+            json.dump({
+                "passes": [
+                    {
+                        "pass": "accuracy",
+                        "issues": [
+                            {
+                                "issue_id": "review-2",
+                                "status": "accepted_as_limitation",
+                                "resolution": "The limitation is explicitly disclosed in the report.",
+                                "report_target_id": "rp-001",
+                            }
+                        ],
+                    }
+                ],
+            }, f)
+
+        result, data = _run_state(
+            "ingest-support-artifacts",
+            "--session-dir", session_dir,
+            "--grounding-manifest", manifest_path,
+        )
+
+        assert result.returncode == 0
+        summary = data["results"]["summary"]
+        assert summary["report_targets"] == 3
+        assert summary["citation_audits"] == 1
+        assert summary["review_issues"] == 2
+        assert summary["open_issues"] == 1
+        metrics = data["results"]["reflection_metrics"]
+        assert metrics["report_targets_total"] == 3
+        assert metrics["report_targets_with_declared_finding_links"] == 2
+        assert metrics["report_targets_with_declared_evidence_links"] == 1
+        assert metrics["report_targets_without_grounding"] == 1
+        assert metrics["quantitative_or_fragile_targets_without_structured_evidence"] == 1
+        assert metrics["report_targets_depending_on_flagged_sources"] == 1
+        assert metrics["citations_audited"] == 1
+        assert metrics["citations_weakened_or_rejected"] == 1
+        assert metrics["reviewer_issues_with_target_ids"] == 2
+        assert metrics["reviewer_issues_resolved_before_delivery"] == 1
+        assert metrics["unresolved_issues_before_delivery"] == 1
+
+        _, handoff = _run_state("support-handoff", "--session-dir", session_dir, "--limit", "10")
+        handoff_results = handoff["results"]
+        assert handoff_results["schema_version"] == "support-handoff-v1"
+        assert handoff_results["report_targets"]["summary"]["total"] == 3
+        assert {target["target_id"] for target in handoff_results["report_targets"]["targets"]} >= {"rp-001", "rp-002"}
+        assert handoff_results["open_support_issues"]["summary"]["total"] == 1
+        assert handoff_results["open_support_issues"]["issues"][0]["issue_id"] == "review-1"
+        assert handoff_results["citation_support_issues"]["summary"]["total"] == 1
+
+        _, metrics_data = _run_state("reflection-metrics", "--session-dir", session_dir)
+        assert metrics_data["results"]["metrics"]["unresolved_issues_before_delivery"] == 1
+        assert metrics_data["results"]["metrics"]["citations_classified_weak_overstated_or_topically_related_only"] == 1
+        assert metrics_data["results"]["metrics"]["unresolved_contradictions_or_limitations_disclosed"] == 1
+
+        _, delivery = _run_state("delivery-audit", "--session-dir", session_dir, "--limit", "10")
+        audit = delivery["results"]
+        assert audit["schema_version"] == "delivery-audit-v1"
+        assert audit["provenance_boundary"]["agent_judgment"].startswith("This is not a readiness score")
+        assert audit["success_metrics"]["sources_with_extraction_access_quality_warnings"] == 1
+        assert audit["success_metrics"]["sources_with_caution_flags"] == 1
+        assert audit["success_metrics"]["findings_with_evidence_links"] == 1
+        assert audit["success_metrics"]["findings_without_evidence_links"] == 1
+        assert audit["open_issues"]["summary"]["total"] == 1
+        assert audit["unresolved_contradictions_or_limitations"]["summary"]["disclosed_or_accepted"] == 1
+        assert {item["status"] for item in audit["validation_checklist"]} == {"agent_judgment_required"}
+
+    def test_missing_optional_artifacts_clear_previous_ingested_state(self, tmp_path):
+        """Refreshing without optional artifacts should not leave stale queryable rows behind."""
+        session_dir, manifest_path, _ = TestReportSupportAudit()._setup_support_audit_fixture(tmp_path)
+        result, data = _run_state(
+            "ingest-support-artifacts",
+            "--session-dir", session_dir,
+            "--grounding-manifest", manifest_path,
+        )
+        assert result.returncode == 0
+        assert data["results"]["reflection_metrics"]["report_targets_total"] > 0
+        assert data["results"]["reflection_metrics"]["citations_audited"] > 0
+
+        os.remove(manifest_path)
+        os.remove(os.path.join(session_dir, "revision", "citation-audit.json"))
+
+        result, data = _run_state(
+            "ingest-support-artifacts",
+            "--session-dir", session_dir,
+            "--grounding-manifest", manifest_path,
+        )
+
+        assert result.returncode == 0
+        assert data["results"]["report_grounding"]["cleared"] is True
+        assert data["results"]["citation_audit"]["cleared"] is True
+        metrics = data["results"]["reflection_metrics"]
+        assert metrics["report_targets_total"] == 0
+        assert metrics["citations_audited"] == 0
+
+        _, handoff = _run_state("support-handoff", "--session-dir", session_dir)
+        assert handoff["results"]["report_targets"]["summary"]["total"] == 0
+        assert handoff["results"]["citation_support_issues"]["summary"]["total"] == 0
 
 
 # ---------------------------------------------------------------------------

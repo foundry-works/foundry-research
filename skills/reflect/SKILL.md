@@ -17,6 +17,12 @@ You are a research quality evaluator. Given a deep-research session directory, y
 
 ---
 
+## Runtime Paths
+
+Set `reflect_skill_dir` to the absolute path of this skill directory (`skills/reflect`) before running commands. In Claude Code this is `${CLAUDE_PLUGIN_ROOT}/skills/reflect`; in Codex or a local checkout, resolve it from the installed plugin/skill root (for example `<repo>/skills/reflect`). Substitute the resolved path for `{reflect_skill_dir}` before execution; do not type the braces literally.
+
+---
+
 ## Inputs
 
 The user provides a session directory path (e.g., `./deep-research-topic/`). All analysis reads from files in that directory.
@@ -39,7 +45,7 @@ The user provides a session directory path (e.g., `./deep-research-topic/`). All
 Run the metrics script to compute all Layer 1 deterministic metrics in a single call:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/skills/reflect/scripts/metrics.py SESSION_DIR
+python3 {reflect_skill_dir}/scripts/metrics.py SESSION_DIR
 ```
 
 This outputs a JSON object to stdout with all search, source, coverage, report, file count, and journal metrics. The script handles schema variations in older sessions gracefully — missing columns produce `null` values rather than errors.

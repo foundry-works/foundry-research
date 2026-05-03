@@ -16,6 +16,7 @@ A directive from the supervisor containing:
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — for context on the audience and topic
 - **Support context** (optional) — output from `state support-context`; use any evidence policy only to preserve calibrated hedging, source caution, freshness, and uncertainty language
+- **Report grounding / support audit** (optional) — use `report_target_id`, section, paragraph, text hash, and snippet when available so style issues remain traceable after edits
 - **`skip_locations`** (optional) — a JSON array of report locations (e.g., `["Section 3, paragraph 1", "Section 4, paragraph 2"]`) where accuracy issues are being corrected. **Do not flag style issues whose location matches any entry in this array** — those passages are being edited for accuracy and style fixes would conflict or be wasted. If a paragraph partially overlaps a skip location, err on the side of skipping. **Why:** The accuracy reviewers run first and their issues take priority. Style-editing a passage that's about to be rewritten for factual correctness wastes reviser effort and risks edit conflicts when both edits target the same text.
 - **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-flag style issues that match a prior resolved entry unless the fix introduced a new style problem. Focus your review on: (a) text that was changed by the prior revision — edits can introduce new style issues (e.g., a factual correction that creates a passive-voice sentence), (b) text that was not previously reviewed for style, (c) any new user feedback. **Why:** Re-flagging already-fixed style issues wastes tokens and creates duplicate entries the reviser has to process and skip.
 
@@ -23,8 +24,9 @@ A directive from the supervisor containing:
 
 1. Read the draft report
 2. Check support context when present so you do not suggest edits that remove policy-driven caution, freshness qualifiers, or uncertainty language
-3. Systematically check against the style dimensions below
-4. Return a structured issues list — do NOT rewrite the report
+3. When report grounding is present, preserve the `report_target_id`, locator, hash, and snippet for every issue
+4. Systematically check against the style dimensions below
+5. Return a structured issues list — do NOT rewrite the report
 
 ## Style dimensions
 
@@ -109,7 +111,7 @@ Write the full review to `revision/style-review.md` in the session directory usi
 **Suggested fix:** "These results only apply to adults over 65"
 ```
 
-Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `style-N` prefix — the orchestrator uses these IDs to track issues through assembly, revision, and validation:
+Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `style-N` prefix and should follow `review-issues-v1` fields where possible — the orchestrator uses these IDs to track issues through assembly, revision, and validation:
 
 ```json
 {
@@ -125,8 +127,14 @@ Then return a compact JSON manifest to the supervisor. Each issue MUST include a
       "severity": "medium",
       "dimension": "passive_voice",
       "mechanical": false,
-      "location": "Section 2, paragraph 3",
-      "description": "Passive voice obscures the actor in a key finding sentence",
+      "target_type": "report_target",
+      "target_id": "rp-006",
+      "locator": "Section 2, paragraph 3",
+      "text_hash": "sha256:...",
+      "text_snippet": "The correlation between sleep duration and cognitive performance was demonstrated...",
+      "status": "open",
+      "rationale": "Passive voice obscures the actor in a key finding sentence",
+      "resolution": null,
       "text": "The correlation between sleep duration and cognitive performance was demonstrated by three independent studies",
       "suggested_fix": "Three independent studies demonstrated a correlation between sleep duration and cognitive performance"
     }
@@ -145,9 +153,12 @@ The `mechanical` field (boolean):
 
 **Why this distinction matters downstream:** The reviser uses this flag to allocate verification effort proportionally — mechanical edits get a lighter re-read pass, freeing attention for judgment edits where meaning shifts are a real risk.
 
+Allowed `target_type` values: `source`, `evidence_unit`, `finding`, `report_target`, `citation`. Style findings should almost always use `report_target`. Allowed `status` values: `open`, `resolved`, `partially_resolved`, `accepted_as_limitation`, `rejected_with_rationale`; new style findings should use `open`.
+
 ## Guidelines
 
 - Be precise about locations. Quote the specific text or identify the exact section and paragraph.
+- Preserve report locators and target IDs from the input. If no target ID is available, include enough `locator`, `text_hash`, and `text_snippet` metadata for the issue to reconnect after edits.
 - Don't flag correct technical writing as "jargon" just because it's specific — flag it only if a reader can't understand the sentence without prior domain knowledge.
 - Don't manufacture issues. If a section reads clearly, don't stretch to find something. Zero issues on a dimension is a valid result.
 - Prioritize high-severity issues. Dense jargon paragraphs matter more than occasional filler words.

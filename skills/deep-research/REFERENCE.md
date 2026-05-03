@@ -126,6 +126,170 @@ Optional advisory fields: `grounding_status`, `not_grounded_reason`, `support_no
 
 Use `state report-paragraphs --report <path>` to get paragraph locators and hashes. Hashes are `sha256:` over paragraph text after collapsing whitespace and trimming ends. Use `state validate-report-grounding` to surface missing manifests, stale hashes, citation-ref mismatches, missing source/finding/evidence IDs, and ungrounded body paragraphs.
 
+### Report Support Audit
+
+`state audit-report-support` writes `revision/report-support-audit.json`. The audit is deterministic: it aggregates declared grounding and existing state, but does not infer semantic support from report prose.
+
+The audit includes:
+
+- Report paragraphs with and without declared grounding entries
+- Findings with and without linked evidence units
+- Report targets with declared evidence links or only finding-level links
+- Targets depending on degraded, abstract-only, stale, secondary, or self-interested sources
+- Optional citation-audit results when `revision/citation-audit.json` exists
+- Optional unresolved review issues from `revision/*-issues.json`
+- Section-level weak-support density from writer or reviewer classifications
+
+The output keeps writer-declared grounding separate from agent-authored support judgments.
+
+### Citation Audit Manifest
+
+Use `state citation-audit-contexts` to write `revision/citation-audit-contexts.json` from `report-grounding.json`. This file enumerates local citation contexts for agent review; it is not itself a support judgment.
+
+After checking citations, agents write `revision/citation-audit.json`:
+
+```json
+{
+  "schema_version": "citation-audit-v1",
+  "status": "audited",
+  "checks": [
+    {
+      "check_id": "cite-001",
+      "target_type": "citation",
+      "target_id": "rp-001:[4]",
+      "report_target_id": "rp-001",
+      "local_target": "paragraph",
+      "section": "Executive Summary",
+      "paragraph": 2,
+      "text_hash": "sha256:...",
+      "text_snippet": "Local paragraph snippet...",
+      "citation_ref": "[4]",
+      "cited_source_ids": ["src-004"],
+      "support_classification": "weak_support",
+      "rationale": "Why the cited source does or does not support the local target.",
+      "recommended_action": "weaken_wording"
+    }
+  ]
+}
+```
+
+Allowed `support_classification` values: `supported`, `weak_support`, `topically_related_only`, `overstated`, `missing_specific_fact`, `needs_additional_source`, and `unresolved`.
+
+Allowed `recommended_action` values: `keep`, `weaken_wording`, `split_claim`, `add_source`, `replace_source`, and `mark_unresolved`.
+
+### Review Issue Manifest
+
+Reviewer, verifier, citation, and style issues are stored under `revision/*-issues.json` using `schema_version: "review-issues-v1"` before revision. The revision manifest records later status transitions and resolutions.
+
+Compact issue fields:
+
+- `issue_id`
+- `dimension`
+- `severity`
+- `target_type`
+- `target_id`
+- `locator`
+- `text_hash`
+- `text_snippet`
+- `related_source_ids`
+- `related_evidence_ids`
+- `related_citation_refs`
+- `status`
+- `rationale`
+- `resolution`
+
+Allowed `target_type` values: `source`, `evidence_unit`, `finding`, `report_target`, and `citation`.
+
+Allowed `status` values: `open`, `resolved`, `partially_resolved`, `accepted_as_limitation`, and `rejected_with_rationale`. `partially_resolved` remains open for delivery purposes.
+
+Contradiction candidates are review issues with extra fields: `conflicting_target_ids`, `contradiction_type`, and `final_report_handling`. Allowed contradiction types: `direct_conflict`, `scope_difference`, `temporal_difference`, `method_difference`, `apparent_uncertainty`, and `source_quality_conflict`.
+
+Use `state review-issues` to list normalized issues and apply `revision/revision-manifest.json` status overrides:
+
+```bash
+state review-issues \
+  --session-dir deep-research-topic \
+  --report deep-research-topic/report.md \
+  --grounding-manifest deep-research-topic/report-grounding.json \
+  --status open
+```
+
+For `report_target` issues, the command reconnects issues to the current report by target ID first, then text hash, then snippet. This lets open issue lists survive localized report edits without creating a full artifact graph.
+
+### Support Artifact Ingestion
+
+The file artifacts remain the source of truth for report grounding, citation audits, and review issues. After those artifacts have proven useful in file form, you can optionally mirror them into small queryable state tables to produce compact handoffs and reflection metrics:
+
+```bash
+state ingest-support-artifacts \
+  --session-dir deep-research-topic \
+  --grounding-manifest deep-research-topic/report-grounding.json \
+  --report deep-research-topic/report.md
+```
+
+The batch command mirrors available artifacts into:
+
+- `report_targets`
+- `report_target_evidence`
+- `report_target_findings`
+- `citation_audits`
+- `review_issues`
+
+Focused commands are available for debugging or partial refreshes: `ingest-report-grounding`, `ingest-citation-audit`, and `ingest-review-issues`. These commands should not be treated as a required delivery gate; rerun them only when the file artifacts change or when a queryable handoff is useful.
+
+Use `state support-handoff` for a compact, agent-readable summary of grounded report targets, weak citation checks, open review issues, and reflection metrics. Use `state reflection-metrics` for just the metric dictionary.
+
+Key reflection metrics:
+
+- `report_targets_total`
+- `report_targets_with_declared_finding_links`
+- `report_targets_with_declared_evidence_links`
+- `report_targets_without_grounding`
+- `quantitative_or_fragile_targets_without_structured_evidence`
+- `report_targets_depending_on_flagged_sources`
+- `citations_audited`
+- `citations_weakened_or_rejected`
+- `reviewer_issues_with_target_ids`
+- `reviewer_issues_resolved_before_delivery`
+- `unresolved_issues_before_delivery`
+
+These metrics are audit surfaces. They make repeated review and revision cheaper, but they do not replace agent judgment about whether a report is good enough to deliver.
+
+### Delivery Audit
+
+Use `state delivery-audit` before final delivery to collect the success metrics and validation checklist in one non-gating artifact:
+
+```bash
+state delivery-audit \
+  --session-dir deep-research-topic \
+  --ingest \
+  --grounding-manifest deep-research-topic/report-grounding.json \
+  --report deep-research-topic/report.md
+```
+
+The command reports:
+
+- `success_metrics` using the names from `plan-checklist.md`
+- `validation_checklist` entries marked `agent_judgment_required`
+- open review issues
+- unresolved contradictions or limitations that were accepted/disclosed or still need review
+
+`delivery-audit` deliberately does not emit a pass/fail score. Use it to decide whether to revise, disclose limitations, or deliver.
+
+### Revision Grounding Refresh
+
+`state validate-edits` validates reviser snippets and reports grounded targets that need refresh:
+
+```bash
+state validate-edits \
+  --manifest deep-research-topic/revision/revision-manifest.json \
+  --report deep-research-topic/report.md \
+  --grounding-manifest deep-research-topic/report-grounding.json \
+  --pass accuracy
+```
+
+When revision manifest entries preserve `report_target_id` or target snippets, the response includes `grounding_refresh.targets_needing_refresh`. Treat those targets as stale declared provenance until `report-grounding.json` is regenerated for the edited passages.
+
 ---
 
 ## Adaptive Guardrails
@@ -203,4 +367,4 @@ When using web search (Exa/tavily) for recovery, the most effective pattern is `
 - Only sources with on-disk `.md` content AND reader notes in `notes/` go in **References (Sources Read)**
 - Sources known only from abstracts or search metadata go in **Further Reading**
 - The Methodology section must honestly report deep reads vs. abstract-only counts (use `${CLAUDE_SKILL_DIR}/state audit` output)
-- Never claim to have "deeply read" a source that has `degraded` (unread) or abstract-only content. Sources upgraded to `reader_validated` by `mark-read` can be claimed as deep reads.
+- Never claim to have "deeply read" a source that has `degraded` (unread) or abstract-only content. Current sessions use `mark-read` to set `is_read`; claim deep reads only when the source has readable on-disk content and a reader note. Legacy `quality: "reader_validated"` values are compatibility input, not a quality value to write in new sessions.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Research Revision"
+  short_description: "Review and revise research reports"
+  default_prompt: "Use $deep-research-revision to review and revise this completed research report."

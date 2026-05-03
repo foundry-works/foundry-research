@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""LLM-powered abstract relevance scoring for source triage.
+"""Optional LLM-powered abstract relevance scoring for source triage.
 
-Uses Claude (Haiku) via the `claude` CLI to score how relevant each source's
-abstract is to the research brief. Writes relevance_score (0-1) and
-relevance_rationale back to state.db, so cmd_triage can use LLM scores
-instead of keyword matching.
+Uses Claude (Haiku) via the `claude` CLI when available to score how relevant
+each source's abstract is to the research brief. Writes relevance_score (0-1)
+and relevance_rationale back to state.db, so cmd_triage can use LLM scores
+instead of keyword matching. If the CLI is unavailable, the command exits
+successfully and leaves sources unscored for deterministic keyword/citation
+triage.
 
 Why this exists: Keyword matching on titles lets high-citation off-topic papers
 (e.g., "SPIRIT 2013" at 6932 cites) outrank directly relevant papers with
@@ -112,7 +114,7 @@ Output ONLY a JSON array of objects. No explanation, no markdown fences, just th
 
 
 def _call_claude(prompt: str) -> list[dict] | None:
-    """Call claude CLI in headless mode with Haiku model. Returns parsed JSON or None on failure."""
+    """Call Claude CLI in headless mode with Haiku model. Returns parsed JSON or None on failure."""
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--model", "haiku", "--output-format", "json"],
@@ -156,7 +158,7 @@ def _call_claude(prompt: str) -> list[dict] | None:
         log(f"Failed to parse claude response: {e}", level="warn")
         return None
     except FileNotFoundError:
-        log("claude CLI not found — install Claude Code or add to PATH", level="warn")
+        log("claude CLI not found — skipping optional LLM relevance scoring", level="warn")
         return None
 
 
@@ -194,7 +196,7 @@ def _write_scores(conn: sqlite3.Connection, scores: list[dict]) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LLM-powered abstract relevance scoring")
+    parser = argparse.ArgumentParser(description="Optional LLM-powered abstract relevance scoring")
     parser.add_argument("--top", type=int, default=60, help="Max sources to score (default 60)")
     parser.add_argument("--batch-size", type=int, default=15, help="Abstracts per LLM call (default 15)")
     parser.add_argument("--session-dir", default=None, help="Session directory (auto-discovered if omitted)")
@@ -203,11 +205,6 @@ def main():
 
     if args.quiet:
         set_quiet(True)
-
-    # Check claude CLI is available before doing any DB work
-    if not shutil.which("claude"):
-        error_response(["claude CLI not found — cannot run LLM relevance scoring. "
-                        "Triage will fall back to keyword matching."])
 
     session_dir = get_session_dir(args)
     conn = _connect(session_dir)
@@ -227,6 +224,21 @@ def main():
             "scored": 0,
             "skipped": 0,
             "message": "No unscored sources with abstracts found"
+        })
+        return
+
+    if not shutil.which("claude"):
+        message = "claude CLI not found — skipped optional LLM relevance scoring; deterministic triage will use keyword/citation signals"
+        if os.environ.get("FOUNDRY_RESEARCH_REQUIRE_LLM_TRIAGE") == "1":
+            error_response([message])
+        conn.close()
+        success_response({
+            "scored": 0,
+            "failed": 0,
+            "skipped": len(sources),
+            "batches": 0,
+            "total_candidates": len(sources),
+            "message": message,
         })
         return
 

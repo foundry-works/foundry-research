@@ -17,6 +17,12 @@ You are a pipeline improvement planner. Given reflections from multiple deep-res
 
 ---
 
+## Runtime Paths
+
+Set `plugin_root` to the parent directory that contains `skills/`, `agents/`, and `PRINCIPLES.md`. In a full plugin install this is the foundry-research plugin root; in a local checkout it is the repo root. Read pipeline files from that root.
+
+---
+
 ## Inputs
 
 Three input categories. Read only what's listed — nothing else.

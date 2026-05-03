@@ -9,7 +9,7 @@ This checklist follows the recommended order in `plan.md` and keeps the core bou
 - [x] Re-read `PRINCIPLES.md` before implementation and confirm each slice preserves capabilities rather than a rigid factory.
 - [x] Keep the agent in control of semantic judgments, final conclusions, readiness decisions, and limitation tradeoffs.
 - [x] Keep deterministic tools limited to structural facts: missing links, missing files, stale hashes, citation locations, unresolved issues, counts, and known flags.
-- [ ] Treat writer-produced report grounding as declared provenance until a reviewer, verifier, or reviser audits it.
+- [x] Treat writer-produced report grounding as declared provenance until a reviewer, verifier, or reviser audits it.
 - [x] Keep every new artifact optional in v1; prompts and commands must degrade cleanly when it is absent.
 - [x] Avoid fixed domain modes, permanent domain taxonomies, or core domain-specific evidence hierarchies.
 - [x] Avoid a full artifact graph, heavyweight edge taxonomy, automatic contradiction resolution, or hidden pass/fail scoring.
@@ -130,220 +130,220 @@ Success criteria:
 
 Goal: produce a deterministic declared-grounding and support audit from existing state plus `report-grounding.json`.
 
-- [ ] Add a command or script equivalent to `audit-report-support`.
-- [ ] Validate `report-grounding.json` before aggregation.
-- [ ] Read and aggregate:
-  - [ ] Findings
-  - [ ] Evidence units
-  - [ ] Source extraction/access quality
-  - [ ] Source caution flags
-  - [ ] Reviewer issues
-  - [ ] Citation audit results
-  - [ ] Report grounding targets
-- [ ] Write compact JSON or markdown audit output under `revision/`.
-- [ ] Report paragraphs with declared grounding entries.
-- [ ] Report paragraphs without grounding entries.
-- [ ] Findings with evidence links.
-- [ ] Findings without evidence links.
-- [ ] Report targets with declared evidence links.
-- [ ] Report targets with only declared finding-level links.
-- [ ] Report targets depending on degraded, abstract-only, stale, secondary, or self-interested sources.
-- [ ] Citations checked by citation audit.
-- [ ] Citations rejected or weakened by citation audit.
-- [ ] Unresolved review issues.
-- [ ] Sections with high weak-support density based on agent-authored classifications.
-- [ ] Clearly distinguish declared grounding paths from agent-verified support judgments.
-- [ ] Do not infer semantic support directly from report prose.
-- [ ] Add state and fixture tests for audit output and manifest validation failures.
+- [x] Add a command or script equivalent to `audit-report-support`.
+- [x] Validate `report-grounding.json` before aggregation.
+- [x] Read and aggregate:
+  - [x] Findings
+  - [x] Evidence units
+  - [x] Source extraction/access quality
+  - [x] Source caution flags
+  - [x] Reviewer issues
+  - [x] Citation audit results
+  - [x] Report grounding targets
+- [x] Write compact JSON or markdown audit output under `revision/`.
+- [x] Report paragraphs with declared grounding entries.
+- [x] Report paragraphs without grounding entries.
+- [x] Findings with evidence links.
+- [x] Findings without evidence links.
+- [x] Report targets with declared evidence links.
+- [x] Report targets with only declared finding-level links.
+- [x] Report targets depending on degraded, abstract-only, stale, secondary, or self-interested sources.
+- [x] Citations checked by citation audit.
+- [x] Citations rejected or weakened by citation audit.
+- [x] Unresolved review issues.
+- [x] Sections with high weak-support density based on agent-authored classifications.
+- [x] Clearly distinguish declared grounding paths from agent-verified support judgments.
+- [x] Do not infer semantic support directly from report prose.
+- [x] Add state and fixture tests for audit output and manifest validation failures.
 
 Success criteria:
 
-- [ ] Ungrounded report paragraphs are surfaced automatically.
-- [ ] Stale grounding entries, missing referenced objects, and citation-ref mismatches are surfaced automatically.
-- [ ] Paragraphs depending on flagged sources are visible.
-- [ ] Sections with weak support are measurable when weak support has been classified by an agent.
+- [x] Ungrounded report paragraphs are surfaced automatically.
+- [x] Stale grounding entries, missing referenced objects, and citation-ref mismatches are surfaced automatically.
+- [x] Paragraphs depending on flagged sources are visible.
+- [x] Sections with weak support are measurable when weak support has been classified by an agent.
 
 ## Slice 5: Citation Audit Manifest
 
 Goal: produce structured citation audit results without changing the whole pipeline.
 
-- [ ] Define the citation audit output format under `revision/`, such as `citation-audit.json`.
-- [ ] Use `report-grounding.json` when present to enumerate local citation contexts.
-- [ ] Preserve target fields for each checked citation:
-  - [ ] Local claim or paragraph target
-  - [ ] `report_target` ID
-  - [ ] Section and paragraph locator
-  - [ ] Text snippet and hash
-  - [ ] Citation reference
-  - [ ] Cited source IDs
-- [ ] Add support classifications:
-  - [ ] `supported`
-  - [ ] `weak_support`
-  - [ ] `topically_related_only`
-  - [ ] `overstated`
-  - [ ] `missing_specific_fact`
-  - [ ] `needs_additional_source`
-  - [ ] `unresolved`
-- [ ] Add recommended actions:
-  - [ ] `keep`
-  - [ ] `weaken_wording`
-  - [ ] `split_claim`
-  - [ ] `add_source`
-  - [ ] `replace_source`
-  - [ ] `mark_unresolved`
-- [ ] Update `agents/claim-verifier.md` or add a citation-audit prompt path to emit citation-level outcomes when citations are checked.
-- [ ] Feed citation audit outcomes into report support audit and revision.
-- [ ] Keep citation support classification agent-authored; deterministic helpers only enumerate contexts and aggregate results.
-- [ ] Add tests or fixtures for citation audit ingestion and support-audit aggregation.
+- [x] Define the citation audit output format under `revision/`, such as `citation-audit.json`.
+- [x] Use `report-grounding.json` when present to enumerate local citation contexts.
+- [x] Preserve target fields for each checked citation:
+  - [x] Local claim or paragraph target
+  - [x] `report_target` ID
+  - [x] Section and paragraph locator
+  - [x] Text snippet and hash
+  - [x] Citation reference
+  - [x] Cited source IDs
+- [x] Add support classifications:
+  - [x] `supported`
+  - [x] `weak_support`
+  - [x] `topically_related_only`
+  - [x] `overstated`
+  - [x] `missing_specific_fact`
+  - [x] `needs_additional_source`
+  - [x] `unresolved`
+- [x] Add recommended actions:
+  - [x] `keep`
+  - [x] `weaken_wording`
+  - [x] `split_claim`
+  - [x] `add_source`
+  - [x] `replace_source`
+  - [x] `mark_unresolved`
+- [x] Update `agents/claim-verifier.md` or add a citation-audit prompt path to emit citation-level outcomes when citations are checked.
+- [x] Feed citation audit outcomes into report support audit and revision.
+- [x] Keep citation support classification agent-authored; deterministic helpers only enumerate contexts and aggregate results.
+- [x] Add tests or fixtures for citation audit ingestion and support-audit aggregation.
 
 Success criteria:
 
-- [ ] Checked citations have target IDs, cited source IDs, support classification, rationale, and recommended action.
-- [ ] Weak or topically related citations are visible before revision.
-- [ ] The reviser can target citation problems directly.
+- [x] Checked citations have target IDs, cited source IDs, support classification, rationale, and recommended action.
+- [x] Weak or topically related citations are visible before revision.
+- [x] The reviser can target citation problems directly.
 
 ## Slice 6: Revision Integration
 
 Goal: make revision start from declared grounding, verified weak spots, and open issues instead of rediscovering them from prose.
 
-- [ ] Update `skills/deep-research-revision/SKILL.md` to prefer `report-grounding.json` when it exists.
-- [ ] Update `agents/claim-extractor.md` to read existing grounded targets first.
-- [ ] Keep report parsing as a fallback when grounding is absent or incomplete.
-- [ ] Update `agents/claim-verifier.md` to accept grounded target objects with linked `finding_id`, `evidence_id`, `source_id`, citation, locator, snippet, and hash fields.
-- [ ] Preserve report target IDs and citation audit outcomes through verification.
-- [ ] Prioritize weak, unsupported, quantitative, current, high-stakes, and citation-sensitive targets.
-- [ ] Update `agents/report-reviser.md` to carry target IDs, snippets, hashes, and status changes into the revision manifest.
-- [ ] After revision, either regenerate grounding for edited passages or explicitly mark stale grounding records as needing refresh.
-- [ ] Ensure revision records which declared targets, verified support problems, citation problems, or open issues were fixed.
-- [ ] Add regression coverage for grounded-target verification and stale-grounding handling after edits.
+- [x] Update `skills/deep-research-revision/SKILL.md` to prefer `report-grounding.json` when it exists.
+- [x] Update `agents/claim-extractor.md` to read existing grounded targets first.
+- [x] Keep report parsing as a fallback when grounding is absent or incomplete.
+- [x] Update `agents/claim-verifier.md` to accept grounded target objects with linked `finding_id`, `evidence_id`, `source_id`, citation, locator, snippet, and hash fields.
+- [x] Preserve report target IDs and citation audit outcomes through verification.
+- [x] Prioritize weak, unsupported, quantitative, current, high-stakes, and citation-sensitive targets.
+- [x] Update `agents/report-reviser.md` to carry target IDs, snippets, hashes, and status changes into the revision manifest.
+- [x] After revision, either regenerate grounding for edited passages or explicitly mark stale grounding records as needing refresh.
+- [x] Ensure revision records which declared targets, verified support problems, citation problems, or open issues were fixed.
+- [x] Add regression coverage for grounded-target verification and stale-grounding handling after edits.
 
 Success criteria:
 
-- [ ] Verifier time shifts toward weak, unsupported, quantitative, current, or citation-sensitive targets.
-- [ ] Fewer unverifiable outcomes come from report-to-source ambiguity.
-- [ ] Revision records which declared targets, verified support problems, or citations were fixed.
+- [x] Verifier time shifts toward weak, unsupported, quantitative, current, or citation-sensitive targets.
+- [x] Fewer unverifiable outcomes come from report-to-source ambiguity.
+- [x] Revision records which declared targets, verified support problems, or citations were fixed.
 
 ## Slice 7: Reviewer-Issue Traceability And Contradiction Candidates
 
 Goal: make review, contradiction handling, and revision outcomes auditable.
 
-- [ ] Define a compact reviewer issue schema with:
-  - [ ] `issue_id`
-  - [ ] `dimension`
-  - [ ] `severity`
-  - [ ] `target_type`
-  - [ ] `target_id`
-  - [ ] `locator`
-  - [ ] `text_hash`
-  - [ ] `text_snippet`
-  - [ ] `related_source_ids`
-  - [ ] `related_evidence_ids`
-  - [ ] `related_citation_refs`
-  - [ ] `status`
-  - [ ] `rationale`
-  - [ ] `resolution`
-- [ ] Support initial target types:
-  - [ ] `source`
-  - [ ] `evidence_unit`
-  - [ ] `finding`
-  - [ ] `report_target`
-  - [ ] `citation`
-- [ ] Support initial issue statuses:
-  - [ ] `open`
-  - [ ] `resolved`
-  - [ ] `partially_resolved`
-  - [ ] `accepted_as_limitation`
-  - [ ] `rejected_with_rationale`
-- [ ] Update `agents/synthesis-reviewer.md` to use target IDs where available.
-- [ ] Update `agents/style-reviewer.md` to preserve report locators and target IDs where available.
-- [ ] Update `agents/claim-verifier.md` and citation audit output to emit traceable issue targets.
-- [ ] Update `agents/report-reviser.md` to record issue status transitions and resolutions.
-- [ ] Add issue status tracking in revision artifacts first.
-- [ ] List open issues before final delivery.
-- [ ] Track contradiction candidates as review issues first, not as a graph subsystem.
-- [ ] Define contradiction candidate fields:
-  - [ ] Conflicting target IDs
-  - [ ] Plain-language description
-  - [ ] Contradiction type
-  - [ ] Status
-  - [ ] Final-report handling
-- [ ] Support suggested contradiction types:
-  - [ ] `direct_conflict`
-  - [ ] `scope_difference`
-  - [ ] `temporal_difference`
-  - [ ] `method_difference`
-  - [ ] `apparent_uncertainty`
-  - [ ] `source_quality_conflict`
-- [ ] Add fixtures proving review issues survive report edits through target ID, hash, and snippet matching.
+- [x] Define a compact reviewer issue schema with:
+  - [x] `issue_id`
+  - [x] `dimension`
+  - [x] `severity`
+  - [x] `target_type`
+  - [x] `target_id`
+  - [x] `locator`
+  - [x] `text_hash`
+  - [x] `text_snippet`
+  - [x] `related_source_ids`
+  - [x] `related_evidence_ids`
+  - [x] `related_citation_refs`
+  - [x] `status`
+  - [x] `rationale`
+  - [x] `resolution`
+- [x] Support initial target types:
+  - [x] `source`
+  - [x] `evidence_unit`
+  - [x] `finding`
+  - [x] `report_target`
+  - [x] `citation`
+- [x] Support initial issue statuses:
+  - [x] `open`
+  - [x] `resolved`
+  - [x] `partially_resolved`
+  - [x] `accepted_as_limitation`
+  - [x] `rejected_with_rationale`
+- [x] Update `agents/synthesis-reviewer.md` to use target IDs where available.
+- [x] Update `agents/style-reviewer.md` to preserve report locators and target IDs where available.
+- [x] Update `agents/claim-verifier.md` and citation audit output to emit traceable issue targets.
+- [x] Update `agents/report-reviser.md` to record issue status transitions and resolutions.
+- [x] Add issue status tracking in revision artifacts first.
+- [x] List open issues before final delivery.
+- [x] Track contradiction candidates as review issues first, not as a graph subsystem.
+- [x] Define contradiction candidate fields:
+  - [x] Conflicting target IDs
+  - [x] Plain-language description
+  - [x] Contradiction type
+  - [x] Status
+  - [x] Final-report handling
+- [x] Support suggested contradiction types:
+  - [x] `direct_conflict`
+  - [x] `scope_difference`
+  - [x] `temporal_difference`
+  - [x] `method_difference`
+  - [x] `apparent_uncertainty`
+  - [x] `source_quality_conflict`
+- [x] Add fixtures proving review issues survive report edits through target ID, hash, and snippet matching.
 
 Success criteria:
 
-- [ ] Each substantive reviewer issue points to the artifact it criticizes.
-- [ ] Revision records whether each issue was resolved, partially resolved, accepted as a limitation, or rejected with rationale.
-- [ ] Open issues can be listed before final delivery.
+- [x] Each substantive reviewer issue points to the artifact it criticizes.
+- [x] Revision records whether each issue was resolved, partially resolved, accepted as a limitation, or rejected with rationale.
+- [x] Open issues can be listed before final delivery.
 
 ## Slice 8: State Ingestion And Reflection Metrics
 
 Goal: promote useful file manifests into queryable state after they prove valuable.
 
-- [ ] Promote only manifests that have demonstrated repeated value in file form.
-- [ ] Add small state tables as needed:
-  - [ ] `report_targets`
-  - [ ] `report_target_evidence`
-  - [ ] `report_target_findings`
-  - [ ] `citation_audits`
-  - [ ] `review_issues`
-- [ ] Add ingestion commands for proven file artifacts, such as report grounding, citation audit results, and review issues.
-- [ ] Add compact handoff summaries for grounded report targets and open support issues.
-- [ ] Add reflection metrics:
-  - [ ] `report_targets_total`
-  - [ ] `report_targets_with_declared_finding_links`
-  - [ ] `report_targets_with_declared_evidence_links`
-  - [ ] `report_targets_without_grounding`
-  - [ ] `quantitative_or_fragile_targets_without_structured_evidence`
-  - [ ] `report_targets_depending_on_flagged_sources`
-  - [ ] `citations_audited`
-  - [ ] `citations_weakened_or_rejected`
-  - [ ] `reviewer_issues_with_target_ids`
-  - [ ] `reviewer_issues_resolved_before_delivery`
-  - [ ] `unresolved_issues_before_delivery`
-- [ ] Keep output understandable without reading internal code.
-- [ ] Add `tests/test_state.py` coverage for ingestion and query behavior.
-- [ ] Add `tests/test_metrics.py` coverage for new reflection metrics.
-- [ ] Add a small end-to-end fixture that ingests evidence, links findings, emits report grounding, audits support, and records revision outcomes.
+- [x] Promote only manifests that have demonstrated repeated value in file form.
+- [x] Add small state tables as needed:
+  - [x] `report_targets`
+  - [x] `report_target_evidence`
+  - [x] `report_target_findings`
+  - [x] `citation_audits`
+  - [x] `review_issues`
+- [x] Add ingestion commands for proven file artifacts, such as report grounding, citation audit results, and review issues.
+- [x] Add compact handoff summaries for grounded report targets and open support issues.
+- [x] Add reflection metrics:
+  - [x] `report_targets_total`
+  - [x] `report_targets_with_declared_finding_links`
+  - [x] `report_targets_with_declared_evidence_links`
+  - [x] `report_targets_without_grounding`
+  - [x] `quantitative_or_fragile_targets_without_structured_evidence`
+  - [x] `report_targets_depending_on_flagged_sources`
+  - [x] `citations_audited`
+  - [x] `citations_weakened_or_rejected`
+  - [x] `reviewer_issues_with_target_ids`
+  - [x] `reviewer_issues_resolved_before_delivery`
+  - [x] `unresolved_issues_before_delivery`
+- [x] Keep output understandable without reading internal code.
+- [x] Add `tests/test_state.py` coverage for ingestion and query behavior.
+- [x] Add `tests/test_metrics.py` coverage for new reflection metrics.
+- [x] Add a small end-to-end fixture that ingests evidence, links findings, emits report grounding, audits support, and records revision outcomes.
 
 Success criteria:
 
-- [ ] Declared grounding coverage and verified support problems become tracked quality dimensions.
-- [ ] The schema remains small enough for agents to understand and use.
+- [x] Declared grounding coverage and verified support problems become tracked quality dimensions.
+- [x] The schema remains small enough for agents to understand and use.
 
 ## Validation Checklist
 
-- [ ] Validate each completed slice against recent completed sessions.
-- [ ] Confirm the slice exposes a real failure that was previously hidden.
-- [ ] Confirm the slice reduces verifier or reviser ambiguity.
-- [ ] Confirm the slice saves tokens or prevents repeated work.
-- [ ] Confirm the slice preserves agent judgment.
-- [ ] Confirm the output is understandable without reading internal code.
-- [ ] Confirm the final report becomes more auditable without forcing a rigid workflow.
-- [ ] Remove or simplify any slice that does not improve downstream decisions.
+- [x] Validate each completed slice against recent completed sessions.
+- [x] Confirm the slice exposes a real failure that was previously hidden.
+- [x] Confirm the slice reduces verifier or reviser ambiguity.
+- [x] Confirm the slice saves tokens or prevents repeated work.
+- [x] Confirm the slice preserves agent judgment.
+- [x] Confirm the output is understandable without reading internal code.
+- [x] Confirm the final report becomes more auditable without forcing a rigid workflow.
+- [x] Remove or simplify any slice that does not improve downstream decisions.
 
 ## Success Metrics To Track Across Sessions
 
-- [ ] Number of sources with extraction/access quality warnings.
-- [ ] Number of sources with caution flags.
-- [ ] Findings with evidence links.
-- [ ] Findings without evidence links.
-- [ ] Report targets with declared finding links.
-- [ ] Report targets with declared evidence links.
-- [ ] Report targets without grounding.
-- [ ] Report targets depending on flagged sources.
-- [ ] Citations audited.
-- [ ] Citations classified as weak, overstated, or topically related only.
-- [ ] Reviewer issues with target IDs.
-- [ ] Reviewer issues resolved before delivery.
-- [ ] Unresolved contradictions or limitations disclosed in the report.
-- [ ] Confirm metrics improve visibility without becoming a rigid scoring system.
+- [x] Number of sources with extraction/access quality warnings.
+- [x] Number of sources with caution flags.
+- [x] Findings with evidence links.
+- [x] Findings without evidence links.
+- [x] Report targets with declared finding links.
+- [x] Report targets with declared evidence links.
+- [x] Report targets without grounding.
+- [x] Report targets depending on flagged sources.
+- [x] Citations audited.
+- [x] Citations classified as weak, overstated, or topically related only.
+- [x] Reviewer issues with target IDs.
+- [x] Reviewer issues resolved before delivery.
+- [x] Unresolved contradictions or limitations disclosed in the report.
+- [x] Confirm metrics improve visibility without becoming a rigid scoring system.
 
 ## Deferred Work
 

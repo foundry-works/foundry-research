@@ -196,6 +196,11 @@ def _extract_candidate_title(text: str) -> str:
     if len(first_lines) > 1 and len(first_lines[0]) < 30:
         # Short first line might be a journal name — combine first two
         candidate = first_lines[0] + " " + first_lines[1]
+    words = candidate.split()
+    if len(words) > 30 or len(candidate) > 220:
+        # A long, sentence-like opening is probably body text from a flat
+        # extraction, not a title. Treat title-to-title as unavailable.
+        return ""
     return candidate
 
 

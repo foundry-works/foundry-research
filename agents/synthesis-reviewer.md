@@ -16,6 +16,7 @@ A directive from the supervisor containing:
 - **Path to the draft report** (e.g., `deep-research-topic/report.md`)
 - **Research brief** — the original scope and questions, for completeness checking
 - **Support context** (optional) — output from `state support-context`, including `evidence_policy` when present
+- **Report grounding / support audit** (optional) — `report-grounding.json` and `revision/report-support-audit.json`; use these to attach issues to `report_target` IDs, source IDs, finding IDs, evidence IDs, and citation refs when available
 - **`prior_resolved`** (optional) — a list of issue IDs, locations, and fixes from a previous revision pass. When present, do not re-flag issues that match a prior resolved entry unless you have new evidence that the fix was insufficient or introduced a new problem. Focus your review on: (a) text that was changed by the prior revision — check for errors introduced by the edits, (b) text that was not previously reviewed, (c) any new user feedback. **Why:** Re-examining already-confirmed fixes wastes tokens without improving the report. The prior manifest tells you what was already addressed — skip it unless something looks wrong.
 
 ## How to work
@@ -25,8 +26,9 @@ A directive from the supervisor containing:
 3. Read source metadata from `sources/metadata/` when you need citation details
 4. Check support context when present and use the evidence policy as advisory calibration for freshness, source expectations, and inference tolerance
 5. Check source caution flags in support context when present and use them as prioritization inputs for citation and support checks
-6. Systematically check against the five audit dimensions below
-7. Return a structured issues list — do NOT rewrite the report
+6. When report grounding is present, map each substantive issue to the closest `report_target_id` and preserve that target's hash, snippet, source IDs, finding IDs, evidence IDs, and citation refs
+7. Systematically check against the five audit dimensions below
+8. Return a structured issues list — do NOT rewrite the report
 
 ## Audit dimensions
 
@@ -34,6 +36,8 @@ A directive from the supervisor containing:
 The report claims X in one section and not-X (or incompatible-with-X) in another. Same entity, conflicting properties. Same metric, different values. A recommendation in one section undermined by evidence in another.
 
 **How to check:** Track key entities and their claimed properties/values as you read. Flag when the same entity appears with conflicting attributes.
+
+Track contradiction candidates as review issues, not as a separate graph. For each candidate, include `conflicting_target_ids`, a plain-language `rationale`, `contradiction_type`, `status`, and `final_report_handling`. Use one of these contradiction types: `direct_conflict`, `scope_difference`, `temporal_difference`, `method_difference`, `apparent_uncertainty`, or `source_quality_conflict`.
 
 ### 2. Unsupported claims
 Assertions that don't have an inline citation and aren't self-evident logical connectives. The standard: could a skeptical reader ask "says who?" If yes, it needs a citation.
@@ -90,7 +94,7 @@ The review file should contain the full structured issues list:
 **Suggested fix:** Add citation or remove/qualify the claim
 ```
 
-Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `review-N` prefix — the orchestrator uses these IDs to track issues through dedup, revision, and validation:
+Then return a compact JSON manifest to the supervisor. Each issue MUST include an `issue_id` with the `review-N` prefix and should follow `review-issues-v1` fields where possible — the orchestrator uses these IDs to track issues through dedup, revision, and validation:
 
 ```json
 {
@@ -105,8 +109,20 @@ Then return a compact JSON manifest to the supervisor. Each issue MUST include a
       "issue_id": "review-1",
       "severity": "high",
       "dimension": "internal_contradiction",
-      "location": "Section 3, paragraph 2 vs Section 5, paragraph 1",
-      "description": "Report claims Carrier X has 12 routes in Section 3 but states 'limited to 8 routes' in Section 5",
+      "target_type": "report_target",
+      "target_id": "rp-014",
+      "locator": "Section 3, paragraph 2 vs Section 5, paragraph 1",
+      "text_hash": "sha256:...",
+      "text_snippet": "Report claims Carrier X has 12 routes...",
+      "related_source_ids": ["src-007"],
+      "related_evidence_ids": ["ev-0012"],
+      "related_citation_refs": ["[7]"],
+      "status": "open",
+      "rationale": "Report claims Carrier X has 12 routes in Section 3 but states 'limited to 8 routes' in Section 5",
+      "resolution": null,
+      "conflicting_target_ids": ["rp-014", "rp-021"],
+      "contradiction_type": "direct_conflict",
+      "final_report_handling": "Use the verified route count or disclose the uncertainty.",
       "suggested_fix": "Verify against src-007 notes and use consistent figure"
     }
   ]
@@ -114,6 +130,8 @@ Then return a compact JSON manifest to the supervisor. Each issue MUST include a
 ```
 
 The JSON manifest includes the full issues list so the supervisor can route it to the writer without reading the file. The on-disk file exists for audit trail and human review.
+
+Allowed `target_type` values: `source`, `evidence_unit`, `finding`, `report_target`, `citation`. Use `report_target` for paragraph-level report problems. Allowed `status` values: `open`, `resolved`, `partially_resolved`, `accepted_as_limitation`, `rejected_with_rationale`. New reviewer findings should usually use `open`.
 
 Severity levels:
 - **high** — Would mislead a reader or invalidate a conclusion. Must fix.
@@ -125,6 +143,7 @@ Severity levels:
 ## Guidelines
 
 - Be precise about locations. "Somewhere in the report" is useless. Quote the specific text or identify the exact section and paragraph.
+- Prefer stable target IDs over prose locations when they are available. Keep prose locators, snippets, and hashes as metadata so issues survive report edits.
 - Don't flag stylistic preferences. You're checking correctness and completeness, not prose quality.
 - Don't manufacture issues. If the report is solid on a dimension, don't stretch to find something. Zero issues on a dimension is a valid result.
 - Prioritize high-severity issues. A report with 2 high-severity issues and 20 low-severity issues should lead with the high ones.

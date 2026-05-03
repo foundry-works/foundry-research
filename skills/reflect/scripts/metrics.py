@@ -72,6 +72,64 @@ def _canonical_source_quality(quality: object) -> str:
     return aliases.get(quality, quality if quality in canonical else "unknown")
 
 
+def _normalized_label(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _json_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if isinstance(value, str):
+        if not value:
+            return []
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [value]
+        return _json_list(parsed)
+    return []
+
+
+_WEAK_SUPPORT_CLASSIFICATIONS = {
+    "weak",
+    "weak_support",
+    "unsupported",
+    "partially_supported",
+    "topically_related_only",
+    "overstated",
+    "missing_specific_fact",
+    "needs_additional_source",
+    "unresolved",
+    "unverifiable",
+}
+_CITATION_WEAKENED_ACTIONS = {
+    "weaken_wording",
+    "split_claim",
+    "add_source",
+    "replace_source",
+    "mark_unresolved",
+}
+_CLOSED_REVIEW_ISSUE_STATUSES = {
+    "resolved",
+    "accepted_as_limitation",
+    "rejected_with_rationale",
+}
+_QUANTITATIVE_OR_FRAGILE_CLAIM_TYPES = {
+    "quantitative",
+    "fragile",
+    "current",
+    "high_stakes",
+    "citation_sensitive",
+}
+_SOURCE_ACCESS_WARNING_QUALITIES = {
+    "inaccessible",
+    "abstract_only",
+    "degraded_extraction",
+    "metadata_incomplete",
+    "title_content_mismatch",
+}
+
+
 # ---------------------------------------------------------------------------
 # Search metrics
 # ---------------------------------------------------------------------------
@@ -166,6 +224,10 @@ def _source_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
     for row in cur.execute("SELECT quality, count(*) FROM sources GROUP BY quality").fetchall():
         canonical_quality = _canonical_source_quality(row[0])
         by_access_quality[canonical_quality] = by_access_quality.get(canonical_quality, 0) + row[1]
+    sources_with_quality_warnings = sum(
+        count for quality, count in by_access_quality.items()
+        if quality in _SOURCE_ACCESS_WARNING_QUALITIES
+    )
 
     source_caution_total = 0
     source_caution_by_flag: dict[str, int] = {}
@@ -216,6 +278,7 @@ def _source_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
         "sources_by_type": by_type,
         "sources_by_quality": by_quality,
         "sources_by_access_quality": by_access_quality,
+        "sources_with_extraction_access_quality_warnings": sources_with_quality_warnings,
         "sources_by_status": by_status,
         "sources_by_year": by_year,
         "source_caution_flags_total": source_caution_total,
@@ -473,6 +536,157 @@ def _evidence_metrics(conn: sqlite3.Connection, session_dir: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Ingested support artifact metrics
+# ---------------------------------------------------------------------------
+
+def _flagged_report_target_count(conn: sqlite3.Connection) -> int:
+    if not _table_exists(conn, "report_targets") or not _table_exists(conn, "source_flags"):
+        return 0
+
+    targets = [dict(row) for row in conn.execute(
+        "SELECT target_id, citation_refs, source_ids FROM report_targets"
+    ).fetchall()]
+    if not targets:
+        return 0
+
+    finding_links: dict[str, set[str]] = {}
+    if _table_exists(conn, "report_target_findings"):
+        for row in conn.execute("SELECT target_id, finding_id FROM report_target_findings").fetchall():
+            finding_links.setdefault(row["target_id"], set()).add(row["finding_id"])
+
+    flags_by_source: dict[str, list[dict]] = {}
+    for row in conn.execute("SELECT * FROM source_flags").fetchall():
+        flags_by_source.setdefault(row["source_id"], []).append(dict(row))
+
+    flagged: set[str] = set()
+    for target in targets:
+        target_id = target["target_id"]
+        citations = set(_json_list(target.get("citation_refs")))
+        findings = finding_links.get(target_id, set())
+        for source_id in _json_list(target.get("source_ids")):
+            for flag in flags_by_source.get(source_id, []):
+                scope = flag.get("applies_to_type")
+                applies_to_id = flag.get("applies_to_id") or ""
+                if scope in ("run", "brief"):
+                    flagged.add(target_id)
+                elif scope == "report_target" and applies_to_id == target_id:
+                    flagged.add(target_id)
+                elif scope == "finding" and applies_to_id in findings:
+                    flagged.add(target_id)
+                elif scope == "citation" and applies_to_id in citations:
+                    flagged.add(target_id)
+    return len(flagged)
+
+
+def _support_artifact_metrics(conn: sqlite3.Connection) -> dict:
+    metrics = {
+        "report_targets_total": 0,
+        "report_targets_with_declared_finding_links": 0,
+        "report_targets_with_declared_evidence_links": 0,
+        "report_targets_without_grounding": 0,
+        "quantitative_or_fragile_targets_without_structured_evidence": 0,
+        "report_targets_depending_on_flagged_sources": 0,
+        "citations_audited": 0,
+        "citations_weakened_or_rejected": 0,
+        "reviewer_issues_with_target_ids": 0,
+        "reviewer_issues_resolved_before_delivery": 0,
+        "unresolved_issues_before_delivery": 0,
+        "citations_classified_weak_overstated_or_topically_related_only": 0,
+        "unresolved_contradictions_or_limitations_disclosed": 0,
+        "unresolved_contradictions_or_limitations_needing_review": 0,
+    }
+
+    if _table_exists(conn, "report_targets"):
+        metrics["report_targets_total"] = conn.execute("SELECT COUNT(*) FROM report_targets").fetchone()[0]
+        if _table_exists(conn, "report_target_findings"):
+            metrics["report_targets_with_declared_finding_links"] = conn.execute(
+                "SELECT COUNT(DISTINCT target_id) FROM report_target_findings"
+            ).fetchone()[0]
+        if _table_exists(conn, "report_target_evidence"):
+            metrics["report_targets_with_declared_evidence_links"] = conn.execute(
+                "SELECT COUNT(DISTINCT target_id) FROM report_target_evidence"
+            ).fetchone()[0]
+        metrics["report_targets_without_grounding"] = conn.execute(
+            """SELECT COUNT(*) FROM report_targets rt
+               WHERE rt.is_ungrounded = 1 OR (
+                   COALESCE(rt.not_grounded_reason, '') = ''
+                   AND NOT EXISTS (
+                       SELECT 1 FROM report_target_evidence rte
+                       WHERE rte.session_id = rt.session_id AND rte.target_id = rt.target_id
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM report_target_findings rtf
+                       WHERE rtf.session_id = rt.session_id AND rtf.target_id = rt.target_id
+                   )
+               )"""
+        ).fetchone()[0]
+        fragile = 0
+        for row in conn.execute("SELECT target_id, claim_type FROM report_targets").fetchall():
+            if _normalized_label(row["claim_type"]) not in _QUANTITATIVE_OR_FRAGILE_CLAIM_TYPES:
+                continue
+            linked = conn.execute(
+                "SELECT 1 FROM report_target_evidence WHERE target_id = ? LIMIT 1",
+                (row["target_id"],),
+            ).fetchone()
+            if not linked:
+                fragile += 1
+        metrics["quantitative_or_fragile_targets_without_structured_evidence"] = fragile
+        metrics["report_targets_depending_on_flagged_sources"] = _flagged_report_target_count(conn)
+
+    if _table_exists(conn, "citation_audits"):
+        rows = conn.execute("SELECT support_classification, recommended_action FROM citation_audits").fetchall()
+        metrics["citations_audited"] = len(rows)
+        metrics["citations_weakened_or_rejected"] = sum(
+            1 for row in rows
+            if (_normalized_label(row["support_classification"]) in _WEAK_SUPPORT_CLASSIFICATIONS
+                or _normalized_label(row["recommended_action"]) in _CITATION_WEAKENED_ACTIONS)
+        )
+        metrics["citations_classified_weak_overstated_or_topically_related_only"] = sum(
+            1 for row in rows
+            if _normalized_label(row["support_classification"]) in {
+                "weak_support",
+                "overstated",
+                "topically_related_only",
+            }
+        )
+
+    if _table_exists(conn, "review_issues"):
+        metrics["reviewer_issues_with_target_ids"] = conn.execute(
+            "SELECT COUNT(*) FROM review_issues WHERE COALESCE(target_id, '') != ''"
+        ).fetchone()[0]
+        placeholders = ",".join("?" for _ in _CLOSED_REVIEW_ISSUE_STATUSES)
+        metrics["reviewer_issues_resolved_before_delivery"] = conn.execute(
+            f"SELECT COUNT(*) FROM review_issues WHERE status IN ({placeholders})",
+            tuple(_CLOSED_REVIEW_ISSUE_STATUSES),
+        ).fetchone()[0]
+        metrics["unresolved_issues_before_delivery"] = conn.execute(
+            f"SELECT COUNT(*) FROM review_issues WHERE status IS NULL OR status NOT IN ({placeholders})",
+            tuple(_CLOSED_REVIEW_ISSUE_STATUSES),
+        ).fetchone()[0]
+        review_rows = conn.execute(
+            """SELECT dimension, status, contradiction_type
+               FROM review_issues
+               WHERE COALESCE(contradiction_type, '') != ''
+                  OR dimension IN ('internal_contradiction', 'limitation', 'missing_context')
+                  OR status = 'accepted_as_limitation'"""
+        ).fetchall()
+        disclosed = 0
+        needs_review = 0
+        for row in review_rows:
+            status = _normalized_label(row["status"])
+            if status in {"resolved", "rejected_with_rationale"}:
+                continue
+            if status == "accepted_as_limitation":
+                disclosed += 1
+            else:
+                needs_review += 1
+        metrics["unresolved_contradictions_or_limitations_disclosed"] = disclosed
+        metrics["unresolved_contradictions_or_limitations_needing_review"] = needs_review
+
+    return metrics
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -508,6 +722,7 @@ def main():
             metrics.update(_source_metrics(conn, session_dir))
             metrics.update(_coverage_metrics(conn))
             metrics.update(_evidence_metrics(conn, session_dir))
+            metrics.update(_support_artifact_metrics(conn))
             conn.close()
         except Exception as e:
             errors.append(f"Database error: {e}")
