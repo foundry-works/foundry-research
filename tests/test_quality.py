@@ -205,6 +205,21 @@ class TestAssessQuality:
         result = assess_quality(text)
         assert result["quality"] == "ok"
 
+    def test_currency_code_inside_words_is_not_paywall(self):
+        """Words containing eur/usd/gbp substrings should not trip price detection."""
+        text = (
+            "Clinical registry text describes neurocognitive outcomes in older adults. "
+            "Participants completed structured assessments at baseline and follow-up. "
+            "The record summarizes eligibility criteria, interventions, endpoints, and "
+            "study procedures without offering article purchase or subscription access. "
+            "Results fields and protocol details are represented as ordinary public "
+            "registry content rather than a paywalled landing page. Investigators "
+            "reported planned measures, recruitment criteria, masking details, and "
+            "analysis populations in a structured record intended for public review."
+        )
+        result = assess_quality(text)
+        assert result["quality"] == "ok"
+
     def test_empty_content(self):
         """Empty string → empty."""
         result = assess_quality("")

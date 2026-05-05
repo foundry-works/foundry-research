@@ -209,7 +209,19 @@ This scores source abstracts against the research brief using Haiku, writing `re
 
 ## Triage
 
-After LLM relevance scoring, run `state triage` to rank sources by citation count × relevance to the brief. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
+After LLM relevance scoring, run `state triage` to rank sources by relevance, log-scaled citation count, and a bounded recency signal. For sessions with 50+ sources, use `--top 30` to focus downloads. For smaller sessions (<30 sources), download everything.
+
+**Direct-evidence boost for named targets.** When the brief centers on a named intervention, dataset, product, law, company, organism, compound, or other exact target, pass anchor terms from the brief:
+
+```bash
+<cli_dir>/state triage --top 30 --anchor-terms "target,synonym,exact phrase"
+```
+
+Why: direct evidence for a narrow target often has low or missing citation counts, while broad background sources can be highly cited. Anchor terms add a generic directness signal without creating domain-specific scoring profiles. If the boost is too strong or weak for the topic, set `--directness-weight N` explicitly.
+
+**Recency-aware citation signal.** Triage includes `year`, `publication_age_years`, `citation_velocity`, `recency_signal`, and `recency_boost`. This is a practical freshness signal, not a field-normalized impact metric: it keeps recent relevant papers from being buried only because citations have not had time to accrue. Use `--recency-weight 0` if you need historical influence only, or increase `--recency-weight` for fast-moving topics.
+
+**Manual top-10 sanity check.** After triage, inspect the top 10 titles before downloading. Ask whether they actually answer the brief, whether broad background sources are crowding out direct target evidence, whether anchor-term hits appear in the high/medium tiers when a named target matters, and whether any thin brief question needs targeted searches instead of more downloads. If the ranking looks wrong, rerun triage with better anchor terms or log the gap and search again. This is a judgment check, not a schema requirement.
 
 **Relevance floor for ambiguous queries.** When brief keywords are domain-specific, sources scoring below 0.3 relevance should be deprioritized below the download cutoff unless they have strong citation evidence (>100 citations in the field). This matters most for ambiguous query terms that match across disciplines — "uncanny valley" returns geology and theology papers at 0.1-0.3 relevance that pass the 0.0 floor but are clearly off-topic. The relevance floor complements venue/domain validation (which catches mismatches post-download) by reducing them pre-download. **Why 0.3, not higher:** Interdisciplinary papers legitimately bridging two fields may score 0.3-0.5 on keyword overlap. A floor above 0.3 risks filtering useful cross-domain work.
 
@@ -221,7 +233,7 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
 
 ## Downloads
 
-1. Run `state download-pending --auto-download --min-relevance 0.0` in a loop until the response shows `"remaining": 0`. Each call downloads a batch of 5 sources (default) and completes within the default Bash timeout — no timeout override needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
+1. Before auto-download, run `state download-pending --summary-only --top 10` to check pending volume and provider mix without flooding your context. Then run `state download-pending --auto-download --min-relevance 0.0` in a loop until the response shows `"remaining": 0`. Each call downloads a batch of 5 sources (default) and completes within the default Bash timeout — no timeout override needed. The `--min-relevance 0.0` flag skips sources that were scored and found completely irrelevant (score exactly 0.0) — sources with no score yet are still downloaded. **In gap mode**, add `--prioritize-gaps` so sources matching open gap terms download first instead of sitting at the back of the queue.
 2. If the response includes `sync_failures`, run `download --retry-sync --summary-only`
 3. Sources in `failed_sources` have exhausted all identifiers — don't retry them
 4. **Recovery:** If failed sources include high-citation or highly relevant papers, run `state recover-failed` to attempt alternative channels. Recovery tries three strategy tiers in order: **(1) web search providers** (Tavily → Perplexity → Linkup → Exa → Gensee — whichever have API keys configured), **(2) DOI landing pages**, **(3) CORE keyword search** (last resort — unreliable for title matching). **Recovery has a budget** — it defaults to 5 attempts per call and auto-skips any channel that has 0 successes after 5 attempts. Call multiple times if needed. **Cap at 2 providers per paper** — if a source fails to download after 2 different providers, mark it as unavailable and move on. **Why:** Recovery yield drops sharply after the 2nd provider — the 3rd and 4th attempts rarely find papers the first two missed, but they consume search budget better spent on discovery. If you have strong reason to believe a specific provider will succeed (e.g., you know the paper is on a particular repository), you can exceed the cap with stated reasoning.
@@ -241,6 +253,8 @@ After LLM relevance scoring, run `state triage` to rank sources by citation coun
    If you need to recover a specific source you know is relevant, download it directly by ID instead of relying on `recover-failed`.
 
 **Web source authority filter for academic topics.** For academic research topics, evaluate whether low-keyword-relevance web sources are worth downloading before they consume download slots. Reddit posts, dictionary entries, generic blog posts, and forum threads rarely contribute to a research report — even when their titles contain topic keywords, they lack the methodological rigor and verifiable evidence that synthesis requires. The keyword relevance score measures title-keyword overlap, not source authority — a Reddit post titled "uncanny valley discussion" scores the same as a peer-reviewed paper with those words. Use your judgment about source type and authority alongside the score: skip web sources with very low relevance scores (< 0.3) from non-authoritative source types (social media, dictionaries, forums) when the topic is well-covered by academic databases. Don't apply a blanket numeric threshold — some web sources (preprints, technical reports, author blogs with original data) are valuable even with low keyword overlap.
+
+**Safety/source-route awareness.** Official labels, registries, and safety pages are valuable for dosing and adverse-event claims, but they may describe a different route or formulation than the research question. Record this as a limitation in the manifest when relevant: oral supplement evidence, IV/inhaled drug labeling, topical/irrigation formulations, and registered clinical protocols answer different safety questions.
 
 **Metadata-content mismatches:** The download pipeline validates that converted content actually matches source metadata (title words present in first 1000 chars). Sources that fail this check are automatically flagged `quality: "mismatched"` in state.db and excluded from triage. This catches gross mismatches — e.g., a source declared as "IBQ-R short forms" that actually contains Italian conference proceedings, or a "multi-informant validity" paper that's really about gastroenterology. You don't need to do anything special here, but be aware: if download counts look lower than expected, some sources may have been flagged as mismatched. Check the download output for mismatch warnings.
 
@@ -366,17 +380,20 @@ Searches are auto-tracked — they automatically log to state.db and add sources
 ### State
 ```
 # Manifest — use this to build your return value (replaces manual multi-command assembly)
-<cli_dir>/state manifest --mode initial --top 30   # pre-assembled manifest (single command)
-<cli_dir>/state manifest --mode gap --top 30       # gap-mode manifest
+<cli_dir>/state manifest --mode initial --top 30 --write acquisition-manifest.initial.json   # pre-assembled manifest + durable handoff
+<cli_dir>/state manifest --mode gap --top 30 --write acquisition-manifest.gap.json           # gap-mode manifest + durable handoff
+# If triage used anchor terms or non-default recency weights, pass the same flags here.
 
 # Downloads — batch-size defaults to 5 (fits within default 120s Bash timeout)
 # Call in a loop until "remaining": 0 — no need for --max-batches or timeout overrides
 <cli_dir>/state download-pending --auto-download --min-relevance 0.0
 <cli_dir>/state download-pending --auto-download --prioritize-gaps --min-relevance 0.0  # gap mode
-<cli_dir>/state download-pending           # list sources without content (dry run)
+<cli_dir>/state download-pending --summary-only --top 10  # compact dry-run summary
 
 # Triage and sources — use during search rounds for coverage assessment
 <cli_dir>/state triage --top 30            # rank sources by relevance × citations
+<cli_dir>/state triage --top 30 --anchor-terms "target,synonym"
+                                           # boost direct target evidence when citation counts understate it
 <cli_dir>/state sources --providers        # provider distribution counts only
 <cli_dir>/state sources --title-contains "keyword"  # find specific sources
 
@@ -427,9 +444,9 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
     "sources": [
       {"id": "src-001", "title": "...", "citation_count": 340, "score": 5.21, "priority": "high", "has_content": true, "content_chars": 48230, "is_read": false, "quality_flag": null, "doi": "10.1234/...", "type": "academic", "provider": "semantic_scholar", "keyword_hits": 3}
     ],
-    "summary": {"total": 89, "high_priority": 15, "medium_priority": 15, "skip_quality": 4, "brief_keywords_used": 8},
+    "summary": {"total": 89, "high_priority": 15, "medium_priority": 15, "skip_quality": 4, "brief_keywords_used": 8, "anchor_terms": ["target"], "directness_weight": 6.0},
     "top_sources": [
-      {"id": "src-001", "title": "...", "citation_count": 340, "tier": "high", "score": 5.21}
+      {"id": "src-001", "title": "...", "citation_count": 340, "tier": "high", "score": 5.21, "evidence_role": "direct_anchor", "directness_score": 1.0, "directness_boost": 6.0}
     ]
   }
 }
@@ -468,6 +485,7 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
     "provider_distribution": {"semantic_scholar": 34, "openalex": 28},
     "downloads": {"success": 52, "failed": 12, "remaining": 0},
     "triage_tiers": {"high": 22, "medium": 18, "low": 31, "skip": 4},
+    "triage_scoring": {"anchor_terms": ["target", "synonym"], "directness_weight": 6.0},
     "top_papers": [{"id": "src-012", "title": "...", "citations": 340, "provider": "semantic_scholar"}],
     "coverage_assessment": {"Q1: What mechanisms drive X?": "strong (8 sources)", "Q2: How does Y vary?": "thin (1 source)"},
     "gaps_logged": ["gap-1: Q4 has insufficient coverage"],
@@ -499,20 +517,20 @@ With `--compact`, each source has only: `id`, `title`, `citation_count`, `doi`, 
 
 After completing all search rounds, triage, and downloads, return a **compact JSON manifest only**. Do not narrate what you did — the journal has the details, state.db has the data.
 
-**Reconcile disk and state.db counts before building the manifest.** Run `ls sources/*.md 2>/dev/null | wc -l` to get the on-disk count, then run `<cli_dir>/state download-pending` (dry run, no `--auto-download`) to get the true remaining count from state.db. If the disk count and state.db's `content_file` count differ by more than 5, state.db hasn't fully synced — report the higher of the two as `downloads.success` and add a `downloads.success_note` field explaining the discrepancy. Never report `remaining: 0` unless both disk and state.db agree.
+**Reconcile disk and state.db counts before building the manifest.** Run `ls sources/*.md 2>/dev/null | wc -l` to get the on-disk count, then run `<cli_dir>/state download-pending --summary-only --top 10` (dry run, no `--auto-download`) to get the true remaining count from state.db. If the disk count and state.db's `content_file` count differ by more than 5, state.db hasn't fully synced — report the higher of the two as `downloads.success` and add a `downloads.success_note` field explaining the discrepancy. Never report `remaining: 0` unless both disk and state.db agree.
 
 **Why reconcile:** The incident manifest reported `remaining: 0` and `success: 107` when state.db showed 65 with content — a 42-source discrepancy that the orchestrator treated as informational rather than a blocker. Comparing both sources of truth catches this.
 
 **How to build the manifest:**
 
-1. Run `<cli_dir>/state manifest --mode initial --top 30` (or `--mode gap` for gap mode). This is a single readonly query that returns all the numbers you need — do NOT run separate `state sources`, `state triage`, `state searches` commands to assemble the manifest yourself.
+1. Run `<cli_dir>/state manifest --mode initial --top 30 --write acquisition-manifest.initial.json` (or `--mode gap --write acquisition-manifest.gap.json` for gap mode). If triage used anchor terms, pass the same `--anchor-terms` and `--directness-weight` values here. This is a single readonly query that returns all the numbers you need and writes the same handoff to disk for interruption recovery — do NOT run separate `state sources`, `state triage`, `state searches` commands to assemble the manifest yourself.
 2. Parse the `results` object from the command output.
 3. Add `"mode": "initial"` (or `"gap"`) and your `content_validation` results from the post-download validation step.
 4. Return the merged JSON as your response. That's it — no manual assembly needed.
 
 ### Initial mode manifest
 
-The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `perplexity_available`, `linkup_available`, `gensee_available`, `exa_available`, and `content_validation`:
+The `state manifest --mode initial` command returns `searches_run`, `sources_found`, `sources_after_dedup`, `provider_distribution`, `downloads`, `triage_tiers`, `triage_scoring`, `top_papers`, `coverage_assessment`, `gaps_logged`, and `citation_chasing`. You add `mode`, `tavily_available`, `perplexity_available`, `linkup_available`, `gensee_available`, `exa_available`, and `content_validation`:
 
 ```json
 {

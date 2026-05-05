@@ -5,12 +5,14 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shutil
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Add parent directory so _shared imports work when run from any location
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +46,16 @@ _CAPTCHA_MARKERS = (b"<html", b"captcha", b"<!doctype")
 
 # PDF cascade source names
 _ALL_CASCADE_SOURCES = ["openalex", "unpaywall", "arxiv", "pmc", "osf", "annas_archive", "scihub"]
+
+_BRIEF_KEYWORD_STOPWORDS = {
+    "applicability", "benefits", "clinical", "considerations", "contraindications",
+    "dosing", "dose", "duration", "evidence", "health", "human", "humans",
+    "intervention", "interventions", "limitations", "longevity", "outcomes",
+    "participants", "patients", "pharmacokinetics", "population", "populations",
+    "practical", "question", "questions", "risks", "safety", "study", "studies",
+    "supplement", "supplements", "supplementation", "therapy", "tolerability",
+    "treatment", "trial", "trials", "uncertainty",
+}
 
 
 def _effective_cascade_sources(config: dict) -> list[str]:
@@ -132,7 +144,10 @@ def _get_brief_keywords(session_dir: str) -> list[str]:
         return []
 
     # Extract keywords, deduplicate, prefer longer (more domain-specific) terms
-    kws = _extract_keywords(combined)
+    kws = [
+        kw for kw in _extract_keywords(combined)
+        if kw not in _BRIEF_KEYWORD_STOPWORDS
+    ]
     seen: set[str] = set()
     unique: list[str] = []
     for kw in sorted(kws, key=len, reverse=True):
@@ -193,12 +208,26 @@ def _sync_to_state(session_dir: str, result: dict) -> bool:
 
     update = {}
     if result.get("content_file"):
+        content_stem = os.path.splitext(os.path.basename(result["content_file"]))[0]
+        if content_stem != source_id:
+            log(
+                f"content_file/source_id mismatch for {source_id}: {result['content_file']}",
+                level="warn",
+            )
+            return False
         content_path = os.path.join(session_dir, result["content_file"])
         if os.path.exists(content_path):
             update["content_file"] = result["content_file"]
         else:
             log(f"content_file claimed but missing: {result['content_file']}")
     if result.get("pdf_file"):
+        pdf_stem = os.path.splitext(os.path.basename(result["pdf_file"]))[0]
+        if pdf_stem != source_id:
+            log(
+                f"pdf_file/source_id mismatch for {source_id}: {result['pdf_file']}",
+                level="warn",
+            )
+            return False
         pdf_path = os.path.join(session_dir, result["pdf_file"])
         if os.path.exists(pdf_path):
             update["pdf_file"] = result["pdf_file"]
@@ -349,8 +378,8 @@ def _handle_retry_sync(session_dir: str) -> None:
     })
 
 
-def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: dict) -> None:
-    """Auto-create a new source entry in state.db for a web download not already tracked."""
+def _auto_create_web_source(session_dir: str, url: str, meta: dict) -> str | None:
+    """Auto-create or dedupe a web source row and return its canonical source ID."""
     source_data = {
         "title": meta.get("title") or url,
         "url": url,
@@ -363,12 +392,26 @@ def _auto_create_web_source(session_dir: str, source_id: str, url: str, meta: di
         source_data["year"] = meta["year"]
 
     resp = call_state(
-        session_dir, "add-sources",
-        json_data=[source_data],
+        session_dir, "add-source",
+        json_data=source_data,
         timeout=5,
     )
-    if resp is not None:
+    if resp is None:
+        return None
+
+    result = resp.get("results") or {}
+    if result.get("duplicate"):
+        source_id = result.get("matched")
+        if source_id:
+            log(f"Matched existing web source in state.db for {url} → {source_id}")
+            return source_id
+        return None
+
+    source_id = result.get("id")
+    if source_id:
         log(f"Auto-created web source in state.db for {url} → {source_id}")
+        return source_id
+    return None
 
 
 def _resolve_source_id(session_dir: str, source_id: str) -> dict:
@@ -531,10 +574,16 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
         source_id = _lookup_source_id_from_state(_session_dir, doi, url=url)
         if source_id:
             log(f"Matched existing source: {source_id}")
-    is_new_source = False
+
+    # For new web URLs in a state-backed session, create/dedupe the state row
+    # before downloading so the returned source ID, content filename, metadata
+    # JSON, and state.db row all use one canonical ID.
+    if not source_id and args.url and os.path.exists(os.path.join(_session_dir, "state.db")):
+        provisional_meta = _build_metadata(args, "pending")
+        source_id = _auto_create_web_source(_session_dir, args.url, provisional_meta)
+
     if not source_id:
         source_id = _generate_source_id(sources_dir)
-        is_new_source = True
     result: dict = {
         "source_id": source_id,
         "doi": None,
@@ -561,9 +610,6 @@ def _handle_single(args, client, _session_dir: str, sources_dir: str,
 
     if args.url:
         _download_web(args.url, source_id, client, sources_dir, meta, result)
-        # Auto-create source in state.db for web downloads without an existing source
-        if is_new_source and result.get("content_file") and os.path.exists(os.path.join(_session_dir, "state.db")):
-            _auto_create_web_source(_session_dir, source_id, args.url, meta)
     elif args.pdf_url:
         _download_direct_pdf(args.pdf_url, source_id, client, sources_dir, args.to_md, result)
         result["source_used"] = "direct"
@@ -615,6 +661,29 @@ _MAX_WEB_STREAM_SECONDS = 120  # wall-clock cap on web page streaming
 _PDF_CONTENT_ERROR = "URL served PDF content, not HTML"
 
 
+def _clinicaltrials_api_url(url: str) -> str | None:
+    """Return ClinicalTrials.gov v2 API URL for study pages or NCT URLs."""
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if not host.endswith("clinicaltrials.gov"):
+        return None
+
+    nct_match = re.search(r"\b(NCT\d{8})\b", url, flags=re.IGNORECASE)
+    if not nct_match:
+        return None
+    nct_id = nct_match.group(1).upper()
+    api_url = f"https://clinicaltrials.gov/api/v2/studies/{nct_id}"
+    return None if url == api_url else api_url
+
+
+def _is_clinicaltrials_api_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.netloc.lower().endswith("clinicaltrials.gov")
+        and re.search(r"^/api/v2/studies/NCT\d{8}$", parsed.path, flags=re.IGNORECASE) is not None
+    )
+
+
 def _stream_web_content(client, url: str, *,
                         max_size: int = _MAX_WEB_SIZE,
                         timeout: int = _MAX_WEB_STREAM_SECONDS) -> tuple[str | None, str | None]:
@@ -660,6 +729,14 @@ def _stream_web_content(client, url: str, *,
 
     raw = b"".join(chunks)
     html = raw.decode("utf-8", errors="replace")
+    content_type = resp.headers.get("Content-Type", "")
+    if "json" in content_type.lower():
+        try:
+            data = json.loads(html)
+            return json.dumps(data, indent=2, ensure_ascii=False), None
+        except json.JSONDecodeError:
+            return (html if html.strip() else None), None if html.strip() else "Empty JSON response"
+
     content = extract_readable_content(html)
     if not content:
         return None, "No readable content extracted"
@@ -704,6 +781,13 @@ def _is_publisher_landing_page(url: str) -> bool:
 def _download_web(url: str, source_id: str, client, sources_dir: str,
                   meta: dict, result: dict) -> None:
     """Download web page and extract readable content."""
+    original_url = url
+    api_url = _clinicaltrials_api_url(url)
+    if api_url:
+        log(f"Rewriting ClinicalTrials.gov study page to API: {api_url}")
+        url = api_url
+        meta["resolved_url"] = api_url
+
     log(f"Downloading web content: {url}")
 
     # Pre-download heuristic: skip known publisher landing pages for academic
@@ -742,10 +826,20 @@ def _download_web(url: str, source_id: str, client, sources_dir: str,
 
         # Quality check — catch paywall stubs, cookie banners, etc.
         qa = assess_quality(content)
+        if _is_clinicaltrials_api_url(url) and qa["quality"] != "ok" and len(content) > 500:
+            qa = {
+                "quality": "ok",
+                "quality_details": {
+                    "content_length": len(content),
+                    "reasons": ["structured ClinicalTrials.gov API JSON"],
+                },
+            }
 
         result["content_file"] = f"sources/{source_id}.md"
         result["content_length"] = len(content)
-        result["source_used"] = "web"
+        result["source_used"] = "clinicaltrials_api" if _is_clinicaltrials_api_url(url) else "web"
+        if url != original_url:
+            result["resolved_url"] = url
         result["quality"] = qa["quality"]
         if qa["quality"] != "ok":
             result["quality_details"] = qa["quality_details"]
@@ -1057,6 +1151,8 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
                 continue
             return
         log(f"{source_name} PDF download failed: {dl_result['errors']}", level="warn")
+        if source_name == "pmc" and _try_pmc_html_fallback(pdf_url, source_id, client, sources_dir, result):
+            return
 
     # All sources exhausted — try DOI landing page as abstract fallback
     if not result["pdf_downloaded"]:
@@ -1083,6 +1179,78 @@ def _download_by_doi(doi: str, source_id: str, client, sources_dir: str,
             log(f"DOI landing page fallback failed: {e}", level="warn")
 
         result["errors"].append(f"No PDF found via cascade for DOI {doi}")
+
+
+def _pmc_article_url_from_pdf_url(pdf_url: str) -> str | None:
+    """Convert a PMC /pdf/ URL to its readable article HTML URL."""
+    marker = "/pdf/"
+    if "/pmc/articles/" not in pdf_url and "pmc.ncbi.nlm.nih.gov/articles/" not in pdf_url:
+        return None
+    if marker not in pdf_url:
+        return None
+    return pdf_url.split(marker, 1)[0].rstrip("/") + "/"
+
+
+def _try_pmc_html_fallback(
+    pdf_url: str,
+    source_id: str,
+    client,
+    sources_dir: str,
+    result: dict,
+) -> bool:
+    """Save readable PMC article HTML when the PMC PDF endpoint is unusable."""
+    article_url = _pmc_article_url_from_pdf_url(pdf_url)
+    if not article_url:
+        return False
+
+    log(f"Trying PMC HTML fallback: {article_url}")
+    result["sources_tried"].append("pmc_html")
+
+    content, error = _stream_web_content(client, article_url, timeout=45)
+    if error or not content:
+        log(f"PMC HTML fallback failed: {error or 'no readable content'}", level="warn")
+        return False
+
+    md_path = os.path.join(sources_dir, f"{source_id}.md")
+    Path(md_path).write_text(content, encoding="utf-8")
+
+    qa = assess_quality(content)
+    result["content_file"] = f"sources/{source_id}.md"
+    result["content_length"] = len(content)
+    result["source_used"] = "pmc_html"
+    result["quality"] = qa["quality"]
+    if qa["quality"] != "ok":
+        result["quality_details"] = qa["quality_details"]
+
+    title = result.get("_expected_title", "")
+    authors = result.get("_expected_authors")
+    if result["quality"] == "ok" and (title or authors):
+        mismatch = check_content_mismatch(
+            content,
+            title=title,
+            authors=authors,
+            abstract=result.get("_expected_abstract", ""),
+            brief_keywords=result.get("_brief_keywords"),
+        )
+        if mismatch["mismatched"]:
+            log(f"PMC HTML mismatch detected for {source_id}: {mismatch['reason']}", level="warn")
+            with contextlib.suppress(OSError):
+                os.remove(md_path)
+            result["content_file"] = None
+            result["content_length"] = 0
+            result["source_used"] = None
+            result["quality"] = None
+            result.pop("quality_details", None)
+            return False
+
+    if result["quality"] == "ok":
+        alt_title = _check_title_divergence(content, {"title": title})
+        if alt_title:
+            result["title_from_content"] = alt_title
+            log(f"Title divergence for {source_id}: extracted '{alt_title}'", level="info")
+
+    log(f"Saved PMC HTML fallback: {md_path} ({len(content)} chars, quality={result['quality']})")
+    return True
 
 
 def _resolve_openalex(doi: str, client, config: dict) -> str | None:
@@ -1160,7 +1328,7 @@ def _resolve_pmc(doi: str, client) -> str | None:
             pmcid = record.get("pmcid")
             if pmcid:
                 log(f"PMC found PMCID: {pmcid}")
-                return f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/"
+                return f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/"
     except Exception:
         pass
     return None

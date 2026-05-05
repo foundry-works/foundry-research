@@ -18,8 +18,8 @@ _PAYWALL_MARKERS = [
     "access this article", "access through your institution",
     "purchase this article", "rent this article",
     "add to cart",
-    "USD", "EUR", "GBP",  # price tags
 ]
+_PRICE_MARKER_RE = re.compile(r"(?:\b(?:usd|eur|gbp)\s*\d)|(?:\d\s*(?:usd|eur|gbp)\b)|(?:[$€£]\s*\d)", re.IGNORECASE)
 
 # Sentence pattern: starts with uppercase, ends with sentence-ending punctuation
 _SENTENCE_RE = re.compile(r"[A-Z][^.!?]*[.!?]")
@@ -34,6 +34,8 @@ def _detect_paywall(text: str, max_lines: int = 50) -> str:
     for marker in _PAYWALL_MARKERS:
         if marker.lower() in head:
             return marker
+    if _PRICE_MARKER_RE.search(head):
+        return "price tag"
     return ""
 
 
@@ -144,6 +146,9 @@ def assess_quality(text: str) -> dict:
                 paywall_stub = True
                 paywall_hit = f"stub: {marker}"
                 break
+        if not paywall_stub and _PRICE_MARKER_RE.search(check_text):
+            paywall_stub = True
+            paywall_hit = "stub: price tag"
 
     details = {
         "content_length": content_length,

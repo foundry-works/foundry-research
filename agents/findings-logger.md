@@ -21,6 +21,7 @@ A directive from the supervisor containing:
    {state_cli_path} evidence --question-id Q1
    ```
    This returns evidence units with `claim_text`, `claim_type`, `evidence_strength`, `source_id`, and provenance fields. If evidence units exist, use them as your primary input for finding extraction.
+   Record the evidence IDs returned by this command. If the command returns one or more evidence units and you cannot log any finding, your final manifest must be `status: "incomplete"` with a concise `reason`; do not report `status: "ok"` with zero findings. The supervisor uses this distinction to decide whether to retry, inspect the evidence, or accept that the question is genuinely unsupported.
 
 2. Glob `{session_dir}/notes/src-*.md` to find all reader note files
 3. Read all notes in parallel — each note is a per-source summary written by reader agents. Use notes as supplementary context when evidence units are ambiguous or sparse for a source.
@@ -75,6 +76,11 @@ After logging all findings, return a compact JSON manifest:
 If no notes contain relevant evidence for your question, return:
 ```json
 {"status": "ok", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 0, "finding_ids": [], "evidence_ids": []}
+```
+
+If structured evidence exists for your question but you cannot produce a defensible finding, return:
+```json
+{"status": "incomplete", "question_id": "Q1", "question": "What mechanisms drive X?", "findings_logged": 0, "finding_ids": [], "evidence_ids": ["ev-001", "ev-004"], "reason": "Evidence units were present, but they were too tangential or contradictory to synthesize without supervisor review."}
 ```
 
 This keeps the supervisor's context clean. Do NOT return the full text of findings — just the manifest.

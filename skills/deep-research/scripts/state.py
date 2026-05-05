@@ -6,6 +6,7 @@ import ast
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -31,6 +32,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     query TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS id_counters (
+    session_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, namespace),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
 CREATE TABLE IF NOT EXISTS brief (
@@ -275,6 +284,14 @@ CREATE INDEX IF NOT EXISTS idx_review_issues_target ON review_issues(session_id,
 """
 
 _ADDITIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS id_counters (
+    session_id TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    value INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, namespace),
+    FOREIGN KEY (session_id) REFERENCES sessions(id)
+);
+
 CREATE TABLE IF NOT EXISTS source_flags (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -648,8 +665,7 @@ def _canonical_source_quality(quality: object) -> str:
 
 
 def _next_source_flag_id(conn: sqlite3.Connection, session_id: str) -> str:
-    row = conn.execute("SELECT COUNT(*) as c FROM source_flags WHERE session_id = ?", (session_id,)).fetchone()
-    return f"sflag-{row['c'] + 1:03d}"
+    return _next_id(conn, "source_flags", "sflag", session_id)
 
 
 def _source_quality_counts(conn: sqlite3.Connection, session_id: str) -> dict:
@@ -1234,9 +1250,84 @@ def _get_session_id(conn: sqlite3.Connection) -> str:
     return row["id"]
 
 
+def _format_public_id(prefix: str, value: int) -> str:
+    if prefix in {"src", "sflag"}:
+        return f"{prefix}-{value:03d}"
+    return f"{prefix}-{value}"
+
+
+def _parse_public_id_value(prefix: str, public_id: str) -> int | None:
+    m = re.match(rf"^{re.escape(prefix)}-(\d+)$", public_id or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _max_existing_id_value(conn: sqlite3.Connection, table: str, prefix: str, session_id: str) -> int:
+    rows = conn.execute(
+        f"SELECT id FROM {table} WHERE session_id = ? AND id LIKE ?",
+        (session_id, f"{prefix}-%"),
+    ).fetchall()
+    max_value = 0
+    for row in rows:
+        value = _parse_public_id_value(prefix, row["id"])
+        if value is not None:
+            max_value = max(max_value, value)
+    return max_value
+
+
 def _next_id(conn: sqlite3.Connection, table: str, prefix: str, session_id: str) -> str:
-    row = conn.execute(f"SELECT COUNT(*) as c FROM {table} WHERE session_id = ?", (session_id,)).fetchone()
-    return f"{prefix}-{row['c'] + 1:03d}" if prefix == "src" else f"{prefix}-{row['c'] + 1}"
+    """Return the next public ID without reserving it.
+
+    Use _reserve_next_id() in write paths. This helper remains useful for
+    read-only previews and tests.
+    """
+    return _format_public_id(
+        prefix,
+        _max_existing_id_value(conn, table, prefix, session_id) + 1,
+    )
+
+
+def _reserve_next_id(
+    conn: sqlite3.Connection,
+    table: str,
+    prefix: str,
+    session_id: str,
+    namespace: str | None = None,
+) -> str:
+    """Transactionally reserve the next public ID for a session namespace.
+
+    Several state commands are intentionally safe to run in parallel. Public IDs
+    must therefore be allocated under a SQLite write lock instead of derived from
+    row counts that concurrent processes can observe simultaneously.
+    """
+    counter_name = namespace or table
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+    max_existing = _max_existing_id_value(conn, table, prefix, session_id)
+    row = conn.execute(
+        "SELECT value FROM id_counters WHERE session_id = ? AND namespace = ?",
+        (session_id, counter_name),
+    ).fetchone()
+    current = row["value"] if row else 0
+    next_value = max(current, max_existing) + 1
+
+    if row:
+        conn.execute(
+            "UPDATE id_counters SET value = ? WHERE session_id = ? AND namespace = ?",
+            (next_value, session_id, counter_name),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO id_counters (session_id, namespace, value) VALUES (?, ?, ?)",
+            (session_id, counter_name, next_value),
+        )
+
+    return _format_public_id(prefix, next_value)
 
 
 # ---------------------------------------------------------------------------
@@ -1558,7 +1649,7 @@ def cmd_set_brief(args):
 def cmd_log_search(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
-    search_id = _next_id(conn, "searches", "search", sid)
+    search_id = _reserve_next_id(conn, "searches", "search", sid)
 
     ingested_count = getattr(args, "ingested_count", None)
     search_mode = getattr(args, "search_mode", "keyword") or "keyword"
@@ -1570,6 +1661,7 @@ def cmd_log_search(args):
         )
         conn.commit()
     except sqlite3.IntegrityError:
+        conn.rollback()
         conn.close()
         success_response({"duplicate": True, "provider": args.provider, "query": args.query})
         return
@@ -1613,7 +1705,12 @@ def cmd_add_sources(args):
         try:
             result = _insert_source(conn, sid, source, session_dir=args.session_dir)
             if result.get("duplicate"):
-                duplicates.append({"index": i, "title": source.get("title", ""), "matched": result["matched"]})
+                duplicates.append({
+                    "index": i,
+                    "title": source.get("title", ""),
+                    "matched": result["matched"],
+                    "merged_fields": result.get("merged_fields", []),
+                })
             else:
                 added.append({"index": i, "id": result["id"], "title": source.get("title", "")})
         except Exception as e:
@@ -1641,9 +1738,12 @@ def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict,
     is_dup, matched_id = _check_duplicate(conn, session_id, doi=doi, url=url,
                                            title=title, authors=authors, year=year)
     if is_dup:
-        return {"duplicate": True, "matched": matched_id}
+        merged_fields = _merge_duplicate_source(
+            conn, session_id, matched_id, data, doi, url, session_dir=session_dir,
+        )
+        return {"duplicate": True, "matched": matched_id, "merged_fields": merged_fields}
 
-    source_id = _next_id(conn, "sources", "src", session_id)
+    source_id = _reserve_next_id(conn, "sources", "src", session_id)
     # Accept explicit status from caller (e.g. "irrelevant" for zero-relevance
     # sources at ingestion) — otherwise default to "pending".
     status = data.get("status", "pending")
@@ -1666,6 +1766,74 @@ def _insert_source(conn: sqlite3.Connection, session_id: str, data: dict,
         _write_ingestion_metadata(session_dir, source_id, data, doi, url)
 
     return {"id": source_id, "title": title, "duplicate": False}
+
+
+def _merge_duplicate_source(
+    conn: sqlite3.Connection,
+    session_id: str,
+    source_id: str,
+    data: dict,
+    doi: str | None,
+    url: str | None,
+    session_dir: str | None = None,
+) -> list[str]:
+    """Enrich an existing duplicate source with better metadata from a new hit."""
+    row = conn.execute(
+        "SELECT * FROM sources WHERE id = ? AND session_id = ?",
+        (source_id, session_id),
+    ).fetchone()
+    if not row:
+        return []
+
+    updates: dict[str, object] = {}
+
+    def _missing(value: object) -> bool:
+        return value is None or value == "" or value == "[]" or value == 0
+
+    def _set_if_missing(column: str, value: object) -> None:
+        if value is not None and value != "" and _missing(row[column]):
+            updates[column] = value
+
+    _set_if_missing("doi", doi)
+    _set_if_missing("url", url)
+    _set_if_missing("pdf_url", data.get("pdf_url"))
+    _set_if_missing("abstract", data.get("abstract"))
+    _set_if_missing("venue", data.get("venue"))
+    _set_if_missing("year", data.get("year"))
+    _set_if_missing("relevance_rationale", data.get("relevance_rationale"))
+
+    authors = data.get("authors")
+    if authors and _missing(row["authors"]):
+        updates["authors"] = json.dumps(authors)
+
+    new_citations = data.get("citation_count")
+    if new_citations is not None:
+        existing_citations = row["citation_count"] or 0
+        if new_citations > existing_citations:
+            updates["citation_count"] = new_citations
+
+    new_relevance = data.get("relevance_score")
+    if new_relevance is not None:
+        existing_relevance = row["relevance_score"]
+        if existing_relevance is None or new_relevance > existing_relevance:
+            updates["relevance_score"] = new_relevance
+
+    new_status = data.get("status")
+    if row["status"] == "irrelevant" and new_status and new_status != "irrelevant":
+        updates["status"] = new_status
+
+    if updates:
+        sets = [f"{column} = ?" for column in updates]
+        values = list(updates.values()) + [source_id, session_id]
+        conn.execute(
+            f"UPDATE sources SET {', '.join(sets)} WHERE id = ? AND session_id = ?",
+            values,
+        )
+
+    if session_dir:
+        _write_ingestion_metadata(session_dir, source_id, data, doi, url)
+
+    return sorted(updates)
 
 
 def _write_ingestion_metadata(session_dir: str, source_id: str, data: dict,
@@ -1693,6 +1861,8 @@ def _write_ingestion_metadata(session_dir: str, source_id: str, data: dict,
             "abstract": data.get("abstract"),
             "type": data.get("type", "academic"),
             "pdf_url": data.get("pdf_url"),
+            "relevance_score": data.get("relevance_score"),
+            "relevance_rationale": data.get("relevance_rationale"),
         }
         # Remove None values to keep files clean
         meta = {k: v for k, v in meta.items() if v is not None}
@@ -1703,8 +1873,12 @@ def _write_ingestion_metadata(session_dir: str, source_id: str, data: dict,
                 with open(filepath, encoding="utf-8") as _f:
                     existing = json.loads(_f.read())
                 for k, v in meta.items():
-                    if k not in existing or existing[k] is None:
+                    if k not in existing or existing[k] is None or existing[k] == "" or existing[k] == []:
                         existing[k] = v
+                    elif k == "citation_count" and v is not None:
+                        existing[k] = max(existing.get(k) or 0, v)
+                    elif k == "relevance_score" and v is not None:
+                        existing[k] = max(existing.get(k) or 0, v)
                 meta = existing
             except (json.JSONDecodeError, OSError):
                 pass  # overwrite corrupt file
@@ -1840,7 +2014,7 @@ def _normalize_source_id(sid: str) -> str:
 def cmd_log_finding(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
-    finding_id = _next_id(conn, "findings", "finding", sid)
+    finding_id = _reserve_next_id(conn, "findings", "finding", sid)
 
     qid = getattr(args, "question_id", None)
     question, question_id = _normalize_question(conn, sid, args.question, question_id=qid)
@@ -1989,7 +2163,7 @@ def cmd_deduplicate_findings(args):
 def cmd_log_gap(args):
     conn = _connect(args.session_dir)
     sid = _get_session_id(conn)
-    gap_id = _next_id(conn, "gaps", "gap", sid)
+    gap_id = _reserve_next_id(conn, "gaps", "gap", sid)
 
     qid = getattr(args, "question_id", None)
     question, question_id = _normalize_question(conn, sid, args.question, question_id=qid)
@@ -2131,8 +2305,10 @@ def cmd_sources(args):
         return
 
     # Determine which columns to SELECT
-    _all_source_cols = ("id", "title", "type", "provider", "doi", "url",
-                        "citation_count", "content_file", "pdf_file", "quality", "added_at")
+    _all_source_cols = ("id", "title", "authors", "year", "venue", "type",
+                        "provider", "doi", "url", "pdf_url", "citation_count",
+                        "content_file", "pdf_file", "quality", "relevance_score",
+                        "relevance_rationale", "status", "added_at")
     _compact_cols = ("id", "title", "quality", "content_file")
 
     fields = getattr(args, "fields", None)
@@ -2918,14 +3094,33 @@ def cmd_set_source_flag(args):
         )
         created = False
     else:
-        flag_id = _next_source_flag_id(conn, sid)
-        conn.execute(
-            """INSERT INTO source_flags
-               (id, session_id, source_id, flag, applies_to_type, applies_to_id, rationale, created_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (flag_id, sid, args.source_id, args.flag, args.applies_to, applies_to_id, args.rationale, args.created_by, _now()),
-        )
-        created = True
+        flag_id = _reserve_next_id(conn, "source_flags", "sflag", sid)
+        try:
+            conn.execute(
+                """INSERT INTO source_flags
+                   (id, session_id, source_id, flag, applies_to_type, applies_to_id, rationale, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (flag_id, sid, args.source_id, args.flag, args.applies_to, applies_to_id, args.rationale, args.created_by, _now()),
+            )
+            created = True
+        except sqlite3.IntegrityError:
+            # Another process may have inserted the same caution between the
+            # optimistic read and the write lock. Treat it as an update.
+            existing = conn.execute(
+                """SELECT id FROM source_flags
+                   WHERE session_id = ? AND source_id = ? AND flag = ? AND applies_to_type = ? AND applies_to_id = ?""",
+                (sid, args.source_id, args.flag, args.applies_to, applies_to_id),
+            ).fetchone()
+            if not existing:
+                raise
+            flag_id = existing["id"]
+            conn.execute(
+                """UPDATE source_flags
+                   SET rationale = ?, created_by = ?, created_at = ?
+                   WHERE id = ? AND session_id = ?""",
+                (args.rationale, args.created_by, _now(), flag_id, sid),
+            )
+            created = False
 
     conn.commit()
     _regenerate_snapshot(args.session_dir, conn, sid)
@@ -3115,7 +3310,7 @@ def cmd_download_pending(args):
     sid = _get_session_id(conn)
 
     rows = conn.execute(
-        """SELECT id, title, doi, url, pdf_url, type, status, relevance_score
+        """SELECT id, title, doi, url, pdf_url, type, provider, status, relevance_score
            FROM sources WHERE session_id = ?
            AND content_file IS NULL AND pdf_file IS NULL
            AND status != 'irrelevant'
@@ -3150,7 +3345,14 @@ def cmd_download_pending(args):
                 skipped_irrelevant += 1
                 continue
 
-        item = {"source_id": sid_val, "title": r["title"], "type": r["type"] or "academic"}
+        item = {
+            "source_id": sid_val,
+            "title": r["title"],
+            "type": r["type"] or "academic",
+            "provider": r["provider"],
+        }
+        if r["relevance_score"] is not None:
+            item["relevance_score"] = r["relevance_score"]
         if r["doi"]:
             item["doi"] = r["doi"]
         if r["url"]:
@@ -3173,6 +3375,32 @@ def cmd_download_pending(args):
     batch_size = getattr(args, "batch_size", None)
     total_pending = len(pending)
     max_batches = getattr(args, "max_batches", None)
+    summary_only = getattr(args, "summary_only", False)
+    preview_top = getattr(args, "top", None)
+
+    if not args.auto_download and (summary_only or preview_top is not None):
+        preview_count = preview_top if preview_top is not None else 10
+        provider_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        scored_count = 0
+        for item in pending:
+            provider = item.get("provider") or "unknown"
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+            source_type = item.get("type") or "unknown"
+            type_counts[source_type] = type_counts.get(source_type, 0) + 1
+            if item.get("relevance_score") is not None:
+                scored_count += 1
+        success_response({
+            "remaining": total_pending,
+            "preview_count": min(preview_count, total_pending),
+            "skipped_on_disk": skipped_on_disk,
+            "skipped_irrelevant": skipped_irrelevant,
+            "scored_pending": scored_count,
+            "provider_distribution": provider_counts,
+            "type_distribution": type_counts,
+            "preview": pending[:preview_count],
+        })
+        return
 
     if args.auto_download and not pending:
         resp = {
@@ -3470,6 +3698,7 @@ def cmd_audit(args):
     metadata_incomplete = []
     no_content = []
     abstract_only = []
+    content_file_id_mismatch = []
     irrelevant = []
 
     for s in sources:
@@ -3485,6 +3714,12 @@ def cmd_audit(args):
 
         # Check content file
         if s.get("content_file"):
+            content_stem = os.path.splitext(os.path.basename(s["content_file"]))[0]
+            if content_stem != sid_val:
+                content_file_id_mismatch.append({
+                    "source_id": sid_val,
+                    "content_file": s["content_file"],
+                })
             content_path = os.path.join(args.session_dir, s["content_file"])
             if os.path.exists(content_path):
                 has_content = True
@@ -3588,7 +3823,8 @@ def cmd_audit(args):
     # Methodology stats
     deep_reads = len(with_notes)
     total_downloaded = len(downloaded)
-    total_abstract_only = len(no_content) + len(abstract_only)
+    total_abstract_only = len(abstract_only)
+    pending_no_content = len(no_content)
     web_sources = sum(1 for s in sources if (s.get("type") or "").lower() == "web")
 
     # Detect downloaded sources with null content_file — these are invisible
@@ -3636,11 +3872,20 @@ def cmd_audit(args):
     for sq in sparse_questions:
         warnings.append(f'"{sq["question"]}" has insufficient coverage ({sq["finding_count"]} findings)')
     if no_content:
-        warnings.append(f"{len(no_content)} sources have no on-disk content (abstract-only)")
+        warnings.append(f"{len(no_content)} sources have no on-disk content and are still pending or unavailable")
     if orphaned_sources:
         warnings.append(
             f"{len(orphaned_sources)} orphaned source(s) have status='downloaded' but no content on disk: "
             f"{', '.join(orphaned_sources[:10])}. These are invisible to readers and synthesis."
+        )
+    if content_file_id_mismatch:
+        preview = ", ".join(
+            f"{item['source_id']}->{item['content_file']}"
+            for item in content_file_id_mismatch[:10]
+        )
+        warnings.append(
+            f"{len(content_file_id_mismatch)} source(s) have content_file paths that do not match their source IDs: "
+            f"{preview}. Verify state.db before dispatching readers."
         )
     if len(gaps) > 0:
         warnings.append(f"{len(gaps)} open research gaps remain")
@@ -3655,6 +3900,11 @@ def cmd_audit(args):
     log(f"Mismatched content:  {len(mismatched)}  ({', '.join(mismatched)})" if mismatched else "Mismatched content:  0")
     log(f"Inaccessible:        {len(inaccessible)}  ({', '.join(inaccessible)})" if inaccessible else "Inaccessible:        0")
     log(f"Abstract only:       {len(abstract_only)}  ({', '.join(abstract_only)})" if abstract_only else "Abstract only:       0")
+    log(f"Pending no content:  {pending_no_content}")
+    log(
+        f"Content path mismatch: {len(content_file_id_mismatch)}"
+        if content_file_id_mismatch else "Content path mismatch: 0"
+    )
     log(f"Source cautions:     {source_caution_summary['total']}")
     log(f"Findings logged:     {len(findings)}")
     log(f"Open gaps:           {len(gaps)}")
@@ -3670,6 +3920,7 @@ def cmd_audit(args):
     log("Methodology stats (use these in report):")
     log(f"  Deep reads: {deep_reads}")
     log(f"  Abstract-only: {total_abstract_only}")
+    log(f"  Pending no content: {pending_no_content}")
     log(f"  Web sources: {web_sources}")
 
     # JSON result
@@ -3694,9 +3945,11 @@ def cmd_audit(args):
         "sparse_questions": sparse_questions,
         "downloaded_no_content_file": downloaded_no_content_file,
         "orphaned_sources": orphaned_sources,
+        "content_file_id_mismatch": content_file_id_mismatch,
         "methodology": {
             "deep_reads": deep_reads,
             "abstract_only": total_abstract_only,
+            "pending_no_content": pending_no_content,
             "web_sources": web_sources,
             "searches": {
                 "total": len(all_searches),
@@ -3733,6 +3986,7 @@ def cmd_audit(args):
     else:
         audit_result["abstract_only_count"] = len(abstract_only)
         audit_result["no_content_count"] = len(no_content)
+        audit_result["pending_no_content_count"] = pending_no_content
 
     # --strict: exit non-zero if warnings exist
     if getattr(args, "strict", False) and warnings:
@@ -3749,14 +4003,88 @@ def cmd_audit(args):
 # triage
 # ---------------------------------------------------------------------------
 
-def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, title_filter: str | None = None) -> tuple[list[dict], int]:
-    """Score and tier-rank sources by citation count × relevance to brief questions.
+_DEFAULT_DIRECTNESS_WEIGHT = 6.0
+_DEFAULT_RECENCY_WEIGHT = 1.5
+_DEFAULT_RECENCY_WINDOW = 5
+
+
+def _effective_directness_weight(anchor_terms: list[str], directness_weight: float | None) -> float:
+    """Resolve directness weight without requiring domain-specific scoring profiles."""
+    if directness_weight is not None:
+        return directness_weight
+    return _DEFAULT_DIRECTNESS_WEIGHT if anchor_terms else 0.0
+
+
+def _effective_recency_weight(recency_weight: float | None) -> float:
+    return _DEFAULT_RECENCY_WEIGHT if recency_weight is None else recency_weight
+
+
+def _recency_components(
+    year: object,
+    citation_count: int,
+    current_year: int,
+    recency_window: int,
+) -> dict:
+    """Compute a bounded publication-age signal for source triage.
+
+    This is a practical triage signal, not a field-normalized bibliometric
+    impact indicator. It exposes citation velocity and modestly boosts recent
+    sources so raw accumulated citations do not dominate by age alone.
+    """
+    try:
+        publication_year = int(year)
+    except (TypeError, ValueError):
+        publication_year = 0
+    if publication_year <= 0 or publication_year > current_year + 1:
+        return {
+            "publication_year": publication_year or None,
+            "publication_age_years": None,
+            "citation_velocity": 0.0,
+            "citation_velocity_score": 0.0,
+            "recency_signal": 0.0,
+        }
+
+    age = max(0, current_year - publication_year)
+    citation_velocity = citation_count / max(1, age + 1)
+    citation_velocity_score = math.log1p(citation_velocity)
+
+    if recency_window <= 0 or age > recency_window:
+        recency_signal = 0.0
+    else:
+        recentness = 1.0 - (age / (recency_window + 1.0))
+        velocity_signal = min(1.0, citation_velocity_score / 2.0)
+        recency_signal = max(recentness, velocity_signal)
+
+    return {
+        "publication_year": publication_year,
+        "publication_age_years": age,
+        "citation_velocity": round(citation_velocity, 2),
+        "citation_velocity_score": round(citation_velocity_score, 3),
+        "recency_signal": round(recency_signal, 3),
+    }
+
+
+def _score_sources(
+    conn,
+    session_id: str,
+    session_dir: str,
+    top_n: int = 25,
+    title_filter: str | None = None,
+    anchor_terms: list[str] | None = None,
+    directness_weight: float | None = None,
+    recency_weight: float | None = None,
+    recency_window: int = _DEFAULT_RECENCY_WINDOW,
+) -> tuple[list[dict], int]:
+    """Score and tier-rank sources.
 
     Returns (scored_list, brief_keywords_count). Each scored dict has 'priority'
     assigned (high/medium/low/skip). Reusable by both cmd_triage and cmd_manifest.
-    """
-    import math
 
+    By default this preserves citation × relevance behavior. When anchor terms
+    are provided, a generic directness boost can surface sources that explicitly
+    name the research object, intervention, dataset, company, law, or other
+    target the agent cares about.
+    """
     # Load brief questions for relevance scoring
     brief_row = conn.execute("SELECT * FROM brief WHERE session_id = ?", (session_id,)).fetchone()
     question_terms = _extract_question_terms(json.loads(brief_row["questions"])) if brief_row else []
@@ -3773,6 +4101,18 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
         sources = [dict(r) for r in conn.execute(
             f"SELECT {_src_cols} FROM sources WHERE session_id = ? AND status != 'irrelevant' ORDER BY id", (session_id,)
         ).fetchall()]
+
+    normalized_anchor_terms = [
+        term.strip().lower()
+        for term in (anchor_terms or [])
+        if term and term.strip()
+    ]
+    applied_directness_weight = _effective_directness_weight(
+        normalized_anchor_terms,
+        directness_weight,
+    )
+    applied_recency_weight = _effective_recency_weight(recency_weight)
+    current_year = datetime.now(timezone.utc).year
 
     # Score each source
     scored = []
@@ -3791,10 +4131,25 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
         # Citation score: log-scale to avoid extreme skew from mega-cited papers
         cite_count = s.get("citation_count") or 0
         cite_score = math.log1p(cite_count)  # log(1 + citations)
+        recency = _recency_components(
+            s.get("year"),
+            cite_count,
+            current_year,
+            recency_window,
+        )
 
+        # Directness score: does the title explicitly name the intervention or
+        # other caller-supplied anchor terms?
+        directness_hits = sum(1 for term in normalized_anchor_terms if term in title)
+        directness_score = 1.0 if directness_hits > 0 else 0.0
         # Combined score: citation_score × (0.1 + relevance)
-        # The 0.1 floor keeps zero-relevance papers from dominating via citations alone
-        score = cite_score * (0.1 + relevance)
+        # The 0.1 floor keeps zero-relevance papers from dominating via citations alone.
+        base_score = cite_score * (0.1 + relevance)
+        directness_boost = directness_score * applied_directness_weight
+        recency_boost = recency["recency_signal"] * applied_recency_weight * (0.1 + relevance)
+        score = base_score + directness_boost + recency_boost
+
+        evidence_role = "direct_anchor" if directness_score > 0 else "background"
 
         # Check on-disk status
         sources_dir = os.path.join(session_dir, "sources")
@@ -3824,7 +4179,11 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
         scored.append({
             "id": s["id"],
             "title": s.get("title", ""),
+            "year": recency["publication_year"],
+            "publication_age_years": recency["publication_age_years"],
             "citation_count": cite_count,
+            "citation_velocity": recency["citation_velocity"],
+            "citation_velocity_score": recency["citation_velocity_score"],
             "keyword_hits": keyword_hits,
             "score": round(score, 2),
             "has_content": has_content,
@@ -3834,6 +4193,12 @@ def _score_sources(conn, session_id: str, session_dir: str, top_n: int = 25, tit
             "doi": s.get("doi"),
             "type": s.get("type", "academic"),
             "provider": s.get("provider"),
+            "directness_score": round(directness_score, 2),
+            "directness_hits": directness_hits,
+            "directness_boost": round(directness_boost, 2),
+            "recency_signal": recency["recency_signal"],
+            "recency_boost": round(recency_boost, 2),
+            "evidence_role": evidence_role,
         })
 
     # Sort by score descending
@@ -3863,8 +4228,24 @@ def cmd_triage(args):
     sid = _get_session_id(conn)
     top_n = getattr(args, "top", 25)
     title_filter = getattr(args, "title_contains", None)
+    anchor_arg = getattr(args, "anchor_terms", "") or ""
+    anchor_terms = [term.strip() for term in anchor_arg.split(",") if term.strip()]
+    directness_weight = getattr(args, "directness_weight", None)
+    applied_directness_weight = _effective_directness_weight(
+        [term.lower() for term in anchor_terms],
+        directness_weight,
+    )
+    recency_weight = getattr(args, "recency_weight", None)
+    recency_window = getattr(args, "recency_window", _DEFAULT_RECENCY_WINDOW)
+    applied_recency_weight = _effective_recency_weight(recency_weight)
 
-    scored, brief_keywords_used = _score_sources(conn, sid, args.session_dir, top_n, title_filter)
+    scored, brief_keywords_used = _score_sources(
+        conn, sid, args.session_dir, top_n, title_filter,
+        anchor_terms=anchor_terms,
+        directness_weight=directness_weight,
+        recency_weight=recency_weight,
+        recency_window=recency_window,
+    )
     conn.close()
 
     # Summary stats
@@ -3880,9 +4261,26 @@ def cmd_triage(args):
             "medium_priority": len(medium),
             "skip_quality": len(skip),
             "brief_keywords_used": brief_keywords_used,
+            "anchor_terms": anchor_terms,
+            "directness_weight": applied_directness_weight,
+            "recency_weight": applied_recency_weight,
+            "recency_window": recency_window,
         },
         "top_sources": [
-            {"id": s["id"], "title": s["title"], "citation_count": s["citation_count"], "tier": s["priority"], "score": s["score"]}
+            {
+                "id": s["id"],
+                "title": s["title"],
+                "year": s["year"],
+                "citation_count": s["citation_count"],
+                "citation_velocity": s["citation_velocity"],
+                "tier": s["priority"],
+                "score": s["score"],
+                "evidence_role": s["evidence_role"],
+                "directness_score": s["directness_score"],
+                "directness_boost": s["directness_boost"],
+                "recency_signal": s["recency_signal"],
+                "recency_boost": s["recency_boost"],
+            }
             for s in scored if s["priority"] in ("high", "medium")
         ],
     })
@@ -3904,14 +4302,72 @@ def cmd_manifest(args):
     sid = _get_session_id(conn)
     mode = getattr(args, "mode", "initial")
     top_n = getattr(args, "top", 30)
+    anchor_arg = getattr(args, "anchor_terms", "") or ""
+    anchor_terms = [term.strip() for term in anchor_arg.split(",") if term.strip()]
+    directness_weight = getattr(args, "directness_weight", None)
+    recency_weight = getattr(args, "recency_weight", None)
+    recency_window = getattr(args, "recency_window", _DEFAULT_RECENCY_WINDOW)
 
     if mode == "gap":
-        _manifest_gap(conn, sid, args.session_dir, top_n)
+        result = _manifest_gap(
+            conn, sid, args.session_dir, top_n,
+            anchor_terms=anchor_terms,
+            directness_weight=directness_weight,
+            recency_weight=recency_weight,
+            recency_window=recency_window,
+        )
     else:
-        _manifest_initial(conn, sid, args.session_dir, top_n)
+        result = _manifest_initial(
+            conn, sid, args.session_dir, top_n,
+            anchor_terms=anchor_terms,
+            directness_weight=directness_weight,
+            recency_weight=recency_weight,
+            recency_window=recency_window,
+        )
+
+    conn.close()
+
+    write_path = getattr(args, "write", None)
+    if write_path:
+        result["written_manifest"] = _write_manifest_file(args.session_dir, write_path, mode, result)
+
+    success_response(result)
 
 
-def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
+def _write_manifest_file(session_dir: str, write_path: str, mode: str, result: dict) -> str:
+    """Write a durable manifest handoff file and return its relative/absolute path."""
+    if os.path.isabs(write_path):
+        target_path = write_path
+        reported_path = write_path
+    else:
+        target_path = os.path.join(session_dir, write_path)
+        reported_path = write_path
+
+    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+    result_for_file = dict(result)
+    result_for_file["written_manifest"] = reported_path
+    envelope = {
+        "schema_version": "source-acquisition-manifest-v1",
+        "mode": mode,
+        "generated_at": _now(),
+        "results": result_for_file,
+    }
+    with open(target_path, "w", encoding="utf-8") as f:
+        json.dump(envelope, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    return reported_path
+
+
+def _manifest_initial(
+    conn,
+    session_id: str,
+    session_dir: str,
+    top_n: int,
+    anchor_terms: list[str] | None = None,
+    directness_weight: float | None = None,
+    recency_weight: float | None = None,
+    recency_window: int = _DEFAULT_RECENCY_WINDOW,
+):
     """Build the initial-mode manifest."""
     # --- Searches ---
     search_rows = conn.execute(
@@ -3962,7 +4418,18 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
     remaining = failed_count  # sources without content and not quality-flagged
 
     # --- Triage tiers ---
-    scored, _ = _score_sources(conn, session_id, session_dir, top_n)
+    scored, _ = _score_sources(
+        conn, session_id, session_dir, top_n,
+        anchor_terms=anchor_terms,
+        directness_weight=directness_weight,
+        recency_weight=recency_weight,
+        recency_window=recency_window,
+    )
+    applied_directness_weight = _effective_directness_weight(
+        [term.lower() for term in (anchor_terms or [])],
+        directness_weight,
+    )
+    applied_recency_weight = _effective_recency_weight(recency_weight)
     triage_tiers = {"high": 0, "medium": 0, "low": 0, "skip": 0}
     for s in scored:
         tier = s.get("priority", "low")
@@ -3970,7 +4437,15 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
 
     # --- Top papers ---
     top_papers = [
-        {"id": s["id"], "title": s["title"], "citations": s["citation_count"], "provider": s.get("provider", "")}
+        {
+            "id": s["id"],
+            "title": s["title"],
+            "year": s.get("year"),
+            "citations": s["citation_count"],
+            "citation_velocity": s.get("citation_velocity", 0.0),
+            "recency_boost": s.get("recency_boost", 0.0),
+            "provider": s.get("provider", ""),
+        }
         for s in scored[:5]
     ]
 
@@ -4028,8 +4503,6 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
                 f"Consider additional traversals before proceeding."
             )
 
-    conn.close()
-
     result = {
         "searches_run": searches_run,
         "sources_found": sources_found,
@@ -4041,6 +4514,12 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
             "remaining": remaining,
         },
         "triage_tiers": triage_tiers,
+        "triage_scoring": {
+            "anchor_terms": anchor_terms or [],
+            "directness_weight": applied_directness_weight,
+            "recency_weight": applied_recency_weight,
+            "recency_window": recency_window,
+        },
         "top_papers": top_papers,
         "coverage_assessment": coverage_assessment,
         "gaps_logged": gaps_logged,
@@ -4052,10 +4531,19 @@ def _manifest_initial(conn, session_id: str, session_dir: str, top_n: int):
     }
     if warnings:
         result["warnings"] = warnings
-    success_response(result)
+    return result
 
 
-def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):
+def _manifest_gap(
+    conn,
+    session_id: str,
+    session_dir: str,
+    top_n: int,
+    anchor_terms: list[str] | None = None,
+    directness_weight: float | None = None,
+    recency_weight: float | None = None,
+    recency_window: int = _DEFAULT_RECENCY_WINDOW,
+):
     """Build the gap-mode manifest."""
     # All gaps
     gap_rows = conn.execute(
@@ -4065,7 +4553,18 @@ def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):
     gaps_addressed = sum(1 for r in gap_rows if r["status"] == "resolved")
 
     # For open gaps, check if any new high/medium sources match their terms
-    scored, _ = _score_sources(conn, session_id, session_dir, top_n)
+    scored, _ = _score_sources(
+        conn, session_id, session_dir, top_n,
+        anchor_terms=anchor_terms,
+        directness_weight=directness_weight,
+        recency_weight=recency_weight,
+        recency_window=recency_window,
+    )
+    applied_directness_weight = _effective_directness_weight(
+        [term.lower() for term in (anchor_terms or [])],
+        directness_weight,
+    )
+    applied_recency_weight = _effective_recency_weight(recency_weight)
     high_medium = [s for s in scored if s["priority"] in ("high", "medium")]
 
     potentially_resolved = []
@@ -4099,16 +4598,20 @@ def _manifest_gap(conn, session_id: str, session_dir: str, top_n: int):
         or any(os.path.exists(os.path.join(sources_dir, f"{s['id']}{ext}")) for ext in (".md", ".pdf"))
     )
 
-    conn.close()
-
-    success_response({
+    return {
         "gaps_addressed": gaps_addressed,
         "gaps_potentially_resolved": len(potentially_resolved),
         "gaps_potentially_resolved_ids": potentially_resolved,
         "gaps_unresolvable": unresolvable,
         "new_sources": new_source_count,
         "new_downloads": new_downloads,
-    })
+        "triage_scoring": {
+            "anchor_terms": anchor_terms or [],
+            "directness_weight": applied_directness_weight,
+            "recency_weight": applied_recency_weight,
+            "recency_window": recency_window,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -4852,6 +5355,26 @@ def cmd_enrich_metadata(args):
     if not rows:
         conn.close()
         success_response({"enriched": 0, "attempted": 0, "message": "No sources with missing metadata"})
+        return
+
+    probe_url = "https://api.crossref.org/works?rows=0"
+    try:
+        req = urllib.request.Request(probe_url, headers={
+            "User-Agent": "DeepResearch/1.0 (mailto:research@example.com)",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except Exception as e:
+        conn.close()
+        success_response({
+            "enriched": 0,
+            "attempted": 0,
+            "total_missing": len(rows),
+            "network_probe_failed": True,
+            "message": "Metadata enrichment skipped because Crossref was unreachable",
+            "error": str(e),
+        })
         return
 
     enriched = 0
@@ -7733,6 +8256,10 @@ def main():
     p.add_argument("--min-relevance", type=float, default=None,
                    help="Skip sources with relevance_score at or below this value (e.g. 0.0). "
                         "Sources with no score (NULL) are still downloaded. Default: no filter.")
+    p.add_argument("--summary-only", action="store_true",
+                   help="Dry-run only: return counts, distributions, and a short preview instead of all pending sources")
+    p.add_argument("--top", type=int, default=None,
+                   help="Dry-run only: number of pending sources to preview")
     p.add_argument("--session-dir", **_sd)
 
     # audit
@@ -7745,6 +8272,14 @@ def main():
     p = sub.add_parser("triage")
     p.add_argument("--top", type=int, default=25, help="Number of sources to mark as high+medium priority (default 25)")
     p.add_argument("--title-contains", default=None, help="Pre-filter: only score sources whose title contains this substring")
+    p.add_argument("--anchor-terms", default="",
+                   help="Comma-separated named entities/topics that should get a directness boost when present in titles")
+    p.add_argument("--directness-weight", type=float, default=None,
+                   help=f"Additive score weight for anchor-term directness (default {_DEFAULT_DIRECTNESS_WEIGHT} when --anchor-terms is set, else 0)")
+    p.add_argument("--recency-weight", type=float, default=None,
+                   help=f"Additive weight for recent/citation-velocity signal (default {_DEFAULT_RECENCY_WEIGHT}; use 0 to disable)")
+    p.add_argument("--recency-window", type=int, default=_DEFAULT_RECENCY_WINDOW,
+                   help=f"Publication-age window in years for recency boost (default {_DEFAULT_RECENCY_WINDOW})")
     p.add_argument("--session-dir", **_sd)
 
     # recover-failed
@@ -7765,6 +8300,16 @@ def main():
     p = sub.add_parser("manifest")
     p.add_argument("--mode", choices=["initial", "gap"], default="initial", help="Manifest mode (default: initial)")
     p.add_argument("--top", type=int, default=30, help="Number of top sources to include in triage scoring (default 30)")
+    p.add_argument("--anchor-terms", default="",
+                   help="Comma-separated named entities/topics that should get a directness boost when present in titles")
+    p.add_argument("--directness-weight", type=float, default=None,
+                   help=f"Additive score weight for anchor-term directness (default {_DEFAULT_DIRECTNESS_WEIGHT} when --anchor-terms is set, else 0)")
+    p.add_argument("--recency-weight", type=float, default=None,
+                   help=f"Additive weight for recent/citation-velocity signal (default {_DEFAULT_RECENCY_WEIGHT}; use 0 to disable)")
+    p.add_argument("--recency-window", type=int, default=_DEFAULT_RECENCY_WINDOW,
+                   help=f"Publication-age window in years for recency boost (default {_DEFAULT_RECENCY_WINDOW})")
+    p.add_argument("--write", default=None,
+                   help="Write the manifest JSON envelope to this path (relative paths are under the session dir)")
     p.add_argument("--session-dir", **_sd)
 
     # enrich-metadata

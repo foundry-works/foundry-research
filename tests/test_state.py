@@ -6,6 +6,8 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from helpers import init_session as _init_session, run_state as _run_state, write_json_file as _write_json_file, STATE_PY
 from state import _connect, _insert_source, _next_id, _now
@@ -179,6 +181,41 @@ class TestConcurrentWrites:
         conn.close()
         assert count == 10
 
+    def test_parallel_log_findings_allocate_unique_ids(self, tmp_path):
+        """Parallel state CLI writers reserve finding IDs without collisions."""
+        session_dir = str(tmp_path / "session")
+        _init_session(session_dir)
+
+        def log_finding(i):
+            result = subprocess.run(
+                [
+                    sys.executable, STATE_PY, "log-finding",
+                    "--session-dir", session_dir,
+                    "--text", f"Finding from worker {i}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            data = json.loads(result.stdout)
+            return result, data
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(log_finding, range(20)))
+
+        ids = []
+        for result, data in results:
+            assert result.returncode == 0
+            assert data["status"] == "ok", data
+            ids.append(data["results"]["id"])
+
+        assert len(ids) == 20
+        assert len(set(ids)) == 20
+
+        conn = sqlite3.connect(str(tmp_path / "session" / "state.db"))
+        count = conn.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+        conn.close()
+        assert count == 20
+
 
 # ---------------------------------------------------------------------------
 # 4. Source ID auto-increment
@@ -214,6 +251,66 @@ class TestSourceIDAutoIncrement:
         id1 = _next_id(conn, "searches", "search", sid)
         assert id1 == "search-1"
         conn.close()
+
+
+class TestTriageScoring:
+    def test_recency_signal_can_lift_newer_relevant_sources(self, tmp_path):
+        """Recent sources get a bounded boost so raw citations don't dominate by age alone."""
+        session_dir = str(tmp_path / "session")
+        sid = _init_session(session_dir)
+        current_year = datetime.now(timezone.utc).year
+
+        conn = _connect(session_dir)
+        _insert_source(conn, sid, {
+            "title": "Older GlyNAC trial",
+            "provider": "test",
+            "year": current_year - 7,
+            "citation_count": 4,
+        })
+        _insert_source(conn, sid, {
+            "title": "Recent GlyNAC randomized trial",
+            "provider": "test",
+            "year": current_year - 1,
+            "citation_count": 2,
+        })
+        conn.commit()
+        conn.close()
+
+        _, data = _run_state("triage", "--session-dir", session_dir, "--top", "2")
+        sources = data["results"]["sources"]
+        assert sources[0]["title"] == "Recent GlyNAC randomized trial"
+        assert sources[0]["recency_boost"] > 0
+        assert sources[0]["citation_velocity"] > 0
+
+    def test_recency_weight_zero_restores_raw_citation_order(self, tmp_path):
+        """Agents can disable the recency signal for historical influence triage."""
+        session_dir = str(tmp_path / "session")
+        sid = _init_session(session_dir)
+        current_year = datetime.now(timezone.utc).year
+
+        conn = _connect(session_dir)
+        _insert_source(conn, sid, {
+            "title": "Older GlyNAC trial",
+            "provider": "test",
+            "year": current_year - 7,
+            "citation_count": 4,
+        })
+        _insert_source(conn, sid, {
+            "title": "Recent GlyNAC randomized trial",
+            "provider": "test",
+            "year": current_year - 1,
+            "citation_count": 2,
+        })
+        conn.commit()
+        conn.close()
+
+        _, data = _run_state(
+            "triage", "--session-dir", session_dir, "--top", "2",
+            "--recency-weight", "0",
+        )
+        sources = data["results"]["sources"]
+        assert sources[0]["title"] == "Older GlyNAC trial"
+        assert sources[1]["recency_boost"] == 0
 
 
 # ---------------------------------------------------------------------------
